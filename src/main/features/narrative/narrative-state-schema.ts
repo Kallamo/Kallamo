@@ -18,10 +18,13 @@ export const NARRATIVE_OPERATION_SCHEMA = {
   properties: {
     type: {
       type: 'string',
-      enum: ['fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship', 'revise', 'end'],
+      enum: ['fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship', 'revise', 'end', 'confirm', 'recall', 'merge'],
     },
     ref: { type: 'string' },
-    how: { type: 'string', enum: ['forgot', 'abandoned', 'disproved', 'retracted', 'settled'] },
+    refs: { type: 'array', items: { type: 'string' } },
+    how: { type: 'string', enum: ['forgot', 'lost', 'abandoned', 'disproved', 'retracted', 'settled'] },
+    by: { type: 'string', enum: ['witnessed', 'told', 'evidence'] },
+    cue: { type: 'string' },
     reason: { type: 'string' },
     attitude: { type: 'string', enum: ['knows', 'believes', 'suspects'] },
     negated: { type: 'boolean' },
@@ -86,9 +89,10 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
         {
           type: 'object',
           additionalProperties: false,
-          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence', 'statedSpan'],
+          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence', 'statedSpan', 'movementOnly'],
           properties: {
             actionType: { type: 'string' },
+            movementOnly: { type: 'boolean' },
             basis: { type: 'string', enum: ['explicit', 'matrix'] },
             duration: {
               type: 'object',

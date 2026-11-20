@@ -292,7 +292,7 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
                   checked={isAgentic}
                   onChange={setIsAgentic}
                   label="Search before replying"
-                  description="The AI reads the conversation and writes its own searches through Memory, Worldbuild and this profile's knowledge base, instead of matching your message word for word."
+                  description="Before each reply, the Retrieval Planner reads the turn and decides what to look up: who and what it names or describes, past moments it calls back, what the characters know, and the documents it needs."
                 />
               </div>
               {isAgentic ? (
@@ -300,7 +300,7 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
                   <div className="flex flex-wrap items-center gap-4 px-0.5">
                     <div className="min-w-0 flex-1">
                       <span className="block text-sm font-bold text-text-secondary">Search rounds</span>
-                      <p className="caption mt-1">One round is a search and a look at what came back. 1 is cheapest, 3 is balanced, more follows leads further and costs more.</p>
+                      <p className="caption mt-1">For questions that need several searches outside Roleplay, and for chats without a workspace. One round is a search and a look at what came back; more follows leads further and costs more.</p>
                     </div>
                     <SegmentedControl label="Search rounds" value={agenticMaxTurns} onChange={setAgenticMaxTurns} options={ROUNDS} />
                   </div>
@@ -310,13 +310,13 @@ export default function ProfileModal({ profile, preset, starters = null, onClose
                     value={agenticPrompt}
                     onChange={setAgenticPrompt}
                     variables={variables}
-                    caption="Tells the search step what to look for. The reply itself still follows Behavior and rules."
+                    caption="Tells the Retrieval Planner what to keep in mind when it decides what to look up. The reply itself still follows Behavior and rules."
                     placeholder="Find the passages where the selected characters and places appear, so the edit keeps every fact consistent."
                   />
                 </>
               ) : (
                 <p className="caption max-w-lg px-0.5 leading-relaxed">
-                  Off: retrieval runs a plain similarity search against your message text. Turn it on to let the AI write its own searches.
+                  Off: the context holds the scene, what your message names, and a plain search with your message's own words. Turn it on to let the AI decide what to look up.
                 </p>
               )}
             </div>

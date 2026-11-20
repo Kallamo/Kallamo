@@ -14,6 +14,7 @@ import type {
 import type { NarrativeOperation, Proposition } from '../../../../narrative/contracts';
 import { isGenericPredicate, isProseStatement, propositionIdentity } from '../../../../narrative/narrative-taxonomy';
 import { STORY_AXIS, STORY_PROJECT, type NarrativeWorld, type StoryEntityType } from './narrative-world';
+import { relevanceOf } from '../memory-relevance';
 import { kindOf, memoryKey, metadataOf, objectOf, statementIdentityOf, StoryReader, type StoryKind, type StoryMetadata } from './story-reader';
 import { canonRelation, canonSlots, type CanonSlots } from './story-projection';
 
@@ -297,7 +298,9 @@ export class StoryWriter {
           ? this.activeOf(memory.subjectId, 'memory', { predicate: 'memory' }).filter(item => item.record.id !== memory.id && sameEntry(item.record, memory.entryId!)).map(item => item.record)
           : [];
         const previous = memory.supersedesMemoryId ? this.findById(memory.subjectId, memory.supersedesMemoryId) : null;
-        const replaced = [...new Map([...(previous ? [previous] : []), ...entryMatches].map(record => [record.id, record])).values()];
+        // Memories gathered into one account end with it, each superseded by the merged memory.
+        const merged = (memory.mergesMemoryIds ?? []).map(id => this.findById(memory.subjectId, id)).filter((record): record is StoryRecord => Boolean(record));
+        const replaced = [...new Map([...(previous ? [previous] : []), ...entryMatches, ...merged].map(record => [record.id, record])).values()];
         const status = memory.status ?? 'active';
         if (status !== 'active') {
           const targets = replaced.length ? replaced : [this.findById(memory.subjectId, memory.id)].filter((record): record is StoryRecord => Boolean(record));
@@ -312,7 +315,7 @@ export class StoryWriter {
           confidence: 1, accessibility: accessibility(memory.accessibility),
           text: memory.summary,
           provenance: provenance({
-            k: 'memory', entryId: memory.entryId ?? memory.id, category: memory.category,
+            k: 'memory', entryId: memory.entryId ?? memory.id, category: memory.category, salience: relevanceOf(memory.salience, memory.category),
             relatedEntityIds: ids(memory.relatedEntityIds).filter(id => this.known.has(id)), occurredOn: memory.occurredOn
           })
         });
@@ -380,7 +383,7 @@ export class StoryWriter {
           confidence: clamp(payload.confidence), accessibility: accessibility(payload.accessibility),
           text: heldById ? this.secondOrderText(heldById, proposition, negated) : negated ? `It is not so that ${this.statementText(proposition)}` : this.statementText(proposition),
           provenance: provenance({
-            k: kind, entryId, category: payload.category, factIds: ids(payload.factIds),
+            k: kind, entryId, category: payload.category, factIds: ids(payload.factIds), salience: relevanceOf(payload.salience, payload.category),
             ...(kind === 'knowledge' ? { method: payload.acquisition, informantIds: informants } : { informantIds: informants }),
             ...(kind === 'belief' && payload.relationToCanon && payload.relationToCanon !== 'unknown' ? { relationToCanon: payload.relationToCanon } : {}),
             // What the other holder is thought to hold, readable without asking the engine for the key.
@@ -428,7 +431,8 @@ export class StoryWriter {
       for (const record of matches) draft.end({ targetRecordId: record.id, status: transitionStatus(status) });
       return null;
     }
-    draft.records.push({ kind: 'fact', id, claim, provenance });
+    const text = factTextOf(claim, id => this.names.get(id), this.world.workspaceId);
+    draft.records.push({ kind: 'fact', id, claim, provenance, ...(text ? { text } : {}) });
     for (const record of matches) draft.end({ targetRecordId: record.id, status: 'superseded', supersededBy: id });
     return null;
   }
@@ -538,6 +542,27 @@ export class StoryWriter {
     if (this.timelineId === 'main') return main.maxTick + 1;
     return Math.max(main.maxTick, this.reader.timeline(this.timelineId).maxTick) + 1;
   }
+}
+
+/**
+ * What search and vectors read for a Fact: names instead of ids, and an occurrence's title and
+ * summary instead of its JSON. A Fact about the world itself is stated without a subject.
+ */
+export function factTextOf(claim: Claim, nameOf: (id: string) => string | undefined, workspaceId: string): string {
+  const value = objectOf(claim);
+  const rendered = claim.object.kind === 'entity'
+    ? nameOf(claim.object.id) ?? ''
+    : value && typeof value === 'object' && !Array.isArray(value)
+      ? [(value as Record<string, unknown>).title, (value as Record<string, unknown>).summary].filter(item => typeof item === 'string' && item.trim()).join(': ') || textOf(value)
+      : value === undefined || value === null ? '' : String(value);
+  const predicate = String(claim.predicate || '');
+  const negation = claim.polarity === false ? 'not ' : '';
+  // An occurrence is told by its own title and summary.
+  const statement = isGenericPredicate(predicate) || predicate === 'recorded-occurrence'
+    ? `${negation}${rendered}`
+    : `${negation}${predicate.replace(/^state:/, '').replace(/[-_]+/g, ' ')} ${rendered}`;
+  const subject = claim.subject === workspaceId ? '' : nameOf(claim.subject) ?? '';
+  return (subject ? `${subject}: ${statement}` : statement).trim();
 }
 
 /** A proposition as the engine's claim: an object naming a known entity points at it. */

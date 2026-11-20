@@ -592,9 +592,13 @@ function loadOwnerCandidates(ownerIds, ownerType) {
     }));
 }
 
-async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5, applyTagBoost = false) {
+async function executeHybridSearch(queryText, ownerId, ownerType, threshold = 0.3, k = 5, applyTagBoost = false, sourceName = null) {
     try {
-        const candidates = loadOwnerCandidates([ownerId], ownerType);
+        const wanted = sourceName ? String(sourceName).trim().toLowerCase() : '';
+        const all = loadOwnerCandidates([ownerId], ownerType);
+        // A named document narrows the search to it; a name that matches nothing searches them all.
+        const named = wanted ? all.filter(candidate => String(candidate.source || '').toLowerCase().includes(wanted)) : [];
+        const candidates = named.length ? named : all;
         if (candidates.length === 0) return [];
         const queryVector = await generateEmbeddingVector(queryText, true);
         const sparseNormMap = computeSparseNormMap(queryText, [ownerId], ownerType);
@@ -646,9 +650,9 @@ async function searchKnowledgeBase(queryText, profileId, { k: topK = null } = {}
 
 // Workspace files carry world-index tags, so the caller may ask for the same evidence
 // boost the archive gets. Profile files are never tagged, so there is nothing to boost there.
-async function searchChatKnowledgeBase(queryText, chatId, { k: topK = null, boost = false } = {}) {
+async function searchChatKnowledgeBase(queryText, chatId, { k: topK = null, boost = false, source = null } = {}) {
     const { threshold, k } = readRetrievalSettings('workspaceDocumentsTopK');
-    return await executeHybridSearch(queryText, chatId, 'chat_kb', threshold, resolveTopK(k, topK), boost);
+    return await executeHybridSearch(queryText, chatId, 'chat_kb', threshold, resolveTopK(k, topK), boost, source);
 }
 
 // Passages of the documents linked to an entity, under the user's own strictness and Top-K.

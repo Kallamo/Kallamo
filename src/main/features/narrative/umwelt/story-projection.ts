@@ -92,6 +92,7 @@ export function projectStoryRecord(record: StoryRecord): ProjectedStoryRecord | 
         summary: record.text ?? '',
         accessibility: record.accessibility,
         category: meta.category,
+        salience: meta.salience,
         status: 'active',
         relatedEntityIds: meta.relatedEntityIds,
         occurredOn: meta.occurredOn
@@ -130,6 +131,7 @@ export function projectStoryRecord(record: StoryRecord): ProjectedStoryRecord | 
         accessibility: record.accessibility,
         status: 'active',
         category: meta.category,
+        salience: meta.salience,
         factIds: meta.factIds,
         ...(kind === 'knowledge'
           ? { acquisition: meta.method ?? methodOf(record.acquisition), informantIds: meta.informantIds }

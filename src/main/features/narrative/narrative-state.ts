@@ -8,6 +8,7 @@ import { NarrativeEventLedgerRepository, type NarrativeEventLedgerRecord } from 
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { NarrativeWorld } from './umwelt/narrative-world';
 import { writeLedgerRecord } from './umwelt/story-journal';
+import { MIN_MEMORY_SALIENCE } from './memory-relevance';
 import { HOLDS_PREDICATE, type StoryChecks } from './umwelt/story-writer';
 import { kindOf, metadataOf, objectOf, StoryReader } from './umwelt/story-reader';
 import {
@@ -99,7 +100,6 @@ export interface NarrativeStateJob {
 
 const AUTO_CONFIDENCE = 0.9;
 const REFUSED_REASONS = new Set(['not-a-holder', 'unknown-entity', 'unsupported']);
-const AUTO_MEMORY_SALIENCE = 0.85;
 const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
 interface RelationshipBaseline { exists: boolean; value: number }
 
@@ -690,6 +690,12 @@ export class NarrativeStateSystem {
   }
 }
 
+/** The relevance a writer gave, kept with the record; without one the category decides when read. */
+function relevance(operation: { salience?: unknown }): { salience?: number } {
+  const value = Number(operation.salience);
+  return Number.isFinite(value) ? { salience: Math.max(0, Math.min(1, value)) } : {};
+}
+
 export function isValidNarrativeOperation(operation: NarrativeOperation): boolean {
   return validateNarrativeOperation(operation).success;
 }
@@ -761,7 +767,7 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: operation.entryId ?? `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), ...informants(operation, input.allowedEntityIds), ...(operation.supersedesId ? { supersedesId: operation.supersedesId } : {}), ...holdingNuance(operation, input.allowedEntityIds) } }
+        { id: `op_${suffix}`, type: 'grant-knowledge', evidenceIds, knowledge: { id: `knowledge_${suffix}`, entryId: operation.entryId ?? `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, acquisition: operation.acquisition, confidence: confidence(operation.confidence), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), ...informants(operation, input.allowedEntityIds), ...(operation.supersedesId ? { supersedesId: operation.supersedesId } : {}), ...holdingNuance(operation, input.allowedEntityIds), ...relevance(operation) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
@@ -788,11 +794,11 @@ function buildOperations(
             sourceEventId: eventId
           }
         } as const] : []),
-        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: operation.entryId ?? `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active', ...category(operation), ...(operation.supersedesId ? { supersedesId: operation.supersedesId } : {}), ...holdingNuance(operation, input.allowedEntityIds) } }
+        { id: `op_${suffix}`, type: 'set-belief', evidenceIds, belief: { id: `belief_${suffix}`, entryId: operation.entryId ?? `entry_${suffix}`, subjectId: operation.subjectId, proposition: operation.proposition, sourceEventId: eventId, confidence: confidence(operation.confidence), relationToCanon: 'unknown', status: 'active', ...category(operation), ...(operation.supersedesId ? { supersedesId: operation.supersedesId } : {}), ...holdingNuance(operation, input.allowedEntityIds), ...relevance(operation) } }
       ];
       return operations.every(isValidNarrativeOperation) ? operations : [];
     }
-    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)), ...(operation.occurredOn ? { occurredOn: operation.occurredOn } : {}), ...(operation.supersedesMemoryId ? { supersedesMemoryId: operation.supersedesMemoryId } : {}) } }];
+    if (operation.type === 'memory') return [{ id: `op_${suffix}`, type: 'record-memory', evidenceIds, memory: { id: `memory_${suffix}`, subjectId: operation.subjectId, eventId, summary: operation.summary.trim(), accessibility: operation.accessibility ?? 'available', status: 'active', ...category(operation), relatedEntityIds: unique(operation.relatedEntityIds ?? []).filter(id => input.allowedEntityIds.has(id)), ...(operation.occurredOn ? { occurredOn: operation.occurredOn } : {}), ...(operation.supersedesMemoryId ? { supersedesMemoryId: operation.supersedesMemoryId } : {}), ...(operation.mergesMemoryIds?.length ? { mergesMemoryIds: unique(operation.mergesMemoryIds) } : {}), ...relevance(operation) } }];
     const valueOnly = isModelAuthored(input);
     const dimension = valueOnly ? 'overall' : operation.dimension.trim().toLowerCase();
     const baseline = relationships.baseline(operation.sourceEntityId, operation.targetEntityId, dimension);
@@ -984,7 +990,7 @@ function isAllowed(operation: ExtractedNarrativeOperation, allowed: Set<string>,
   if (operation.type === 'awareness') return allowed.has(operation.targetId);
   if (operation.type === 'belief' && operation.heldById && !allowed.has(operation.heldById)) return false;
   if (operation.type === 'knowledge' || operation.type === 'belief') return allowed.has(operation.proposition.subjectId) && Boolean(operation.proposition.predicate.trim());
-  if (operation.type === 'memory') return operation.salience >= 0.65 && Boolean(operation.summary.trim());
+  if (operation.type === 'memory') return operation.salience >= MIN_MEMORY_SALIENCE && Boolean(operation.summary.trim());
   return true;
 }
 
@@ -1005,7 +1011,8 @@ function requiresReview(event: ExtractedNarrativeEvent): boolean {
     if (operation.type === 'relationship') {
       return operation.impact === 'drastic' || REVIEWED_RELATIONSHIP_CAUSES.has(String(operation.cause));
     }
-    if (operation.type === 'memory') return operation.salience < AUTO_MEMORY_SALIENCE;
+    // A memory waits for nobody: one that matters little fades on its own, and any can be brought back.
+    if (operation.type === 'memory') return false;
     if (operation.type === 'knowledge' && REVIEWED_KNOWLEDGE_CATEGORIES.has(String(operation.category))) return true;
     // A lie is the narrator's to see; recording one changes what the hearer will act on.
     if (operation.type === 'knowledge' && operation.intent === 'deceptive') return true;

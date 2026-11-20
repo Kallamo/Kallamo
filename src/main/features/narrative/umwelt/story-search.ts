@@ -30,7 +30,8 @@ export interface StoryHit {
   score: number;
   similarity?: number;
   terms?: number;
-  event?: { title: string; description: string | null; tick: number };
+  event?: { title: string; description: string | null; tick: number; type?: string; participants?: string[]; location?: string | null; on?: Record<string, number> };
+  record?: SearchPageResult['items'][number]['record'];
 }
 
 export interface StorySearchInput {
@@ -45,7 +46,25 @@ export interface StorySearchInput {
   maxTerms?: number;
   /** Resolving the timeline costs engine calls, so a run of searches resolves it once. */
   timelineId?: string;
+  /** Events of these types, and records written by them. */
+  eventTypes?: readonly string[];
+  /** Records whose subject is the entity, and events it takes part in. */
+  subject?: string;
+  /** Documents positioned in this span, on the axis of `at`. */
+  range?: { from?: number; to?: number };
+  at?: { axis?: string; tick?: number };
+  /** Overrides the similarity a semantic hit needs. */
+  floor?: number;
+  /**
+   * Keeps semantic hits close to the best one instead of above a fixed line: a short query scores
+   * the whole page lower, and the fixed line would drop all of it.
+   */
+  relative?: boolean;
 }
+
+// With a relative floor, hits within this distance of the best are kept, never below the bottom line.
+const RELATIVE_MARGIN = 0.02;
+const RELATIVE_BOTTOM = 0.86;
 
 function prepare(world: NarrativeWorld): void {
   world.call('embedding.defineSpace', { space: LOCAL_EMBEDDING_SPACE });
@@ -116,28 +135,53 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
   if (holderId && !world.ensureEntities([holderId]).has(holderId)) return [];
   const docType = input.docType ?? 'record';
   const timelineId = input.timelineId ?? new StoryReader(world).timelineId();
-  const filter = { docType, ...(holderId ? { holder: holderId } : {}) };
+  const filter = {
+    docType,
+    ...(holderId ? { holder: holderId } : {}),
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.eventTypes ? { eventTypes: [...input.eventTypes] } : {})
+  };
+  const scope = { filter, timelineId, ...(input.range ? { range: input.range } : {}), ...(input.at ? { at: input.at } : {}) };
 
   const latestTick = input.skipLatestEvents ? new StoryReader(world).timeline(timelineId).maxTick : null;
   const events = new Map<string, NonNullable<StoryHit['event']>>();
+  const records = new Map<string, NonNullable<StoryHit['record']>>();
   const keep = (item: SearchPageResult['items'][number]): boolean => {
+    if (item.record) records.set(item.docId, item.record);
     if (!item.event) return true;
     if (latestTick !== null && item.event.position.tick > latestTick - (input.skipLatestEvents ?? 0)) return false;
-    events.set(item.docId, { title: item.event.title, description: item.event.description ?? null, tick: item.event.position.tick });
+    events.set(item.docId, {
+      title: item.event.title,
+      description: item.event.description ?? null,
+      tick: item.event.position.tick,
+      type: item.event.type,
+      participants: item.event.participants ?? [],
+      location: item.event.location ?? null,
+      ...(item.event.on ? { on: item.event.on } : {})
+    });
     return true;
   };
 
   const semantic: Array<{ docId: string; similarity: number }> = [];
   if (input.vector && input.vector.length === LOCAL_EMBEDDING_SPACE.dimensions) {
-    const page = searchPage(world, { semantic: { spaceId: LOCAL_EMBEDDING_SPACE.id, vector: input.vector }, filter, timelineId, page: { limit: SEMANTIC_PAGE } });
+    const page = searchPage(world, { semantic: { spaceId: LOCAL_EMBEDDING_SPACE.id, vector: input.vector }, ...scope, page: { limit: SEMANTIC_PAGE } });
+    const best = page?.items[0]?.score ?? 0;
+    const floor = input.relative
+      ? Math.max(input.floor ?? RELATIVE_BOTTOM, best - RELATIVE_MARGIN)
+      : input.floor ?? SEMANTIC_FLOOR;
     for (const item of page?.items ?? []) {
-      if ((item.score ?? 0) >= SEMANTIC_FLOOR && keep(item)) semantic.push({ docId: item.docId, similarity: item.score ?? 0 });
+      if ((item.score ?? 0) >= floor && keep(item)) semantic.push({ docId: item.docId, similarity: item.score ?? 0 });
     }
   }
 
   const termHits = new Map<string, { terms: number; rarity: number }>();
-  for (const term of searchTerms(input.text, input.maxTerms)) {
-    const page = searchPage(world, { text: term, filter, timelineId, page: { limit: TERM_PAGE } });
+  const terms = searchTerms(input.text, input.maxTerms);
+  // Without meaning behind it, a match on two common words of a long query is chance: a relative
+  // search asks a words-only hit to carry half the query.
+  const meant = new Set(semantic.map(item => item.docId));
+  const wordsOnlyFloor = input.relative ? Math.max(2, Math.ceil(terms.length / 2)) : 2;
+  for (const term of terms) {
+    const page = searchPage(world, { text: term, ...scope, page: { limit: TERM_PAGE } });
     const items = (page?.items ?? []).filter(keep);
     for (const item of items) {
       const entry = termHits.get(item.docId) ?? { terms: 0, rarity: 0 };
@@ -147,7 +191,7 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
     }
   }
   const text = [...termHits.entries()]
-    .filter(([, entry]) => entry.terms >= 2)
+    .filter(([docId, entry]) => entry.terms >= 2 && (meant.has(docId) || entry.terms >= wordsOnlyFloor))
     .sort((left, right) => right[1].terms - left[1].terms || right[1].rarity - left[1].rarity || left[0].localeCompare(right[0]));
 
   const fused = new Map<string, StoryHit>();
@@ -162,5 +206,9 @@ export function searchStory(db: Database.Database, workspaceId: string, input: S
   return [...fused.values()]
     .sort((left, right) => right.score - left.score || left.docId.localeCompare(right.docId))
     .slice(0, input.limit ?? 5)
-    .map(hit => (events.has(hit.docId) ? { ...hit, event: events.get(hit.docId) } : hit));
+    .map(hit => ({
+      ...hit,
+      ...(events.has(hit.docId) ? { event: events.get(hit.docId) } : {}),
+      ...(records.has(hit.docId) ? { record: records.get(hit.docId) } : {})
+    }));
 }

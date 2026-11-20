@@ -39,6 +39,7 @@ const WORKSPACE_OWNED_COLUMNS = [
   { table: 'narrative_event_participants', column: 'workspace_id' },
   { table: 'narrative_event_evidence', column: 'workspace_id' },
   { table: 'narrative_story_records', column: 'workspace_id' },
+  { table: 'narrative_record_use', column: 'workspace_id' },
   { table: 'narrative_story_jobs', column: 'workspace_id' },
   { table: 'narrative_operation_reviews', column: 'workspace_id' },
   { table: 'narrative_scenes', column: 'workspace_id' },

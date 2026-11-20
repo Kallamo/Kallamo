@@ -7,6 +7,7 @@ import { admitForCharacter } from '../../src/main/features/narrative/umwelt/stor
 import { traceStoryRecord } from '../../src/main/features/narrative/umwelt/story-insights';
 import { LOCAL_EMBEDDING_SPACE, pendingStoryPage, pendingStoryTexts, searchStory, searchTerms, storeStoryVectors } from '../../src/main/features/narrative/umwelt/story-search';
 import { createNarrativeChatContext } from '../../src/main/features/narrative/chat-context';
+import { assembleContext } from '../../src/main/features/narrative/retrieval/assembler';
 import { AgenticEpistemicTools } from '../../src/main/features/narrative/agentic-epistemic-tools';
 import { storyCanonPassages } from '../../src/main/features/narrative/umwelt/story-text';
 import { setWorkspaceExperienceMode } from '../../src/main/features/narrative/mode-orchestration';
@@ -185,37 +186,41 @@ describe('searching what a character holds by meaning', () => {
 });
 
 describe('the narrator search outside roleplay', () => {
-  test('a Fact the request means in other words reaches a standard workspace', () => {
+  test('a Fact the request means in other words reaches a standard workspace', async () => {
     authored('canon', [{ id: 'op-fact', type: 'assert-fact', evidenceIds: [], fact: { id: 'fact', proposition: { subjectId: 'guild', predicate: 'statement', object: 'The guild pays its spies in silver.' }, status: 'active', evidenceIds: [] } }]);
     const basis = (index: number) => Array.from({ length: LOCAL_EMBEDDING_SPACE.dimensions }, (_, slot) => (slot === index ? 1 : 0.01));
     storeStoryVectors(db, WS, pendingStoryTexts(db, WS, 50).map(item => ({ ...item, vector: basis(item.docId === 'fact' ? 1 : 2) })));
-    const context = createNarrativeChatContext(db, text => Math.ceil(text.length / 4));
-    const ask = (vector: number[]) => context.plan({ requestId: 'request', workspaceId: WS, query: 'Who funds the informants?', items: [], tokenBudget: 4000, queryVector: vector });
+    const estimate = (text: string) => Math.ceil(text.length / 4);
+    const ask = async (vector: number[]) => (await assembleContext({
+      db, workspaceId: WS, mode: 'standard', request: 'Who funds the informants?', lastReply: '', ceiling: 4000,
+      estimateTokens: estimate, source: createNarrativeChatContext(db, estimate),
+      brief: { needs: [{ kind: 'open', label: 'who funds the informants', query: 'who funds the informants' }] },
+      embed: async () => vector
+    })).context;
 
-    expect(ask(basis(1)).context).toContain('The guild pays its spies in silver.');
-    expect(ask(basis(5)).context).not.toContain('pays its spies');
+    expect(await ask(basis(1))).toContain('The guild pays its spies in silver.');
+    expect(await ask(basis(5))).not.toContain('pays its spies');
   });
 });
 
 describe('recalling earlier scenes', () => {
-  test('a scene comes back only to the character who witnessed it', () => {
+  test('a recalled memory comes back only to the character who holds it', async () => {
     writeStoryEvent(db, WS, {
       eventId: 'bell', description: 'The bell tower collapsed during the storm and buried the market stalls.', participants: ['elias'],
       provenance: { interpreter: 'user', originType: 'world-action', originId: 'bell' },
       operations: [knowledge('witnessed', 'elias', 'The mason was paid in copper.', { acquisition: 'witness', sourceEventId: 'bell' })]
     });
-    for (let index = 0; index < 14; index += 1) authored(`later-${index}`, [knowledge(`entry-${index}`, 'mara', `Entry ${index}.`)]);
     setWorkspaceExperienceMode(db, WS, 'roleplay');
-    new NarrativeSceneRepository(db).save({
-      id: 'scene', projectId: WS, status: 'active', participantIds: ['elias', 'tess'], possibleObserverIds: [],
-      perspective: { access: 'subjective', focalSubjectId: 'elias' }, position: { sequence: 50 }
-    });
-    const planned = createNarrativeChatContext(db, text => Math.ceil(text.length / 4))
-      .plan({ requestId: 'request', workspaceId: WS, query: 'Does anyone remember the storm and the bell tower?', items: [], tokenBudget: 6000 });
+    const estimate = (text: string) => Math.ceil(text.length / 4);
+    const recall = async (holder: string) => (await assembleContext({
+      db, workspaceId: WS, mode: 'roleplay', request: 'Does anyone remember who paid the mason?', lastReply: '', ceiling: 6000,
+      scene: { locationId: null, participantIds: ['elias', 'tess'], possibleObserverIds: [], nearbyIds: [], objectIds: [], playerId: 'elias' },
+      estimateTokens: estimate, source: createNarrativeChatContext(db, estimate),
+      brief: { needs: [{ kind: 'recall', label: 'the mason', holder, query: 'mason paid copper' }] }
+    })).context;
 
-    const scene = 'A scene Elias witnessed earlier in the story: The bell tower collapsed';
-    expect(planned.context).toContain(scene);
-    expect(planned.context).not.toContain('A scene Tess witnessed');
+    expect(await recall('elias')).toContain('The mason was paid in copper.');
+    expect(await recall('tess')).not.toContain('The mason was paid in copper.');
   });
 
   test('the latest events are left to the chat history', () => {

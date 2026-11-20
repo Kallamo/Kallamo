@@ -49,7 +49,7 @@ const LEVEL = '__level';
 const XP = '__xp';
 const RESOURCE_FIELDS = [
   'name', 'description', 'color', 'minimum', 'maximum', 'startsFull', 'growthPerLevel', 'refillOnLevelUp', 'aiChangesMaximum',
-  'maximumRule', 'unit', 'appliesTo', 'updatePolicy', 'scope', 'lowestEffect', 'timeRate', 'timeDirection', 'timePeriod'
+  'maximumRule', 'unit', 'appliesTo', 'updatePolicy', 'scope', 'lowestEffect', 'timeRate', 'timeDirection', 'timePeriod', 'decimals'
 ] as const;
 
 const MEMBER_TARGETS: MemberTarget[] = ['everyone', 'entity', 'race', 'species', 'type'];
@@ -169,7 +169,8 @@ export class RoleplayRulesPackager {
     for (const incoming of rules.resources || []) {
       const mine = local.get(incoming.key);
       if (!mine) resources.added.push(incoming.name);
-      else if (RESOURCE_FIELDS.every(field => JSON.stringify(mine[field]) === JSON.stringify(incoming[field]))) resources.same.push(incoming.name);
+      // A package made before decimals existed meant whole numbers.
+      else if (RESOURCE_FIELDS.every(field => JSON.stringify(mine[field]) === JSON.stringify(field === 'decimals' ? incoming[field] ?? 0 : incoming[field]))) resources.same.push(incoming.name);
       else resources.changed.push(incoming.name);
     }
     const settings = this.progression.getSettings(workspaceId);

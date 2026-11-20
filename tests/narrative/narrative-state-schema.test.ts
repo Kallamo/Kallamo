@@ -27,7 +27,8 @@ describe('Narrative State structured output schemas', () => {
         targetPosition: { eraId: 'ce', year: 997, month: 5, day: 15, hour: 13, minute: 15 },
         confidence: 1,
         evidence: 'The clock reads 13:15.',
-        statedSpan: null
+        statedSpan: null,
+        movementOnly: false
       },
       sceneMemory: [{
         entityId: 'corwin',

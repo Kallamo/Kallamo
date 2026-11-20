@@ -352,6 +352,8 @@ function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
  * @param {Array<{ type: string, subjectId: string | null, value: any, interpreter?: string }>} rows
  * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, topicIds?: Iterable<string> | null, fullHolderIds?: Iterable<string>, limit?: number, withRefs?: boolean }} options
  */
+const RESERVED = { intents: 30, outOfReach: 10 };
+
 function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, topicIds = null, fullHolderIds = [], limit = 120, withRefs = false }) {
   const holders = new Set(holderIds);
   const mentionedHolders = new Set(mentionedHolderIds);
@@ -379,6 +381,13 @@ function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], ta
   }
   // Rows arrive newest first, and a stable sort keeps that order inside each group.
   scored.sort((a, b) => Number(b.onTopic) - Number(a.onTopic) || Number(b.inFocus) - Number(a.inFocus));
+  // What ages worst goes first, however old: open intents, which the story settles, and what is out
+  // of reach for now, which the story can bring back. Without a place of their own they fall past the limit.
+  const relevant = ({ row, inFocus, onTopic }) => HOLDER_RECORD_TYPES.has(row.type) && holders.has(row.subjectId) && (onTopic || inFocus);
+  const intents = scored.filter(item => relevant(item) && item.row.value.category === 'intent').slice(0, RESERVED.intents);
+  const outOfReach = scored.filter(item => relevant(item) && item.row.value.accessibility === 'suppressed').slice(0, RESERVED.outOfReach);
+  const reserved = new Set([...intents, ...outOfReach]);
+  scored.splice(0, scored.length, ...intents, ...outOfReach.filter(item => !intents.includes(item)), ...scored.filter(item => !reserved.has(item)));
   // The same record can be stored twice, by two events that told it; it is read once.
   const seen = new Set();
   const records = [];
@@ -392,7 +401,8 @@ function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], ta
     sources.push(row);
   }
   const sent = records.slice(0, limit);
-  if (!withRefs) return { records: sent, candidates: records.length };
+  const reservedUse = { intents: intents.length, outOfReach: outOfReach.length };
+  if (!withRefs) return { records: sent, candidates: records.length, reserved: reservedUse };
   const refs = new Map();
   const referenced = sent.map((record, index) => {
     const row = sources[index];
@@ -402,7 +412,7 @@ function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], ta
     refs.set(ref, row);
     return { ref, ...record };
   });
-  return { records: referenced, candidates: records.length, refs };
+  return { records: referenced, candidates: records.length, refs, reserved: reservedUse };
 }
 
 // Enough to recognise what is already recorded, which is all the analysis reads these for. Whole
@@ -424,6 +434,8 @@ function compactPerspectiveRecord({ type, subjectId, value }) {
     ...(value.entityId ? { entityId: value.entityId } : {}),
     ...(value.acquisition ? { acquisition: value.acquisition } : {}),
     ...(value.accessibility && value.accessibility !== 'available' ? { accessibility: value.accessibility } : {}),
+    ...(value.category === 'intent' ? { category: 'intent' } : {}),
+    ...((type === 'knowledge' || type === 'belief') && Number(value.confidence) < 1 ? { confidence: Number(value.confidence) } : {}),
     ...(value.negated === true ? { negated: true } : {}),
     ...(value.attitude === 'suspects' ? { attitude: 'suspects' } : {}),
     ...(value.heldById ? { heldById: value.heldById } : {}),

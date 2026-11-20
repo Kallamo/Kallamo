@@ -44,7 +44,10 @@ async function open(file) {
   const onStderr = text => diagnostics.set(file, String(text).trim().slice(-500));
   client = module.createClient({ file, create: !existsSync(file), client: 'kallamo', onStderr, ...(binary ? { binary } : {}) });
   clients.set(file, client);
-  try { await client.transport.ready; } catch (error) { clients.delete(file); throw error; }
+  let hello;
+  try { hello = await client.transport.ready; } catch (error) { clients.delete(file); throw error; }
+  const migration = hello && hello.migration;
+  if (migration) console.log('[Umwelt] Migrated ' + file + ' from storage ' + migration.from + ' to ' + migration.to + '; the original is kept at ' + migration.backup);
   return client;
 }
 function reply(message) {

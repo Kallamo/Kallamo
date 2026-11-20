@@ -44,7 +44,7 @@ export type ValidationResult<T> =
   | { success: true; value: T }
   | { success: false; issues: ValidationIssue[] };
 
-const EVENT_TYPES = new Set(['movement', 'possession-transfer', 'revelation', 'deception', 'discovery', 'relationship-change', 'custom']);
+const EVENT_TYPES = new Set(['movement', 'possession-transfer', 'revelation', 'deception', 'discovery', 'relationship-change', 'custom', 'maintenance']);
 const OPERATION_TYPES = new Set(['assert-fact', 'set-state', 'record-observation', 'grant-awareness', 'grant-knowledge', 'set-belief', 'record-memory', 'set-relationship']);
 const ENTITY_KINDS = ['agent', 'group', 'object', 'location', 'species', 'event', 'concept'];
 const ENTITY_CAPABILITIES = ['appearance', 'personality', 'inventory', 'relationships', 'knowledge', 'beliefs', 'memory', 'perspective'];
@@ -231,6 +231,7 @@ function validateKnowledgeValue(value: unknown, path: string, issues: Validation
   if (knowledge.informantIds !== undefined) requireStringArray(knowledge, 'informantIds', path, issues);
   if (knowledge.supersedesId !== undefined) requireString(knowledge, 'supersedesId', path, issues);
   if (knowledge.sharedWith !== undefined) requireStringArray(knowledge, 'sharedWith', path, issues);
+  if (knowledge.salience !== undefined) requireConfidence(knowledge, 'salience', path, issues);
   validateHoldingNuance(knowledge, path, issues);
 }
 
@@ -261,6 +262,7 @@ function validateBeliefValue(value: unknown, path: string, issues: ValidationIss
   optionalEnum(belief, 'attitude', ['believes', 'suspects'], path, issues);
   if (belief.informantIds !== undefined) requireStringArray(belief, 'informantIds', path, issues);
   if (belief.heldById !== undefined) requireString(belief, 'heldById', path, issues);
+  if (belief.salience !== undefined) requireConfidence(belief, 'salience', path, issues);
   validateHoldingNuance(belief, path, issues);
 }
 
@@ -276,6 +278,8 @@ function validateNarrativeMemoryValue(value: unknown, path: string, issues: Vali
   optionalEnum(memory, 'category', MEMORY_CATEGORY_VALUES, path, issues);
   if (memory.status !== undefined) requireEnum(memory, 'status', ['active', 'superseded', 'forgotten'], path, issues);
   if (memory.supersedesMemoryId !== undefined) requireString(memory, 'supersedesMemoryId', path, issues);
+  if (memory.mergesMemoryIds !== undefined) requireStringArray(memory, 'mergesMemoryIds', path, issues);
+  if (memory.salience !== undefined) requireConfidence(memory, 'salience', path, issues);
   if (memory.relatedEntityIds !== undefined) requireStringArray(memory, 'relatedEntityIds', path, issues);
   if (memory.occurredOn !== undefined) validateWorldDay(memory.occurredOn, `${path}.occurredOn`, issues);
 }

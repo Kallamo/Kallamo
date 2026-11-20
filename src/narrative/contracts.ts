@@ -155,6 +155,8 @@ export interface Knowledge {
   premiseIds?: NarrativeId[];
   /** Those a secret may be shared with; telling anyone else is a breach. */
   sharedWith?: NarrativeId[];
+  /** How much it matters to its holder, 0 to 1; how slowly it fades. */
+  salience?: number;
 }
 
 export interface Belief {
@@ -178,6 +180,7 @@ export interface Belief {
   premiseIds?: NarrativeId[];
   /** Second order: the subject believes this holder holds the proposition, or with negated, does not. */
   heldById?: NarrativeId;
+  salience?: number;
 }
 
 export interface NarrativeMemory {
@@ -192,6 +195,10 @@ export interface NarrativeMemory {
   category?: MemoryCategory;
   status?: 'active' | 'superseded' | 'forgotten';
   supersedesMemoryId?: NarrativeId;
+  /** Other memories this one gathers into a single account; they end when it is written. */
+  mergesMemoryIds?: NarrativeId[];
+  /** How much it matters to its holder, 0 to 1; how slowly it fades. */
+  salience?: number;
   relatedEntityIds?: NarrativeId[];
   /** The story day it happened, in the world calendar; absent when nobody knows. */
   occurredOn?: WorldDay;
@@ -249,7 +256,9 @@ export type EventType =
   | 'deception'
   | 'discovery'
   | 'relationship-change'
-  | 'custom';
+  | 'custom'
+  /** Kallamo tidying what characters hold after a scene; never written by a model as a story event. */
+  | 'maintenance';
 
 export interface EventParticipant {
   entityId: NarrativeId;

@@ -3,6 +3,7 @@ import type { NarrativeOperation } from '../../../../narrative/contracts';
 import type { NarrativeEventLedgerRecord } from '../../../../narrative/ledger';
 import { NarrativeWorld } from './narrative-world';
 import { storyMinuteFor } from './story-clock';
+import { noteRecordUse, recordsDrawnOn } from './record-use';
 import { indexOriginRecords } from './story-lifecycle';
 import { StoryTimelines } from './story-timelines';
 import { StoryReader } from './story-reader';
@@ -38,9 +39,33 @@ export function batchStoryWrites<T>(db: Database.Database, workspaceId: string, 
   }
 }
 
+/**
+ * What an event is, written as its story `type` so a reading can keep only scenes. The journal keeps
+ * the analysis' own kind (revelation, movement...) in `narrative_events.event_type`.
+ */
+export type StoryEventNature = 'scene' | 'occurrence' | 'sheet-edit' | 'awareness-grant' | 'entity-update' | 'import' | 'maintenance';
+
+export const SCENE_NATURES: readonly StoryEventNature[] = ['scene', 'occurrence'];
+
+// Editing someone's sheet is not a scene they took part in, so these events name no participants.
+const RECORD_KEEPING: ReadonlySet<StoryEventNature> = new Set(['sheet-edit', 'awareness-grant', 'maintenance']);
+
+export const OCCURRENCE_ORIGIN_PREFIX = 'worldbuild-occurrence:';
+
+export function natureOf(provenance: { originType?: string | null; originId?: string | null }, operations: ReadonlyArray<{ type: string }> = []): StoryEventNature {
+  const { originType, originId } = provenance;
+  if (originType === 'chat-message' || originType === 'writing-document') return 'scene';
+  if (originType === 'worldbuild-update') return 'entity-update';
+  if (originId?.startsWith(OCCURRENCE_ORIGIN_PREFIX)) return 'occurrence';
+  if (operations.length && operations.every(operation => operation.type === 'grant-awareness')) return 'awareness-grant';
+  if (originType === 'import') return 'import';
+  return 'sheet-edit';
+}
+
 export interface StoryEventWrite {
   eventId: string;
-  type?: string;
+  /** Defaults to what the provenance and the operations say (`natureOf`). */
+  nature?: StoryEventNature;
   description: string;
   participants: string[];
   locationId?: string | null;
@@ -71,11 +96,12 @@ export function writeStoryEvent(db: Database.Database, workspaceId: string, inpu
     : originId
       ? timelines.turnDraft(originId) ?? (placement === 'turn' ? timelines.forTurn(originId) : timelines.forMain())
       : timelines.forMain();
+  const nature = input.nature ?? natureOf(input.provenance, input.operations);
   return new StoryWriter(world, timelineId, batch).write({
     eventId: input.eventId,
-    type: input.type ?? 'custom',
+    type: nature,
     description: input.description,
-    participants: input.participants,
+    participants: RECORD_KEEPING.has(nature) ? [] : input.participants,
     locationId: input.locationId ?? null,
     provenance: input.provenance,
     operations: input.operations,
@@ -98,7 +124,7 @@ export function writeLedgerRecord(
   const evidence = record.proposal.evidence[0];
   const result = writeStoryEvent(db, record.proposal.projectId, {
     eventId: event.id,
-    type: event.type,
+    ...(event.type === 'maintenance' ? { nature: 'maintenance' as const } : {}),
     description: event.description,
     participants: event.participants.map(participant => participant.entityId),
     locationId: event.locationId ?? null,
@@ -112,6 +138,12 @@ export function writeLedgerRecord(
     ...(options.turn ? { placement: 'turn' as const } : {}),
     ...(options.storyMinute !== undefined ? { storyMinute: options.storyMinute } : {})
   });
-  if (evidence?.originId) indexOriginRecords(db, record.proposal.projectId, evidence.originId, result.outcome);
+  if (evidence?.originId) {
+    indexOriginRecords(db, record.proposal.projectId, evidence.originId, result.outcome);
+    const applied = new Set(result.applied);
+    const drawnOn = recordsDrawnOn(record.proposal.changeSet.operations.filter(operation => applied.has(operation.id)));
+    const minute = options.storyMinute !== undefined ? options.storyMinute : storyMinuteFor(db, record.proposal.projectId, evidence.originId);
+    noteRecordUse(db, record.proposal.projectId, evidence.originId, drawnOn, minute);
+  }
   return result;
 }

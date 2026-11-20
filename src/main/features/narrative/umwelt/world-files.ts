@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { getUmweltBridge } from './bridge';
 
@@ -50,8 +50,16 @@ export function worldFile(db: Database.Database, workspaceId: string): string {
   return join(worldDirectory(db), worldFileName(workspaceId));
 }
 
+// The engine keeps the pre-migration copy as `<file>.v<storage>.bak`; it holds the same story.
+const MIGRATION_BACKUP = /\.umw\.v\d+\.bak$/;
+
 function sidecars(file: string): string[] {
-  return [file, `${file}-wal`, `${file}-shm`, `${file}.lock`];
+  const directory = dirname(file);
+  const prefix = `${basename(file)}.v`;
+  const backups = existsSync(directory)
+    ? readdirSync(directory).filter(name => name.startsWith(prefix) && MIGRATION_BACKUP.test(name)).map(name => join(directory, name))
+    : [];
+  return [file, `${file}-wal`, `${file}-shm`, `${file}.lock`, ...backups];
 }
 
 /** Deletes a workspace's story file. The engine is shut down first so the file is not locked. */
@@ -119,7 +127,8 @@ export function unpackWorldFiles(db: Database.Database): number {
   const directory = worldDirectory(db);
   getUmweltBridge().closeAll();
   for (const name of readdirSync(directory)) {
-    if (sidecars('').some(suffix => name.endsWith(`${WORLD_EXTENSION}${suffix}`))) rmSync(join(directory, name), { force: true });
+    const isWorldFile = ['', '-wal', '-shm', '.lock'].some(suffix => name.endsWith(`${WORLD_EXTENSION}${suffix}`)) || MIGRATION_BACKUP.test(name);
+    if (isWorldFile) rmSync(join(directory, name), { force: true });
   }
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(WORLD_FILES_TABLE);
   if (!hasTable) return 0;

@@ -153,13 +153,78 @@ describe('Story refs', () => {
     record('turn-2', revised.events[0]);
     expect(current('elias', 'memory').map(item => item.summary)).toEqual(['Tess gave Elias the gate code only to test whether he would keep it.']);
     selection = slice();
-    const forgotten = resolveRecordReferences([{
+    const lost = resolveRecordReferences([{
       type: 'custom', description: 'The blow to the head takes the evening at the guild from Elias.', excerpt: 'He remembers nothing.',
+      participantIds: ['elias'], confidence: 0.96,
+      operations: [{ type: 'end', ref: refOf(selection, 'elias', 'memory'), how: 'lost' }]
+    }], selection.refs);
+    record('turn-3', lost.events[0]);
+    // Lost for good is still his, out of reach, and never comes back.
+    expect(current('elias', 'memory').map(item => item.accessibility)).toEqual(['inaccessible']);
+    selection = slice();
+    const recalled = resolveRecordReferences([{
+      type: 'custom', description: 'Elias sees the guild gate.', excerpt: 'Nothing.', participantIds: ['elias'], confidence: 0.96,
+      operations: [{ type: 'recall', ref: refOf(selection, 'elias', 'memory'), cue: 'the gate' }]
+    }], selection.refs);
+    expect(recalled.unresolved).toEqual([expect.objectContaining({ type: 'recall', reason: 'lost-for-good' })]);
+  });
+
+  test('a forgotten memory slips out of reach, keeps its relevance, and a cue brings it back', () => {
+    play();
+    let selection = slice();
+    const forgotten = resolveRecordReferences([{
+      type: 'custom', description: 'Weeks pass and the evening at the guild fades for Elias.', excerpt: 'It fades.',
       participantIds: ['elias'], confidence: 0.96,
       operations: [{ type: 'end', ref: refOf(selection, 'elias', 'memory'), how: 'forgot' }]
     }], selection.refs);
-    record('turn-3', forgotten.events[0]);
-    expect(current('elias', 'memory')).toEqual([]);
+    record('turn-2', forgotten.events[0]);
+    expect(current('elias', 'memory').map(item => [item.accessibility, item.salience])).toEqual([['suppressed', 0.92]]);
+    selection = slice();
+    expect(selection.records.find((item: { type: string; accessibility?: string }) => item.type === 'memory')).toMatchObject({ accessibility: 'suppressed' });
+    const recalled = resolveRecordReferences([{
+      type: 'custom', description: 'The guild gate brings the evening back to Elias.', excerpt: 'He stops at the gate.',
+      participantIds: ['elias'], confidence: 0.96,
+      operations: [{ type: 'recall', ref: refOf(selection, 'elias', 'memory'), cue: 'the guild gate' }]
+    }], selection.refs);
+    record('turn-3', recalled.events[0]);
+    expect(current('elias', 'memory').map(item => [item.summary, item.accessibility])).toEqual([['Tess trusted Elias with the gate code of the guild hall.', 'available']]);
+  });
+
+  test('a suspicion confirmed in front of its holder becomes knowledge', () => {
+    play();
+    // A belief waits for a person; approving it puts the suspicion in the story.
+    const suspected = record('turn-2', {
+      type: 'custom', description: 'Elias suspects Tess works for the guild.', excerpt: 'Maybe she is one of them.',
+      participantIds: ['elias'], confidence: 0.96,
+      operations: [{ type: 'belief', subjectId: 'elias', proposition: { subjectId: 'tess', predicate: 'works-for', object: 'guild' }, category: 'identity', attitude: 'suspects', confidence: 0.5 }]
+    });
+    system.resolveEvent(WORKSPACE, suspected.record!.proposal.changeSet.event.id, 'approved');
+    const selection = slice();
+    const belief = selection.records.find((item: { type: string; subjectId?: string }) => item.type === 'belief' && item.subjectId === 'elias') as unknown as { ref: string; confidence?: number };
+    expect(belief.confidence).toBe(0.5);
+    const confirmed = resolveRecordReferences([{
+      type: 'custom', description: 'Elias sees Tess wearing the guild seal.', excerpt: 'The seal on her collar.',
+      participantIds: ['elias'], confidence: 0.96,
+      operations: [{ type: 'confirm', ref: belief.ref, by: 'witnessed' }]
+    }], selection.refs);
+    expect(confirmed.events[0].operations[0]).toMatchObject({ type: 'knowledge', confidence: 1, acquisition: 'witness', supersedesId: expect.any(String) });
+  });
+
+  test('two memories of one experience become one, and the others end with it', () => {
+    play();
+    record('turn-2', {
+      type: 'custom', description: 'Elias thinks back on the code.', excerpt: 'He remembers.', participantIds: ['elias'], confidence: 0.96,
+      operations: [{ type: 'memory', subjectId: 'elias', summary: 'Tess told Elias the guild code in confidence.', category: 'bond', salience: 0.7 }]
+    });
+    const selection = slice();
+    const refs = selection.records.filter((item: { type: string; subjectId?: string }) => item.type === 'memory' && item.subjectId === 'elias').map(item => (item as unknown as { ref: string }).ref);
+    expect(refs).toHaveLength(2);
+    const merged = resolveRecordReferences([{
+      type: 'maintenance', description: 'Tidied.', excerpt: 'Scene ended.', participantIds: ['elias'], confidence: 1,
+      operations: [{ type: 'merge', refs, summary: 'Tess trusted Elias with the guild code, in confidence.' }]
+    }], selection.refs);
+    record('turn-3', merged.events[0]);
+    expect(current('elias', 'memory').map(item => [item.summary, item.salience])).toEqual([['Tess trusted Elias with the guild code, in confidence.', 0.92]]);
   });
 
   test('ending what a person wrote waits for review', () => {

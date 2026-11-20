@@ -53,7 +53,9 @@ const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
 const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_MECHANICS_SCHEMA, NARRATIVE_STORY_SCHEMA } = require('../../dist-main/main/features/narrative/narrative-state-schema');
-const { findReachableLocations, isNestedLocation, locationSizesOf, travelCategory } = require('../../dist-main/main/features/worldbuild/location-graph');
+const {
+    describeLocationChain, findReachableLocations, inferLocationSizes, isNestedLocation, loadLocationChain, locationSizesOf, travelCategory
+} = require('../../dist-main/main/features/worldbuild/location-graph');
 const { findByReference } = require('../../dist-main/main/features/narrative/rule-keys');
 const { missingSpoilers } = require('../../dist-main/shared/spoilers');
 const { RELATIONSHIP_SCALE_GUIDE } = require('../../dist-main/narrative/relationship-bands');
@@ -195,27 +197,6 @@ function formatRagDebugSection(label, resultObjs) {
     return `${label} (${resultObjs.length}):\n${lines.join('\n\n')}\n`;
 }
 
-function formatContextPlanDebug(plan) {
-    if (!plan?.package) return '';
-    const includedSources = new Map(
-        plan.package.items.map(item => [item.candidateId, `${item.source.type}:${item.source.id}`])
-    );
-    const decisions = (plan.decisions || []).map(decision => {
-        const source = includedSources.get(decision.candidateId);
-        return `- ${decision.candidateId}${source ? ` [${source}]` : ''}: ${decision.outcome} (${decision.reason})`;
-    });
-    return [
-        'CONTEXT POLICY',
-        `Budget: ${plan.package.usedTokens}/${plan.package.tokenBudget} tokens`,
-        ...decisions
-    ].join('\n');
-}
-
-function formatContextBundleDebug(planned) {
-    if (!planned?.bundle) return '';
-    return `ROLEPLAY CONTEXT BUNDLE:\n${JSON.stringify(serializeContextBundle(planned), null, 2)}`;
-}
-
 // Every message carries the bundle, and the list of excluded records alone ran to hundreds of
 // kilobytes in a long campaign. Without the retrieval panel on, only how many and why are kept.
 function compactContextBundle(bundle, keepExcluded) {
@@ -229,74 +210,6 @@ function compactContextBundle(bundle, keepExcluded) {
     }
     const { excluded: _excluded, ...rest } = bundle;
     return { ...rest, scopes, excludedByReason };
-}
-
-// One short row per Worldbuild entity the planner considered: why it came in and, if it did not
-// reach the context, why not. Kept only while the retrieval panel is on.
-function summarizeWorldbuildOrigins(planned) {
-    if (!planned?.entityOrigins?.length) return null;
-    const included = new Set(planned.bundle
-        ? planned.bundle.scopes.flatMap(scope => scope.package.items.map(item => item.candidateId))
-        : (planned.plan?.package?.items || []).map(item => item.candidateId));
-    const decisions = planned.bundle ? planned.bundle.decisions : (planned.plan?.decisions || []);
-    const exclusions = new Map();
-    for (const decision of decisions) {
-        if (decision.outcome !== 'include' && !exclusions.has(decision.candidateId)) exclusions.set(decision.candidateId, decision.reason);
-    }
-    return planned.entityOrigins.flatMap(({ id, name, origin }) => {
-        const candidateId = `entity:${id}`;
-        if (included.has(candidateId)) return [{ name, origin, included: true }];
-        return exclusions.has(candidateId) ? [{ name, origin, included: false, reason: exclusions.get(candidateId) }] : [];
-    });
-}
-
-function serializeContextBundle(planned) {
-    if (!planned?.bundle) return null;
-    const scopes = planned.bundle.scopes.map(scope => ({
-        id: scope.scopeId,
-        label: scope.label,
-        usedTokens: scope.package.usedTokens,
-        itemIds: scope.package.items.map(item => item.candidateId),
-        items: scope.package.items.map(item => ({
-            candidateId: item.candidateId,
-            source: item.source,
-            provenanceIds: item.provenanceIds,
-            tokens: item.tokens
-        }))
-    }));
-    const excluded = planned.bundle.decisions
-        .filter(decision => decision.outcome !== 'include')
-        .map(decision => ({
-            scopeId: decision.scopeId,
-            candidateId: decision.candidateId,
-            outcome: decision.outcome,
-            reason: decision.reason
-        }));
-    const manifest = planned.manifest ? {
-        requestId: planned.manifest.requestId,
-        sequence: planned.manifest.sequence,
-        subjects: planned.manifest.subjectIds,
-        targets: planned.manifest.targetIds,
-        assessments: planned.manifest.assessments,
-        deepenedPairs: planned.manifest.deepenedPairs,
-        ...(planned.manifest.notHeldCounts ? { notHeldCounts: planned.manifest.notHeldCounts } : {})
-    } : null;
-    // Records the story refused for a character's context, beside what the planner left out.
-    const refused = (planned.manifest?.refusals || []).map(refusal => ({
-        scopeId: `subject:${refusal.subjectId}`,
-        candidateId: refusal.candidateId,
-        outcome: 'exclude',
-        reason: `story-${refusal.reason}`
-    }));
-    return {
-        usedTokens: planned.bundle.usedTokens,
-        tokenBudget: planned.bundle.tokenBudget,
-        composition: planned.bundle.composition || null,
-        scopes,
-        excluded: [...excluded, ...refused],
-        manifest,
-        storySearch: planned.storySearch || []
-    };
 }
 
 // A text read in the scene arrives whole up to this size; a longer one names the pages left out.
@@ -463,22 +376,6 @@ function routeRetrievedResults(results, { retrievalItems, narrativeItems, sectio
         seen.add(text);
         narrativeItems.push({ id: result.id, kind, source: result.source, content: text, relevance: Number(result.fusionScore ?? result.score) || 0 });
     }
-}
-
-// Agentic context items become planner items. Uncited results rank lower instead of being
-// dropped, and one file or lore read keeps the same share cap the packer applies.
-function toNarrativeItems(contextItems, retrievalBudget) {
-    const itemCap = Math.floor(Math.max(0, retrievalBudget) * AGENTIC_ITEM_MAX_SHARE);
-    return (contextItems || []).map((item, index) => ({
-        id: item.ids?.[0] || `agentic-${index}`,
-        kind: item.narrativeKind,
-        source: item.source,
-        content: item.truncatable && estimateTokens(item.text) > itemCap
-            ? truncateToTokens(item.text, itemCap, estimateTokens)
-            : item.text,
-        relevance: (Number(item.score) || 0) * (item.tier >= 3 ? 0.75 : 1),
-        ...(item.entityIds ? { entityIds: item.entityIds } : {})
-    })).filter(item => item.content);
 }
 
 // --- WORKFLOW RUNNER ---
@@ -782,6 +679,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         let lastFinalContextText = '';
         let lastContextBundle = null;
         let lastWorldbuildOrigins = null;
+        let lastAssembly = null;
         let lastRetrievalMode = 'standard';
         let lastAgenticTrace = null;
         let lastRetrievalFunnel = null;
@@ -845,6 +743,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             let narrativeContextRequestId = null;
             let contextBundleDiagnostic = null;
             let worldbuildOriginsDiagnostic = null;
+            let assemblyDiagnostic = null;
             let retrievalMode = 'standard';
             let agenticTrace = null;
             let retrievalFunnel = null;
@@ -1034,7 +933,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             const splitBudget = splitRetrievalBudget({ availableTokens: availableForContext, historyTokens: historyNeed });
             // A text named this turn and within reach is read whether or not the planner runs; its
             // pages come out of the retrieval budget so the payload limit still holds.
-            const lastReply = [...activeMessages].reverse().find(message => message.role === 'ai')?.content || '';
+            // The narration only: names in the reasoning saved with it are not what the story said.
+            const lastReply = stripReasoning([...activeMessages].reverse().find(message => message.role === 'ai')?.content || '');
             const textReadings = includeChatContext
                 ? readTextsInPlay(chatId, isRoleplayWorkspace, `${messageContent || currentInput}\n${lastReply}`, Math.min(IN_WORLD_TEXT_TOKENS, Math.floor(splitBudget / 3)))
                 : [];
@@ -1051,21 +951,74 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
 
             const retrievalPlanner = getRoleExecutor(ROLE_IDS.RETRIEVAL_PLANNER, profile);
             const plannerAvailable = profile.isAgentic === 1 && Boolean(retrievalPlanner.executor);
+            // Constant files and snippets already travel whole, so a search never repeats them.
+            const filterProfileResults = results => {
+                let constantSnippetTitles = [];
+                try {
+                    constantSnippetTitles = db.getConstantSnippets(profile.id).map(c => (c.title || '').toLowerCase());
+                } catch (e) { }
+                return (results || []).filter(r => {
+                    const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
+                    if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) return false;
+                    return !constantSnippetTitles.includes(r.source.toLowerCase());
+                });
+            };
+            // A workspace builds its context from what the turn needs; only a chat with no workspace
+            // context of its own keeps the search-and-pack retrieval.
+            const needDriven = planWorkspaceContext;
             // The user's own message decides, not the step input: from step 2 on that input is
             // generated prose, which says nothing about whether this turn needs research.
-            const plannerGate = plannerAvailable
-                ? resolvePlannerGate(chatId, messageContent || currentInput, {
-                    includeChatContext,
-                    roleplay: isRoleplayWorkspace,
-                    force: String(debugSettings.agenticGate || 'auto') === 'always'
-                })
-                : { plan: false, reason: 'profile is not agentic, or no Retrieval Planner is configured' };
-            if (plannerAvailable) {
+            const plannerGate = needDriven
+                ? { plan: false, reason: 'need-driven' }
+                : plannerAvailable
+                    ? resolvePlannerGate(chatId, messageContent || currentInput, {
+                        includeChatContext,
+                        roleplay: isRoleplayWorkspace,
+                        force: String(debugSettings.agenticGate || 'auto') === 'always'
+                    })
+                    : { plan: false, reason: 'profile is not agentic, or no Retrieval Planner is configured' };
+            if (plannerAvailable && !needDriven) {
                 retrievalPath = plannerGate.plan ? 'agentic' : 'deterministic';
                 retrievalGateReason = plannerGate.reason;
                 console.log(`[Agentic RAG] Gate: ${retrievalPath} (${plannerGate.reason})`);
             }
-            if (plannerGate.plan) {
+            if (needDriven) {
+                const assembled = await assembleTurnContext({
+                    chatId,
+                    chat,
+                    profile,
+                    request: messageContent || currentInput,
+                    lastReply,
+                    ceiling: retrievalBudget,
+                    isRoleplay: isRoleplayWorkspace,
+                    plannerExecutor: plannerAvailable ? retrievalPlanner.executor : null,
+                    run: currentRun,
+                    webContents,
+                    includeChatContext,
+                    filterProfileResults,
+                    // The last replies always reach the narrator whole, so their scenes are not searched for.
+                    recentOriginIds: activeMessages.slice(-20).filter(message => message.role === 'ai').map(message => message.id)
+                });
+                retrievalMode = 'need-driven';
+                retrievalPath = 'need-driven';
+                retrievalGateReason = assembled.brief.note;
+                if (assembled.profileText) {
+                    contextBlock += `\n\n${profileRetrievalHeader}\n${assembled.profileText}\n`;
+                    profileKbTokens += assembled.profileTokens;
+                }
+                // Rules and who is here hold for the whole scene, so they join the stable head a cache can reuse.
+                if (assembled.stable) stableContextBlock += `\n\n${assembled.stable}\n`;
+                if (assembled.volatile) contextBlock += `\n\n${assembled.volatile}\n`;
+                chatKbTokens += assembled.usedTokens;
+                assemblyDiagnostic = { ...assembled.report, brief: { note: assembled.brief.note, inputTokens: assembled.brief.inputTokens, outputTokens: assembled.brief.outputTokens } };
+                agenticInputTokens = assembled.brief.inputTokens;
+                agenticOutputTokens = assembled.brief.outputTokens;
+                for (const key of ['read', 'write', 'longWrite', 'uncachedInput']) {
+                    measuredAgenticCache[key] = (measuredAgenticCache[key] || 0) + (assembled.brief.cache?.[key] || 0);
+                }
+                agenticRagResponse = assembled.brief.response;
+                agenticRagContextGathered = assembled.context;
+            } else if (plannerGate.plan) {
                 let ragChatHistory = [];
                 if (i === 0 || includeChatHistory) {
                     // The planner reads this history, so its own window sizes it, not the writer's.
@@ -1087,32 +1040,14 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 });
                 if (agenticResult) {
                     retrievalMode = 'agentic';
-                    // Workspace passages and Worldbuild records go through the narrative planner, which
-                    // applies perspective; profile knowledge is packed on its own first.
-                    const narrativeCandidates = planWorkspaceContext
-                        ? agenticResult.contextItems.filter(item => item.narrativeKind)
-                        : [];
+                    // A chat with no workspace context: what the loop found is packed as passages.
                     const packed = packContextItems(
-                        planWorkspaceContext ? agenticResult.contextItems.filter(item => !item.narrativeKind) : agenticResult.contextItems,
+                        agenticResult.contextItems,
                         retrievalBudget,
                         { estimate: estimateTokens, maxItemShare: AGENTIC_ITEM_MAX_SHARE }
                     );
                     retrievalOmitted += packed.dropped + packed.truncated;
                     if (agenticResult.degraded) agenticDegraded = true;
-                    let planned = null;
-                    if (planWorkspaceContext) {
-                        const narrativeBudget = Math.max(0, retrievalBudget - packed.usedTokens);
-                        planned = await planNarrativeContext({
-                            chatId,
-                            query: currentInput,
-                            items: toNarrativeItems(narrativeCandidates, retrievalBudget),
-                            tokenBudget: narrativeBudget
-                        });
-                        if (planned?.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
-                        contextBundleDiagnostic = serializeContextBundle(planned);
-                        worldbuildOriginsDiagnostic = summarizeWorldbuildOrigins(planned);
-                    }
-                    const narrativeTokens = planned?.plan.package.usedTokens || 0;
                     // Stored on the message, so chunk ids are left out and only counts are kept.
                     lastAgenticTrajectory = {
                         anchorQuery: agenticResult.trajectory.anchorQuery,
@@ -1129,17 +1064,15 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             : null,
                         turns: agenticResult.trajectory.turns.map(({ newIds, ...turn }) => turn),
                         packing: {
-                            kept: packed.kept.length + (planned?.plan.package.items.length || 0),
+                            kept: packed.kept.length,
                             dropped: packed.dropped,
                             truncated: packed.truncated,
-                            total: packed.total + narrativeCandidates.length,
+                            total: packed.total,
                             budget: retrievalBudget
                         }
                     };
-                    const gathered = [renderContextSections(packed.kept, agenticResult.contextSections), planned?.context]
-                        .filter(Boolean)
-                        .join('\n\n');
-                    const retrievedAnything = packed.total > 0 || narrativeCandidates.length > 0;
+                    const gathered = renderContextSections(packed.kept, agenticResult.contextSections);
+                    const retrievedAnything = packed.total > 0;
                     // Never pass the agent's summary off as facts; an explicit notice keeps
                     // the model from inventing document-based answers.
                     const noContextNotice = retrievedAnything
@@ -1152,14 +1085,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         if (item.origin === 'profile') profileKbTokens += item.tokens;
                         else chatKbTokens += item.tokens;
                     }
-                    chatKbTokens += narrativeTokens;
 
                     agenticRagResponse = agenticResult.agenticResponse;
-                    agenticRagContextGathered = [
-                        gathered,
-                        planned ? formatContextPlanDebug(planned.plan) : '',
-                        formatContextBundleDebug(planned)
-                    ].filter(Boolean).join('\n\n');
+                    agenticRagContextGathered = gathered;
                     agenticInputTokens = agenticResult.agenticInputTokens || 0;
                     for (const key of ['read', 'write', 'longWrite', 'uncachedInput']) {
                         measuredAgenticCache[key] = (measuredAgenticCache[key] || 0) + (agenticResult.agenticCache?.[key] || 0);
@@ -1182,30 +1110,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     lastAgenticTrajectory = { gate: { path: 'deterministic', reason: plannerGate.reason }, turns: [] };
                 }
                 const retrievalItems = [];
-                const narrativeItems = [];
-                let searchQuery = currentInput;
                 // Profile knowledge, workspace files and archived memory share the budget.
                 const topK = retrievalTopK(0, retrievalBudget, { tiers: RETRIEVAL_TIERS });
-                const results = await searchKnowledgeBase(searchQuery, profile.id, { k: topK });
+                const results = await searchKnowledgeBase(currentInput, profile.id, { k: topK });
                 standardRagDebug += formatRagDebugSection('PROFILE KB', results);
                 if (results && results.length > 0) {
-                    let constantSnippetTitles = [];
-                    try {
-                        constantSnippetTitles = db.getConstantSnippets(profile.id)
-                            .map(c => (c.title || '').toLowerCase());
-                    } catch (e) { }
-
-                    const profileResults = results.filter(r => {
-                        const fileMatch = knowledgeFiles.find(f => f.name.toLowerCase() === r.source.toLowerCase());
-                        if (fileMatch && (fileMatch.strategy === 'constant' || fileMatch.strategy === 'full_context')) {
-                            return false;
-                        }
-                        if (constantSnippetTitles.includes(r.source.toLowerCase())) {
-                            return false;
-                        }
-                        return true;
-                    });
-                    pushRetrievalItems(retrievalItems, profileResults, profileRetrievalHeader, 'profile');
+                    pushRetrievalItems(retrievalItems, filterProfileResults(results), profileRetrievalHeader, 'profile');
                 }
 
                 if (includeChatContext && chat) {
@@ -1216,7 +1126,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             : (chat.knowledgeFiles || []);
                         routeRetrievedResults(
                             filterWorkspaceKnowledgeResults(chatKbResults, chatKbFiles, profile.id),
-                            { retrievalItems, narrativeItems: planWorkspaceContext ? narrativeItems : null, section: CHAT_RETRIEVAL_HEADER, kind: 'workspace-text' }
+                            { retrievalItems, narrativeItems: null, section: CHAT_RETRIEVAL_HEADER, kind: 'workspace-text' }
                         );
                     }
                     standardRagDebug += formatRagDebugSection('CHAT KB', chatKbResults);
@@ -1230,17 +1140,13 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                             : (chat.memoryBlocks || []);
                         routeRetrievedResults(
                             expandMemoryResults(filterWorkspaceMemoryResults(memoryResults, blocksList, profile.id), chatId),
-                            { retrievalItems, narrativeItems: planWorkspaceContext ? narrativeItems : null, section: MEMORY_RETRIEVAL_HEADER, kind: 'workspace-memory' }
+                            { retrievalItems, narrativeItems: null, section: MEMORY_RETRIEVAL_HEADER, kind: 'workspace-memory' }
                         );
                     }
                     standardRagDebug += formatRagDebugSection('CHAT MEMORY', memoryResults);
                 }
 
-                // Duplicates are removed across both paths before anything is packed or planned.
-                const selection = selectRetrievedEntries(currentInput, [
-                    ...retrievalItems.map(item => ({ key: item, kind: item.origin === 'profile' ? 'profile-knowledge' : 'workspace-text', source: item.source, content: item.text })),
-                    ...narrativeItems.map(item => ({ key: item, kind: item.kind, source: item.source, content: item.content }))
-                ]);
+                const selection = selectRetrievedEntries(currentInput, retrievalItems.map(item => ({ key: item, kind: item.origin === 'profile' ? 'profile-knowledge' : 'workspace-text', source: item.source, content: item.text })));
                 const selectedItems = new Set(selection.selected.map(entry => entry.key));
                 retrievalFunnel = selection.funnel;
                 const packed = packContextItems(retrievalItems.filter(item => selectedItems.has(item)), retrievalBudget, { estimate: estimateTokens });
@@ -1252,21 +1158,6 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     const sectionTokens = estimateTokens(texts.join('\n\n'));
                     if (section === profileRetrievalHeader) profileKbTokens += sectionTokens;
                     else chatKbTokens += sectionTokens;
-                }
-                if (planWorkspaceContext) {
-                    const planned = await planNarrativeContext({
-                        chatId,
-                        query: currentInput,
-                        items: narrativeItems.filter(item => selectedItems.has(item)),
-                        tokenBudget: Math.max(0, retrievalBudget - packed.usedTokens)
-                    });
-                    if (planned.manifest?.requestId) narrativeContextRequestId = planned.manifest.requestId;
-                    contextBundleDiagnostic = serializeContextBundle(planned);
-                    worldbuildOriginsDiagnostic = summarizeWorldbuildOrigins(planned);
-                    if (planned.context) contextBlock += `\n\n${planned.context}\n`;
-                    standardRagDebug += `\n${formatContextPlanDebug(planned.plan)}\n`;
-                    standardRagDebug += `\n${formatContextBundleDebug(planned)}\n`;
-                    chatKbTokens += planned.plan.package.usedTokens;
                 }
             }
             if (attachmentsContext) {
@@ -1495,6 +1386,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             lastFinalContextText = stableContextBlock + contextBlock;
             lastContextBundle = contextBundleDiagnostic;
             lastWorldbuildOrigins = worldbuildOriginsDiagnostic;
+            lastAssembly = assemblyDiagnostic;
             lastRetrievalMode = retrievalMode;
             lastAgenticTrace = agenticTrace;
             lastRetrievalFunnel = retrievalFunnel;
@@ -1562,6 +1454,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     ...(keepRetrievalText ? { finalContextText: capDebugText(lastFinalContextText) } : {}),
                     bundle: compactContextBundle(lastContextBundle, keepRetrievalText),
                     ...(keepRetrievalText && lastWorldbuildOrigins?.length ? { worldbuild: lastWorldbuildOrigins } : {}),
+                    ...(lastAssembly ? { assembly: lastAssembly } : {}),
                     selection: lastRetrievalFunnel
                 },
                 agentic: lastAgenticTrace ? {
@@ -2588,15 +2481,211 @@ function getNarrativeChatContext() {
     return narrativeChatContext;
 }
 
-async function planNarrativeContext({ chatId, query, items, tokenBudget }) {
-    return getNarrativeChatContext().plan({
-        requestId: crypto.randomUUID(),
+// A passage cut from a longer text starts at its first full sentence, not in the middle of a word.
+function fromSentenceStart(text) {
+    const value = String(text || '').trim();
+    if (!/^[\p{Ll}\p{N}]/u.test(value)) return value;
+    const start = value.search(/[.!?…]["'”»)]*\s+\S/u);
+    return start >= 0 && start < value.length / 2 ? value.slice(start).replace(/^[.!?…"'”»)\s]+/u, '') : value;
+}
+
+function roleplaySceneInput(workspaceId) {
+    try {
+        const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+        const roleplay = new RoleplaySystem(db);
+        const scene = roleplay.getScene(workspaceId);
+        const playerId = roleplay.getSettings(workspaceId)?.playerEntityId || null;
+        if (!scene && !playerId) return null;
+        return {
+            locationId: scene?.locationId || null,
+            participantIds: scene?.participantIds || [],
+            possibleObserverIds: scene?.possibleObserverIds || [],
+            nearbyIds: scene?.nearbyIds || [],
+            objectIds: scene?.objectIds || [],
+            playerId
+        };
+    } catch (error) {
+        console.warn('[Retrieval] Scene unavailable:', error.message);
+        return null;
+    }
+}
+
+/**
+ * The context of one turn in a workspace: the planner lists what the turn needs, and the assembler
+ * reads exactly that. The budget is a ceiling the context stays under, never a size to reach.
+ */
+async function assembleTurnContext({ chatId, chat, profile, request, lastReply, ceiling, isRoleplay, plannerExecutor, run, webContents, includeChatContext, filterProfileResults, recentOriginIds = [] }) {
+    const { assembleContext } = require('../../dist-main/main/features/narrative/retrieval/assembler');
+    const { briefPrompt, briefSchema, ROLEPLAY_NEEDS, STANDARD_NEEDS } = require('../../dist-main/main/features/narrative/retrieval/needs');
+    const mode = isRoleplay ? 'roleplay' : 'standard';
+    const scene = isRoleplay ? roleplaySceneInput(chatId) : null;
+    const brief = { response: '', inputTokens: 0, outputTokens: 0, cache: {}, error: null, needs: null };
+
+    // Profile knowledge is the narrator's own reference: searched apart, and kept small.
+    let profileText = '';
+    let profileTokens = 0;
+    try {
+        const results = filterProfileResults(await searchKnowledgeBase(request, profile.id, { k: 4 }) || []);
+        const room = Math.floor(ceiling * 0.2);
+        for (const result of results) {
+            const text = `[${result.source}]: ${result.text}`;
+            const tokens = estimateTokens(text);
+            if (profileTokens + tokens > room) break;
+            profileText += `${profileText ? '\n\n' : ''}${text}`;
+            profileTokens += tokens;
+        }
+    } catch (error) {
+        console.warn('[Retrieval] Profile knowledge search failed:', error.message);
+    }
+
+    const entities = (() => { try { return entitiesStore.listEntities({ workspaceId: chatId }); } catch { return []; } })();
+    const nameOf = new Map(entities.map(entity => [entity.id, entity.canonicalName]));
+    const documents = (() => {
+        try {
+            const files = typeof chat?.knowledgeFiles === 'string' ? JSON.parse(chat.knowledgeFiles) : (chat?.knowledgeFiles || []);
+            return files.map(file => file.name).filter(Boolean);
+        } catch { return []; }
+    })();
+
+    if (plannerExecutor) {
+        const coreIds = scene ? [scene.playerId, ...scene.participantIds, ...scene.possibleObserverIds, ...scene.nearbyIds, ...scene.objectIds, scene.locationId].filter(Boolean) : [];
+        const mentionedIds = [...entityMentionIds(request, entities, { caseFreeTypes: new Set(['Events', 'System']) })];
+        const mentioned = mentionedIds.map(id => nameOf.get(id)).filter(Boolean);
+        // What the Worldbuild links to the names in the turn and the scene, so the planner can name what
+        // the turn describes without naming it.
+        const linked = (() => {
+            try {
+                const { createWorldbuildView } = require('../../dist-main/main/features/narrative/retrieval/entity-tiers');
+                const { linkedNames } = require('../../dist-main/main/features/narrative/retrieval/linked-names');
+                const replyIds = [...entityMentionIds(String(lastReply || '').slice(-1500), entities, { caseFreeTypes: new Set(['Events', 'System']) })];
+                return linkedNames(createWorldbuildView(db, chatId), { mentionedIds: [...new Set([...mentionedIds, ...replyIds])], sceneIds: coreIds });
+            } catch (error) {
+                console.warn('[Retrieval] Could not list linked names:', error.message);
+                return [];
+            }
+        })();
+        const sceneSkills = (() => {
+            if (!scene) return [];
+            try {
+                const { loadSkillBook } = require('../../dist-main/main/features/narrative/retrieval/skills');
+                return loadSkillBook(db, chatId, [scene.playerId, ...scene.participantIds].filter(Boolean), id => nameOf.get(id)).heldNames;
+            } catch (error) {
+                console.warn('[Retrieval] Could not list the skills in the scene:', error.message);
+                return [];
+            }
+        })();
+        const prompt = briefPrompt({
+            mode,
+            request,
+            lastReply,
+            coreNames: [...new Set(coreIds.map(id => nameOf.get(id)).filter(Boolean))],
+            mentioned,
+            documents: mode === 'standard' ? documents : [],
+            skills: sceneSkills,
+            linked,
+            guidance: profile.agenticPrompt || ''
+        });
+        const telemetry = { structuredFallbacks: 0, structuredFallbackStages: [], structuredFallbackReasons: [], structuredOutputMode: 'schema', cache: brief.cache, calls: null };
+        try {
+            if (webContents) sendRunEvent(webContents, 'workflow-progress', run, { profileName: profile.name, status: 'Reading the turn...' });
+            const systemPrompt = `${getSystemLanguageInstruction()}\n${prompt.systemPrompt}`;
+            brief.response = await sendNarrativeJson({
+                apiProfileId: plannerExecutor.apiProfileId,
+                model: plannerExecutor.model,
+                systemPrompt,
+                chatHistory: [],
+                newPrompt: prompt.prompt,
+                temperature: 0,
+                maxTokens: 1200,
+                maxPayloadTokens: workspacePayloadTokens(chatId),
+                manualMode: false,
+                manualJson: null,
+                cacheScope: `${chatId}::retrieval-brief`
+            }, briefSchema(isRoleplay ? ROLEPLAY_NEEDS : STANDARD_NEEDS), 'Retrieval brief', telemetry);
+            brief.inputTokens = estimateTokens(systemPrompt) + estimateTokens(prompt.prompt);
+            brief.outputTokens = estimateTokens(brief.response);
+            brief.needs = safeParseObject(brief.response);
+        } catch (error) {
+            // Without the brief the context still holds the scene and every name the turn wrote.
+            brief.error = String(error.message || error).slice(0, 300);
+            console.warn('[Retrieval] The brief failed; continuing with the names in the turn:', brief.error);
+        }
+    }
+
+    // A research need gets the tool loop, on its own question, and only what the loop cites.
+    const research = new Map();
+    const researchNeeds = (Array.isArray(brief.needs?.needs) ? brief.needs.needs : []).filter(need => need?.kind === 'research');
+    if (mode === 'standard' && plannerExecutor && researchNeeds.length) {
+        let index = 0;
+        for (const need of brief.needs.needs) {
+            index += 1;
+            if (need?.kind !== 'research') continue;
+            const question = String(need.query || need.label || '').trim();
+            if (!question) continue;
+            try {
+                const result = await executeAgenticRagLoop(profile, chatId, question, [], webContents, includeChatContext, plannerExecutor, run, {
+                    retrievalBudget: Math.floor(ceiling / 3),
+                    userRequest: question,
+                    skipSeed: true,
+                    maxTurns: Math.min(5, Math.max(1, Number.isInteger(profile.agenticMaxTurns) ? profile.agenticMaxTurns : 2))
+                });
+                brief.inputTokens += result?.agenticInputTokens || 0;
+                brief.outputTokens += result?.agenticOutputTokens || 0;
+                // Keyed by its place in the planner's answer, which the parsed need keeps.
+                research.set(index - 1, (result?.contextItems || []).slice(0, 6).map((item, position) => ({ id: (item.ids || [])[0] || `research-${index}-${position}`, source: item.source || 'research', text: item.text })));
+            } catch (error) {
+                console.warn('[Retrieval] Research need failed:', error.message);
+            }
+        }
+    }
+
+    try {
+        require('../../dist-main/main/features/narrative/umwelt/story-fact-text').addFactTexts(db, chatId);
+    } catch (error) {
+        console.warn('[Narrative State] Could not add search text to earlier facts:', error.message);
+    }
+    const local = (readAdvancedSettings().embeddingEngine || 'local') === 'local';
+    if (local) fillStoryVectors(chatId);
+    const blocks = (() => {
+        try { return typeof chat?.memoryBlocks === 'string' ? JSON.parse(chat.memoryBlocks) : (chat?.memoryBlocks || []); } catch { return []; }
+    })();
+    const assembled = await assembleContext({
+        db,
         workspaceId: chatId,
-        query,
-        items,
-        tokenBudget,
-        queryVector: await storyQueryVector(chatId, query)
+        mode,
+        request,
+        lastReply,
+        recentOriginIds,
+        scene,
+        ceiling: Math.max(0, ceiling - profileTokens),
+        estimateTokens,
+        source: getNarrativeChatContext(),
+        brief: brief.needs,
+        ...(local ? { embed: text => generateEmbeddingVector(text, true) } : {}),
+        searchDocuments: async need => {
+            const query = need.query || need.label;
+            if (!query) return [];
+            const results = await searchChatKnowledgeBase(query, chatId, { k: 4, source: need.documentName || null });
+            return (results || []).map(result => ({ id: result.id, source: result.source, text: fromSentenceStart(result.text), score: result.score }));
+        },
+        searchArchive: async need => {
+            const query = need.query || need.label;
+            if (!query) return [];
+            const results = filterWorkspaceMemoryResults(await searchChatMemories(query, chatId, { k: 3 }) || [], blocks, profile.id);
+            return results.map(result => ({ id: result.id, source: result.source || 'Chat Archive', text: fromSentenceStart(result.text), score: result.score }));
+        },
+        research
     });
+    return {
+        ...assembled,
+        profileText,
+        profileTokens,
+        brief: {
+            ...brief,
+            needs: assembled.needs.length,
+            note: brief.error ? `the brief failed (${brief.error}); names and the message's own words` : plannerExecutor ? `${assembled.needs.length} need(s)` : 'Smart search off; names and the message\'s own words'
+        }
+    };
 }
 
 // The story's own texts get vectors from the local model only, so turning this on never bills a
@@ -2689,7 +2778,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const startClock = calendarService.getRoleplayClock(db, workspaceId);
     // Resources that recover or drain follow the time the turn moved the clock, for the player
     // and whoever is in the scene; a manual clock correction is not story time and moves nothing.
-    const recordTimeFrame = (timeAdvance, endLocationId = roleplay.getScene(workspaceId)?.locationId, minimumMinutes = 0) => {
+    const recordTimeFrame = (timeAdvance, endLocationId = roleplay.getScene(workspaceId)?.locationId, minimumMinutes = 0, maximumMinutes = 0) => {
         const frame = calendarService.applyRoleplayTurnFrame(db, {
             workspaceId,
             originId: provenanceId,
@@ -2697,7 +2786,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             startLocationId: scene?.locationId,
             endLocationId,
             timeAdvance,
-            minimumMinutes
+            minimumMinutes,
+            maximumMinutes
         });
         if (frame?.advance?.duration) {
             try {
@@ -2872,6 +2962,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             characterIds: skillsContext.ids
         } : undefined,
         currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
+        currentLocation: describeSceneLocationChain(workspaceId, scene?.locationId, inferLocationSizes(locationLinks, locationSizes)),
         currentTime: startClock,
         candidateSignals: narrativeSignals,
         characterStances: characterStances.length ? characterStances : undefined,
@@ -3433,14 +3524,15 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const appliedLocationId = roleplay.getScene(workspaceId)?.locationId;
     const endLocationId = (rejectedSceneChange ? null : routedResult.scenePatch?.locationId) || appliedLocationId;
     // Only a move that happened charges the clock; one awaiting approval may still be rejected.
-    const travelFloorMinutes = resolveTravelFloorMinutes({
+    const travel = resolveTravelBounds({
         startLocationId: scene?.locationId,
         endLocationId: appliedLocationId,
         locationLinks,
         locationSizes,
-        timeMatrix
+        timeMatrix,
+        timeAdvance: triage?.timeAdvance
     });
-    const timeFrame = recordTimeFrame(triage?.timeAdvance, endLocationId, travelFloorMinutes);
+    const timeFrame = recordTimeFrame(triage?.timeAdvance, endLocationId, travel.floorMinutes, travel.ceilingMinutes);
     settleSceneMemory();
     for (const event of buildHeardContactEvents({
         workspaceId,
@@ -3469,9 +3561,11 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     if (timeFrame.advance) changes.push({ kind: 'time', frame: timeFrame });
     // What the story pass needs of this turn, settled now so it reads the scene as it was.
     const finalScene = roleplay.getScene(workspaceId);
+    const sceneEnd = endedScene({ workspaceId, scene, finalScene, timeFrame, calendarService });
     const storyNeeded = storyDomains.length > 0 || narrativeIntroductions.length > 0 || identityContactCandidates.length > 0;
-    if (storyNeeded) {
+    if (storyNeeded || sceneEnd) {
         narrativeState.queueStory(workspaceId, provenanceId, {
+            ...(sceneEnd ? { maintenance: sceneEnd } : {}),
             domains: storyDomains,
             wide: Boolean(routing.requiresFullAnalysis),
             presentIds: triagePresentIds || [],
@@ -3535,14 +3629,17 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 invalidInventoryChanges: invalidInventoryChanges.length,
                 scenePatch: Boolean(routedResult.scenePatch && Object.keys(routedResult.scenePatch).length),
                 rejectedScenePatch: rejectedSceneChange?.reason ?? null,
-                sceneLocation: summarizeSceneLocation({
-                    analyzed: shouldAnalyzeScene,
-                    fromLocationId: scene?.locationId ?? null,
-                    rejected: rejectedSceneChange,
-                    change: changes.find(change => change.kind === 'scene' && change.patch?.locationId)
-                })
+                sceneLocation: {
+                    ...summarizeSceneLocation({
+                        analyzed: shouldAnalyzeScene,
+                        fromLocationId: scene?.locationId ?? null,
+                        rejected: rejectedSceneChange,
+                        change: changes.find(change => change.kind === 'scene' && change.patch?.locationId)
+                    }),
+                    ...(travel.category ? { travel } : {})
+                }
             },
-            story: storyNeeded ? { status: 'queued', domains: storyDomains } : { status: 'not-needed', domains: [] },
+            story: storyNeeded || sceneEnd ? { status: 'queued', domains: storyDomains, ...(sceneEnd ? { sceneEnded: sceneEnd.reason } : {}) } : { status: 'not-needed', domains: [] },
             rejectedSceneChange,
             invalidInventoryChanges,
             proposals: changes.map(change => ({
@@ -3596,6 +3693,13 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
     }
     narrativeState.beginStory(workspaceId, originId);
     const startedAt = Date.now();
+    const queued = job.handoff || {};
+    // A scene that ended with nothing else to record still has what its people carry tidied.
+    if (queued.maintenance && !(queued.domains || []).length && !(queued.introductions || []).length && !(queued.identityContacts || []).length) {
+        const maintenance = await maintainEndedScene({ workspaceId, originId, maintenance: queued.maintenance, role, modelCalls });
+        narrativeState.finishStory(workspaceId, originId, 'completed', { inputTokens: maintenance.usage.input, outputTokens: maintenance.usage.output });
+        return { changes: [], diagnostics: { status: 'completed', domains: [], maintenance, usage: { input: maintenance.usage.input, output: maintenance.usage.output, repairInput: 0, repairOutput: 0 }, elapsedMs: Date.now() - startedAt } };
+    }
     // The narrator's reasoning holds plans and guesses, not events, so the story reads only the narration.
     const narrativeResponse = stripReasoning(narrative.content);
     const userMessage = user.content;
@@ -3923,8 +4027,11 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
         }
     }
     })();
-    const inputTokens = estimateTokens(systemPrompt) + estimateTokens(payload);
-    const outputTokens = primaryOutputTokens;
+    const maintenance = handoff.maintenance
+        ? await maintainEndedScene({ workspaceId, originId, maintenance: handoff.maintenance, role, modelCalls })
+        : null;
+    const inputTokens = estimateTokens(systemPrompt) + estimateTokens(payload) + (maintenance?.usage.input || 0);
+    const outputTokens = primaryOutputTokens + (maintenance?.usage.output || 0);
     const elapsedMs = Date.now() - startedAt;
     narrativeState.finishStory(workspaceId, originId, 'completed', { inputTokens, outputTokens });
     return {
@@ -3937,7 +4044,7 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
                 analysisScope: {
                     holders: { present: holders.present.size, mentioned: holders.mentioned.size, readInFull: topicIds ? [...holders.present].filter(id => fullHolderIds.has(id)).length : holders.present.size },
                     topics: topicIds ? topicIds.size : null,
-                    perspectiveRecords: { sent: currentPerspectiveState.length, candidates: perspectiveSelection.candidates },
+                    perspectiveRecords: { sent: currentPerspectiveState.length, candidates: perspectiveSelection.candidates, ...(perspectiveSelection.reserved ? { reserved: perspectiveSelection.reserved } : {}) },
                     relationships: { sent: currentRelationshipState.rows.length, candidates: currentRelationshipState.candidates }
                 }
             },
@@ -3963,6 +4070,7 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
                 unresolvedRefs: referenced.unresolved.length
             },
             ...(referenced.unresolved.length ? { unresolvedRefs: referenced.unresolved } : {}),
+            ...(maintenance ? { maintenance } : {}),
             skippedNarrativeEvents: narrativeSkips,
             ...(relationshipNotes.length ? { relationshipChanges: relationshipNotes } : {}),
             ...(storyChecks.breaches.length || storyChecks.unsupported.length ? { storyChecks } : {}),
@@ -3982,6 +4090,151 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
             elapsedMs
         }
     };
+}
+
+// A jump of the clock this long ends a scene as surely as leaving the place does.
+const SCENE_END_MINUTES = 6 * 60;
+
+/** The scene this turn closed, by a change of place or a long jump of the clock, and who was in it. */
+function endedScene({ workspaceId, scene, finalScene, timeFrame, calendarService }) {
+    if (!scene) return null;
+    const moved = Boolean(scene.locationId && finalScene?.locationId && scene.locationId !== finalScene.locationId);
+    let minutes = 0;
+    if (timeFrame?.advance?.duration) {
+        try {
+            minutes = calendarService.durationTotalMinutes(calendarService.getCalendar(db, workspaceId), timeFrame.advance.duration);
+        } catch {
+            minutes = 0;
+        }
+    }
+    if (!moved && minutes < SCENE_END_MINUTES) return null;
+    const holderIds = [...new Set([...(scene.participantIds || []), ...(scene.possibleObserverIds || [])].filter(Boolean))];
+    return holderIds.length ? { reason: moved ? 'moved' : 'time-skip', minutes, locationId: scene.locationId || null, holderIds } : null;
+}
+
+const SCENE_MAINTENANCE_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['operations'],
+    properties: {
+        operations: {
+            type: 'array',
+            items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['type'],
+                properties: {
+                    type: { type: 'string', enum: ['end', 'merge'] },
+                    ref: { type: 'string' },
+                    refs: { type: 'array', items: { type: 'string' } },
+                    how: { type: 'string', enum: ['settled'] },
+                    reason: { type: 'string' },
+                    summary: { type: 'string' }
+                }
+            }
+        }
+    }
+};
+
+const SCENE_MAINTENANCE_PROMPT = `You tidy what characters carry after a scene ended. Never write narrative prose. records lists the current knowledge, beliefs and memories of the characters who were in the scene; each has a ref, and names maps ids to names. Return JSON only: {"operations":[]}. Use only these operations:
+{"type":"end","ref":"#1","how":"settled","reason":"a few words"} for a record of category intent (a plan, promise, condition, refusal, demand or open question) that the other records show was carried out, met, answered, dropped or overtaken. Leave one that may still be pending.
+{"type":"merge","refs":["#1","#2"],"summary":"one account"} for memories of one holder that tell the same experience. The summary keeps every detail that matters, in that holder's perspective and in the language of the records.
+Never end or merge on a guess. When nothing needs tidying, answer {"operations":[]}.`;
+
+/**
+ * What a scene's people left unused slips out of reach by rule, then one model call settles overtaken
+ * intents and joins repeated memories. The player character is left as the user keeps them.
+ */
+async function maintainEndedScene({ workspaceId, originId, maintenance, role, modelCalls = null }) {
+    const result = { reason: maintenance.reason, faded: [], settled: 0, merged: 0, unresolved: 0, usage: { input: 0, output: 0 } };
+    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+    const settings = new RoleplaySystem(db).getSettings(workspaceId);
+    const holderIds = (maintenance.holderIds || []).filter(id => id && id !== settings.playerEntityId);
+    if (!holderIds.length) return result;
+    try {
+        const { fadeIdleRecords } = require('../../dist-main/main/features/narrative/umwelt/story-maintenance');
+        const { storyMinuteFor } = require('../../dist-main/main/features/narrative/umwelt/story-clock');
+        result.faded = fadeIdleRecords(db, workspaceId, { originId, holderIds, nowMinute: storyMinuteFor(db, workspaceId) });
+    } catch (error) {
+        console.warn('[Narrative State] Could not let unused memories fade:', error.message);
+    }
+    if (!role?.executor) return result;
+    const holders = new Set(holderIds);
+    const selection = selectPerspectiveRecords(loadNarrativeRecords(workspaceId, ['knowledge', 'belief', 'memory'], holderIds)
+        .reverse()
+        .map(({ row, payload, interpreter }) => ({ type: row.record_type, subjectId: row.subject_id || null, value: payload, interpreter })), {
+        holderIds,
+        targetIds: [],
+        focusIds: [...holderIds, maintenance.locationId].filter(Boolean),
+        fullHolderIds: holderIds,
+        limit: 80,
+        withRefs: true
+    });
+    const memoriesBy = new Map();
+    for (const record of selection.records) if (record.type === 'memory') memoriesBy.set(record.subjectId, (memoriesBy.get(record.subjectId) || 0) + 1);
+    const worthAsking = selection.records.some(record => record.category === 'intent') || [...memoriesBy.values()].some(count => count > 1);
+    if (!worthAsking) return result;
+    const ids = [...new Set(selection.records.flatMap(record => [record.subjectId, record.proposition?.subjectId].filter(Boolean)))];
+    const names = ids.length ? Object.fromEntries(db.prepare(`SELECT id, canonicalName FROM entities WHERE workspaceId = ? AND id IN (${ids.map(() => '?').join(', ')})`)
+        .all(workspaceId, ...ids).map(row => [row.id, row.canonicalName])) : {};
+    const systemPrompt = `${getSystemLanguageInstruction()}\n${SCENE_MAINTENANCE_PROMPT}`;
+    const prompt = JSON.stringify({ sceneEnded: maintenance.reason, names, records: selection.records });
+    result.usage.input = estimateTokens(systemPrompt) + estimateTokens(prompt);
+    let parsed = null;
+    try {
+        const response = await sendNarrativeJson({
+            apiProfileId: role.executor.apiProfileId,
+            model: role.executor.model,
+            systemPrompt,
+            chatHistory: [],
+            newPrompt: prompt,
+            temperature: 0,
+            maxTokens: 2048,
+            maxPayloadTokens: workspacePayloadTokens(workspaceId),
+            manualMode: false,
+            manualJson: null,
+            cacheScope: `${workspaceId}::scene-maintenance`
+        }, SCENE_MAINTENANCE_SCHEMA, 'Scene maintenance', { structuredFallbacks: 0, structuredFallbackStages: [], structuredFallbackReasons: [], structuredOutputMode: 'schema', cache: {}, calls: modelCalls });
+        result.usage.output = estimateTokens(response);
+        parsed = safeParseObject(response);
+    } catch (error) {
+        console.warn('[Narrative State] Scene maintenance failed:', error.message);
+        return result;
+    }
+    const asked = (Array.isArray(parsed?.operations) ? parsed.operations : []).filter(operation => operation?.type === 'merge' || (operation?.type === 'end' && operation.how === 'settled'));
+    if (!asked.length) return result;
+    const referenced = resolveRecordReferences([{ operations: asked }], selection.refs);
+    result.unresolved = referenced.unresolved.length;
+    // Only what was asked of the holders of the scene, whatever a ref resolved to.
+    const operations = (referenced.events[0]?.operations || []).filter(operation => holders.has(operation.subjectId));
+    if (!operations.length) return result;
+    try {
+        const { NarrativeStateSystem } = require('../../dist-main/main/features/narrative/narrative-state');
+        const outcome = new NarrativeStateSystem(db).createEvent({
+            workspaceId,
+            originId,
+            locationId: maintenance.locationId || undefined,
+            interpreterId: role.executor.model,
+            event: {
+                type: 'maintenance',
+                description: 'After the scene ended, what its people carry was tidied.',
+                excerpt: 'Scene ended.',
+                participantIds: holderIds,
+                confidence: 1,
+                operations
+            },
+            allowedEntityIds: new Set(db.prepare("SELECT id FROM entities WHERE workspaceId = ? AND status != 'proposed'").all(workspaceId).map(row => row.id)),
+            updatePolicy: settings.defaultUpdatePolicy
+        });
+        if (outcome.record) {
+            result.settled = operations.filter(operation => operation.type === 'end').length;
+            result.merged = operations.filter(operation => operation.type === 'memory').length;
+            result.status = outcome.record.status;
+        }
+    } catch (error) {
+        console.warn('[Narrative State] Could not record the scene maintenance:', error.message);
+    }
+    return result;
 }
 
 function countOperations(events, matches) {
@@ -4430,7 +4683,7 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
 Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"aboutIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to. Everyone in currentScene who has not left stays in presentIds, whether or not they speak or are mentioned this turn. aboutIds is a separate list and never narrows presentIds, which still holds everyone physically in the scene. aboutIds lists the supplied entities this turn concerns: anyone who speaks, acts or is spoken to, and every person, place, item, group or event that is discussed, asked about, revealed or implied, even when it is only described and never named. A person who is only in the background of this turn stays in presentIds and out of aboutIds.
-Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt","statedSpan":null}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words: an estimate on its own is held to a week. Whenever the user message or the narrative states a span of time, also return statedSpan as {"excerpt":"the exact words that state it, copied verbatim","amount":3,"unit":"minutes|hours|days|weeks|months|years|decades","asserts":"now|framing|history"}: "now" when that time passes in this turn, "framing" when it only frames a scene (a flashback or a setting), "history" when it recounts the world's past. A span needs a stated amount and unit ("two hours later", "20 minutes"): a vague promise such as "it won't take long" or a clock time such as "at 19h" is not a span. Otherwise statedSpan is null. Never translate or paraphrase the excerpt. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes.
+Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt","statedSpan":null,"movementOnly":false}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words: an estimate on its own is held to a week. Whenever the user message or the narrative states a span of time, also return statedSpan as {"excerpt":"the exact words that state it, copied verbatim","amount":3,"unit":"minutes|hours|days|weeks|months|years|decades","asserts":"now|framing|history"}: "now" when that time passes in this turn, "framing" when it only frames a scene (a flashback or a setting), "history" when it recounts the world's past. A span needs a stated amount and unit ("two hours later", "20 minutes"): a vague promise such as "it won't take long" or a clock time such as "at 19h" is not a span. Otherwise statedSpan is null. Never translate or paraphrase the excerpt. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes. The category of a journey comes from where the two locations sit, not from the timeMatrix guidance, which describes actions: currentLocation lists the scene's location with what contains it, and each location in availableEntities carries its size. Between spots inside one place is Micro; between places of one area, Local; across the districts of an area, Transit; between areas of a region, Macro. Set movementOnly to true when the turn's time is the journey itself, with only talk, glances or other Micro actions on the way; set it to false when something longer also happens before or after the move (work, a meal, a search, rest, a long conversation), and add that action's time to the duration. With no journey, movementOnly is false.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
 Mark inventory for explicit pickup, drop, transfer, gift, payment, purchase, sale, trade, tip, loan, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Money is coins, which are items: paying, spending or receiving money is inventory, never resource. Judge every domain by what happens, in whatever language the turn is written, never by keywords. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change, including someone joining or leaving the conversation, stepping away within the place, or leaving the place. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, new race or species, named location, or narratively important unique item is consequential even without an existing ID, and so is a thing made, forged, copied, split off or transformed into something new during the turn, or a new room or place the scene moves into. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark entity only for someone or something absent from availableEntities, or for a new name, nickname or title of an existing one. Someone learning, hearing or using the name already on an existing sheet is awareness or knowledge, never entity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.
@@ -4474,6 +4727,7 @@ Momentary, and discarded: scene-state (where someone is, what they are doing rig
 Classify honestly. Momentary content given a durable category corrupts the campaign, while classifying it as scene-state or small-talk is the correct answer and costs nothing. Never invent a category outside this list.
 
 MEMORY CATEGORIES. Every memory must declare exactly one: formative, bond, loss, trauma, triumph, oath or revelation for what a character carries; routine for anything they would not still be thinking about tomorrow. A memory is one person's experience in their own perspective, not a summary of the event. Do not write the same summary for several subjects: give each their own, or record none. Record memories only for directly participating Characters, individual Creatures, and institutionally involved Factions, never for Locations or Items.
+SALIENCE. Every memory gives salience, how much it will matter to its holder later: 0.9 to 1 shapes who they are (what formed them, a wound, a loss, an oath, a truth about themselves) and never fades; 0.7 to 0.85 moves the plot or a relationship (a plan under way, a quarrel, a mission) and fades slowly; 0.4 to 0.6 is useful context of one moment (where a meeting was, a price agreed, who was in the room) and fades fast; below 0.4 it is a passing detail and not a memory. A faded memory is out of reach, not gone: the story can bring it back.
 
 RELATIONSHIP CAUSES. Every relationship operation must name the cause that actually moved the bar.
 Events of weight: rescue (saved them from danger, death or ruin), sacrifice (gave up something dear for them), oath (a formal promise between them), revelation (a truth that changes how one sees the other), shared-loss (went through a loss together), forgiveness (forgave a past wrong), betrayal (a deliberate breach of trust), cruelty (hurt them on purpose), humiliation (shamed them before others), rejection (refused a bond, a request or a feeling they offered).
@@ -4596,9 +4850,12 @@ Return JSON only with {"events":[]}. The user message is the player character's 
 Who could perceive what follows from turnState: someone present when a thing happened in front of them may witness it; someone who arrived later, left earlier, or was never there can only learn it by being told, by reading it, or by working it out. Never give a character who left the scene what was said after they left.
 Write each event description as one self-contained sentence a reader would understand months later, naming who did what, to whom, and where. Later turns recall a scene through that sentence.`;
 
-const NARRATIVE_STORY_REFS_PROMPT = `CHANGING WHAT IS STORED. A knowledge, belief or memory in currentPerspectiveState that carries a ref can be changed by this turn, and only by these two operations:
+const NARRATIVE_STORY_REFS_PROMPT = `CHANGING WHAT IS STORED. A knowledge, belief or memory in currentPerspectiveState that carries a ref can be changed by this turn, and only by these operations:
 {"type":"revise","ref":"#1","proposition":{"subjectId":"id","predicate":"stable-key","object":any},"confidence":0.0} when the turn shows the holder now holds a corrected version of it; for a memory give "summary" instead of proposition. The stored record ends and the correction takes its place.
-{"type":"end","ref":"#1","how":"forgot|abandoned|disproved|retracted|settled","reason":"a few words"} when the holder stops holding it with nothing in its place: forgot when they lose it, abandoned when they give up a belief, disproved when the turn shows them it is false, retracted when whoever told them takes it back, settled when it is an intent, condition, refusal, demand or open question that this turn carried out, met, answered, dropped or overtook.
+{"type":"confirm","ref":"#1","by":"witnessed|told|evidence"} when the turn puts proof of a belief, a suspicion or an uncertain knowledge in front of its holder: witnessed or evidence makes it certain knowledge, told makes it firmer. A record merely repeated or mentioned again is left alone.
+{"type":"end","ref":"#1","how":"forgot|lost|abandoned|disproved|retracted|settled","reason":"a few words"} when the holder stops holding it with nothing in its place: forgot when it slips out of reach for now or they push it away (it stays theirs and can come back), lost when the turn destroys it for good (magic, an injury, a mind broken), abandoned when they give up a belief, disproved when the turn shows the holder themself that it is false, retracted when whoever told them takes it back, settled when it is an intent, condition, refusal, demand or open question that this turn carried out, met, answered, dropped or overtook. A belief the world contradicts but its holder has not seen contradicted is left alone.
+{"type":"recall","ref":"#1","cue":"what brought it back"} when something in the turn (the place, an object, a person, the same words, a shock) brings back a record marked "accessibility":"suppressed". One marked "inaccessible" is lost for good and is never recalled; being told it again is new knowledge with reported acquisition.
+{"type":"merge","refs":["#1","#2"],"summary":"one account"} when several memories of one holder tell the same experience: they become one memory, in that holder's perspective.
 An intent is not permanent. When the turn settles one, end it under every holder that carries a ref for it, so nobody keeps acting on a plan, refusal or question the scene already left behind. A new intent that replaces an old one revises it instead.
 Use only refs present in currentPerspectiveState, and put the holder in the event's participantIds. A record that is merely repeated, confirmed or mentioned again is left alone. Never write a new knowledge, belief or memory that contradicts a stored one without revising or ending the stored one in the same event.`;
 
@@ -4791,13 +5048,27 @@ function resolveNarrativeEntityReferences(value, resolveReference) {
     return clone;
 }
 
-/** The journey's floor from the location graph and the Time Cost Matrix; what the map cannot place is transit. */
-function resolveTravelFloorMinutes({ startLocationId, endLocationId, locationLinks, locationSizes, timeMatrix }) {
-    const categoryId = travelCategory(startLocationId, endLocationId, locationLinks || [], locationSizes);
-    if (!categoryId) return 0;
+/**
+ * The journey's band from the location graph and the Time Cost Matrix. The floor always applies to a
+ * move; the ceiling only when the triage says the move was all the turn did and no span was stated.
+ */
+function resolveTravelBounds({ startLocationId, endLocationId, locationLinks, locationSizes, timeMatrix, timeAdvance }) {
+    const category = travelCategory(startLocationId, endLocationId, locationLinks || [], locationSizes);
+    if (!category) return { category: null, floorMinutes: 0, ceilingMinutes: 0 };
     const calendar = require('./features/worldbuild/calendar-service');
-    return calendar.matrixMinimumMinutes(timeMatrix, categoryId)
+    const floorMinutes = calendar.matrixMinimumMinutes(timeMatrix, category)
         || calendar.matrixMinimumMinutes(timeMatrix, 'local');
+    const onlyMoving = timeAdvance?.movementOnly === true && !timeAdvance.statedSpan
+        && timeAdvance.basis !== 'explicit' && !timeAdvance.targetPosition;
+    const ceilingMinutes = onlyMoving ? Math.max(floorMinutes, calendar.matrixMaximumMinutes(timeMatrix, category)) : 0;
+    return { category, floorMinutes, ceilingMinutes };
+}
+
+/** "Kitchen (spot), within Inn (place), within Old Harbor (area)", with sizes the map implies. */
+function describeSceneLocationChain(workspaceId, locationId, sizes) {
+    if (!locationId) return undefined;
+    const chain = loadLocationChain(db, workspaceId, locationId);
+    return describeLocationChain(chain.map(node => ({ ...node, size: node.size || sizes.get(node.id) || null }))) || undefined;
 }
 
 function resolveNarrativeTimeAdvance({ timeAdvance, startClock, calendar, userMessage, narrativeResponse }) {
@@ -7095,7 +7366,8 @@ async function executeAgenticRagLoop(profile, chatId, currentInput, chatHistory 
 
     let currentTurn = 1;
     // Per-profile configurable depth (clamped 1-5). Higher = better multi-hop reasoning, higher cost.
-    const maxTurns = Math.min(5, Math.max(1, Number.isInteger(profile.agenticMaxTurns) ? profile.agenticMaxTurns : 3));
+    const profileTurns = Math.min(5, Math.max(1, Number.isInteger(profile.agenticMaxTurns) ? profile.agenticMaxTurns : 3));
+    const maxTurns = Number.isInteger(options.maxTurns) ? Math.max(1, Math.min(profileTurns, options.maxTurns)) : profileTurns;
     let finished = false;
     let correctionRetries = 0;
     const maxCorrectionRetries = 1; // Free retry (does not consume a turn) when the model emits neither a tool call nor finish.
@@ -7744,7 +8016,8 @@ ${isRoleplay ? `${inContextLine}- PERSPECTIVE: lookup_entity returns what the na
     // The free pass the deterministic path would have made anyway. It is the floor of this
     // loop, and it keeps turn 1 from spending a model call to rediscover the obvious.
     let seedBlock = '';
-    try {
+    // A research need starts from its own question, with nothing floored into the writer's context.
+    if (!options.skipSeed) try {
         const seed = createCollector();
         const seedCalls = [{ name: 'search_kb', arg: anchorQuery }];
         if (includeChatContext) seedCalls.push({ name: 'search_memories', arg: anchorQuery });

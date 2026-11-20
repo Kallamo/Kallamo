@@ -91,7 +91,7 @@ function seedWorkspace() {
   run(`INSERT INTO narrative_scene_participants VALUES ('ws', 'scene-1', 0, 'nora-copy'), ('ws', 'scene-1', 1, 'nora')`);
   run(`INSERT INTO roleplay_workspace_settings (workspace_id, player_entity_id, location_entity_id, updated_at) VALUES ('ws', 'nora-copy', 'dock', 1)`);
   run(`INSERT INTO roleplay_resource_definitions (workspace_id, definition_id, resource_key, name, description, color, minimum, maximum, starts_full, unit, applies_to_json, update_policy, position, enabled, updated_at) VALUES ('ws', 'health', 'health', 'Health', '', '#fff', 0, 100, 1, '', '["Characters"]', 'automatic', 0, 1, 1)`);
-  run(`INSERT INTO roleplay_resource_values VALUES ('ws', 'health', 'entity', 'nora-copy', 55, 0, NULL, NULL, 1, 1), ('ws', 'health', 'entity', 'nora', 90, 0, NULL, NULL, 1, 1)`);
+  run(`INSERT INTO roleplay_resource_values (workspace_id, definition_id, target_type, target_id, current_value, adjustment, base_value, growth_value, version, updated_at) VALUES ('ws', 'health', 'entity', 'nora-copy', 55, 0, NULL, NULL, 1, 1), ('ws', 'health', 'entity', 'nora', 90, 0, NULL, NULL, 1, 1)`);
   run(`INSERT INTO roleplay_equipment VALUES ('ws', 'nora-copy', 'lantern', 1)`);
   run(`INSERT INTO roleplay_location_inventory VALUES ('ws', 'dock', 'lantern', 2, 1)`);
   run(`INSERT INTO worldbuild_knowledge_cards VALUES ('ws', 'card-1', 'orin', 'nora-copy', NULL, 'active', 'all-members', 1, 1)`);

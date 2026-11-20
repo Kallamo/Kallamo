@@ -94,7 +94,7 @@ sometimes repeats a line it already wrote for that holder.
 ## What waits for review
 
 A secret, an identity, a belief and a rupture change what characters may say and do, so they wait
-for a person. So do a lie someone was told, and any correction or ending of a record a person wrote.
+for a person. A memory does not: one that matters little fades on its own, and any can be brought back. So do a lie someone was told, and any correction or ending of a record a person wrote.
 Ordinary world lore extracted at high confidence does not: queueing it only trains the reviewer to
 approve without reading. What the gate already refused never reaches the queue.
 
@@ -162,8 +162,14 @@ The story pass reads the records of whoever could perceive the turn, and each kn
 and memory there carries a ref (`#1`, `#2`...). With a ref it can do what a plain new record cannot:
 
 - **revise** it: the corrected record supersedes the old one under the same entry, so whatever
-  points at the entry survives. A suspicion confirmed becomes a belief or knowledge this way;
-- **end** it, saying how: forgotten, given up, disproved, taken back, or **settled**;
+  points at the entry survives;
+- **confirm** it when the turn puts proof in front of the holder: seen or shown makes it certain
+  knowledge, being told makes it firmer;
+- **end** it, saying how: forgotten (out of reach for now), lost (for good), given up, disproved,
+  taken back, or **settled**. Disproved means the holder saw it was false: a belief only the world
+  contradicts stays, and the narrator plays it as irony;
+- **recall** it: something in the turn brings back what was out of reach for now;
+- **merge** several memories of one holder that tell the same experience into one;
 - name it as **what someone was told from**, or as **the premises** of an inference.
 
 Refs are resolved in Kallamo (`story-refs.js`); ids never pass through the model, and a ref that
@@ -174,6 +180,42 @@ carried out, met, answered, dropped or overtook is ended as settled, under every
 a ref for it. Without this a refusal the scene already moved past kept reaching the narrator turn
 after turn, and the character kept refusing. A new intent that replaces an old one revises it. A
 memory cannot be settled.
+
+## How memory lives
+
+What a character holds is meant to behave like a mind, not a file that only grows.
+
+**Out of reach is not gone.** Forgetting keeps the record with its holder and changes its
+accessibility, as the Knowledge tab names it: *suppressed* is out of reach for now (faded, or pushed
+away), *inaccessible* is lost for good. Reads leave both out, so neither reaches what the
+characters know; the narrator sees what is out of reach for now about the turn, under NARRATOR ONLY,
+and may let the scene bring it back. Being told something again is learning, not remembering: it is
+a new record with a teller.
+
+**Relevance.** Every memory carries how much it matters to its holder, from 0 to 1: 0.9 and above
+shapes who they are and never fades; 0.7 to 0.85 moves the plot or a relationship; 0.4 to 0.6 is
+useful context of one moment; below 0.4 is not kept. Knowledge and beliefs take their category's
+relevance (`memory-relevance.ts`). Secrets, identity, oaths, wounds, losses and what formed someone
+never fade; an intent is settled, never faded. Relevance also orders what the context keeps first.
+
+**Fading.** Unused for 7 days of story (relevance under 0.65) or 30 days (up to 0.9), a memory or a
+piece of knowledge slips out of reach. Unused means the story did not draw on it: being corrected,
+confirmed, recalled, gathered into another memory, told on or reasoned from counts
+(`narrative_record_use`); appearing in a context does not. Only what the story pass wrote fades;
+what a person wrote, and everything the player character holds, stays as it was.
+
+**When a scene ends** (the place changes, or the clock jumps six hours or more), the story job of
+that turn tidies what its people carry: fading is a fixed rule with no model, then one call settles
+the intents the records show were overtaken and joins repeated memories. Every change is written on
+the turn's own timeline, so taking the turn back takes it back too. The reply's diagnostics show it
+under the story record.
+
+**Why fading copies the record.** Umwelt's `holding.adjustBatch` writes its copy with the batch's
+own provenance, which would drop the record's kind, category, entry and relevance. Kallamo commits a
+whole copy with the new accessibility instead, superseding the original.
+
+**The interpreter sees what ages worst.** Of the records it may change, open intents and what is
+out of reach about the turn's topics come first, so neither falls past its limit however old.
 
 ## How something is held
 
@@ -266,37 +308,61 @@ occurrence wrote which record, so taking a turn back retires exactly what it wro
 
 ## Retrieval from the story
 
-The context planner still brings in every record about the entities in focus. The story search adds
-what the request is about without naming it:
+A turn's context holds what the turn needs and nothing else. The payload limit is a ceiling the
+context stays under, never a size to reach. The code is in `features/narrative/retrieval/`.
 
-- **Who is searched.** In roleplay, each character's own records (5 at most) and those of up to four
-  factions and places they read (3 each); the faction audience rules still decide what reaches them.
-  The narrator's view searches the Facts, in roleplay and outside it.
-- **By words.** The engine joins the words of one text query with AND, so each word of the request
-  (four letters or more, the six longest) is searched on its own, and a record needs two distinct
-  words to count: one common word never decides.
-- **By meaning.** Only with the local embedding model, whose vectors live in the story file. The model
-  scores even unrelated story texts near 0.85, so a match needs 0.875 or more; the floor was measured
-  on a long campaign and belongs to that model. A paid embedding API is never used.
-- **Together.** The two rankings are fused by rank, so a record found both ways ranks first. It still
-  ranks below a record about an entity in focus.
-- **Earlier scenes.** Story events found the same way are offered to each character, and
-  `context.admit` keeps only those the character witnessed. The latest 12 events are left out: the
-  chat history still holds them.
+- **The core.** Always sent, never cut. In roleplay: the place and its chain, who is present, the
+  player's sheet, the sheets of the people present (all of them in a scene of four or fewer, else
+  those the turn or the last reply names; the rest get a card), cards for objects and the location,
+  their resources, skills and inventory, how the people present stand toward each other, and the
+  scene memory. Outside roleplay: the world date. Systems marked always in context go to the rules.
+- **Needs.** The names written in the request are the floor: each one is a need without any model.
+  The Retrieval Planner then reads the turn once (a short JSON brief, no tools) and lists what else
+  it needs: a rule used, an item in hand, a memory called back, what someone knows, who knows
+  something, a relationship, a place, a document passage, a chronology, an open question. Without a
+  planner (Smart search off), or if the brief fails, the turn is also searched by its own words: an
+  open question on the story and the Chat Archive and, outside roleplay, the documents.
+- **Finding what the turn does not name.** The planner has no tools, so it is shown what the tool loop
+  used to find by reading: up to 30 entities one Worldbuild link away from what the turn and the last
+  reply name and from who is here, items and people first ("Presas Gêmeas da Penumbra (Items, owned by
+  Nex)"). A name also resolves by a distinctive part ("Sombrasulfeto" for "Minério de Sombrasulfeto"):
+  a word of a name no other name uses, five letters or more; in free text it must be written as a
+  proper noun or be ten letters or more. Entities named in what the needs brought and not yet in the
+  context come along as cards, three at most. The profile's search instructions reach the planner.
+- **What the history already holds.** Scenes written by the last ten replies are not searched for:
+  the narrator reads those replies whole.
+- **One read per need.** Each kind of need is a filtered engine query: a holder's memories by meaning
+  (`search` with `filter.holder`), what someone holds about an entity (`holdings` with `about`),
+  `whoHolds`, `dispositions`, Facts about an entity (`search` with `filter.subject`), a chronology
+  (`timeline` with `participant` and `range`). Each need is searched with its own short query and
+  vector, never the whole turn.
+- **By meaning.** Only with the local embedding model. A short query scores the whole page lower, so a
+  hit is kept within 0.02 of the best one and never under 0.86.
+- **Scenes.** An event is a scene when its type says so (`scene`, `occurrence`); events written before
+  types named their nature are judged by the origin the journal kept. Sheet edits and awareness
+  grants name no participants.
+- **Flashbacks.** A recalled memory's story-axis position dates the knowledge read after it, so a
+  character's knowledge is read as it stood then.
+- **Perspective.** What each character holds is written under their name; a statement everyone present
+  holds, once. A member reads what their faction or area holds when the card's audience lets them.
+  The Worldbuild Knowledge cards add which fields of a sheet each person knows. Secrets someone would
+  give away to another person present, and beliefs that run against canon, go to the narrator only.
+  `context.admit` confirms each character's records before they are sent.
+- **Tiers.** An entity is a sheet when the turn uses it, a card when it is only named, a mention at
+  most otherwise. When the ceiling is reached, items fall a tier, then out, lowest priority first;
+  the priority comes from what the item is for and from the story (how it was learned, how sure, how
+  recent). The core never leaves.
+- **Research.** Only a `research` need outside roleplay runs the tool loop, on its own question, for
+  the profile's search rounds and with no pre-search.
+- **Chat Archive.** A last resort for an open question nothing else answers. A passage starts at a
+  sentence.
 - **Vectors.** Filled in the background after each analysis and when a turn starts, 16 texts at a
-  time, from where the last run stopped (the engine's resume cursor), so a long backlog never holds
-  up a turn.
-- **One projection per plan.** Every perspective of a turn reads the same projected story; an
-  occurrence's access check reads the memories already loaded instead of the whole story again.
-- **Research tools.** The planner can call `recall_story`, `who_knows`, `compare_knowledge` and
-  `how_they_know`, in every workspace. Their answers stay in the planner's reasoning, like the
-  per-subject tools: the context planner still decides what the writer sees. `who_knows` searches
-  every holder and costs one engine call per word per holder.
+  time, from where the last run stopped. Facts carry a text of their own (names, not ids); Facts
+  written before that get it once, through a copy that supersedes them.
 - **Writing Desk.** A rewrite or an analysis also gets the Facts and earlier scenes the passage is
   about, under Story canon, so prose does not contradict what the story established.
 
-Reading the story as it stood at a scene's own date (a flashback) is not done: retrieval runs before
-the reply, and only the analysis after it knows a scene is set in the past.
+The message diagnostics show what each need cost, what the ceiling shrank and what the story refused.
 
 ## The story clock
 
@@ -320,9 +386,25 @@ clock, and a hallucinated "three years" is both catastrophic and invisible. So:
   or a warning when it was not trusted, and Recent changes in the roleplay panel repeats it.
 - **A stated skip of a day or more outranks a time of day**, so "three months later, at two in the
   afternoon" does not collapse into an afternoon.
-- **A journey costs at least what the world says.** When a turn ends somewhere else, the advance is
-  raised to the Time Cost Matrix minimum for that move, read from the location graph. A move still
-  waiting for approval does not charge the clock.
+- **A journey costs what the world says.** When a turn ends somewhere else, the location graph
+  gives the move a Time Cost Matrix category: between spots of one place is Micro, between places
+  of one area Local, across the districts of an area Transit, between areas of a region Macro. Being
+  directly inside the other is Micro, and a road, door or portal between the two can shorten the
+  trip to Local but never lengthen it. A location with no size takes one from its neighbours (one
+  step above the largest sized thing inside it, never above what holds it), so a house left unsized
+  does not turn a walk between its rooms into Transit. The advance is raised to the category's
+  minimum. A move still waiting for approval does not charge the clock.
+- **Moving is not the same as acting.** The matrix guidance describes actions, so the triage reads a
+  journey's category from the scene's location chain and the sizes of the places named, not from
+  the guidance. It also says whether the move was all the turn did (`movementOnly`). Only then is
+  the advance also capped at the category's maximum, so crossing a room cannot cost a quarter of an
+  hour; a meal or a search at the destination keeps its own time. A stated span or clock outranks
+  the cap. The turn's diagnostics show the category and the band applied on the Location line.
+- **Resources follow story time in what the player can see.** A resource keeps whole numbers or
+  one decimal. Each turn's drain or recovery is added to what earlier turns left over; only the
+  part that moves the shown value is applied, and the rest stays banked on the value until it adds
+  up. Reaching the lowest or highest value clears the bank, so a full battery saves no charge. All
+  of a turn's time changes read as one line under its Time entry in Recent changes.
 - **A date the narrative states is never bounded**: there the author said it.
 
 ## Cleanup

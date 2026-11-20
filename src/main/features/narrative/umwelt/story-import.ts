@@ -128,7 +128,6 @@ export function importLegacyStory(db: Database.Database, log: (message: string) 
         const minute = originId ? occurrenceMinute(db, workspaceId, originId) : undefined;
         const result = writeStoryEvent(db, workspaceId, {
           eventId: event.event_id,
-          type: event.event_type,
           description: event.description,
           participants: (participants.all(workspaceId, event.event_id) as Array<{ entity_id: string }>).map(row => row.entity_id),
           locationId: event.location_id,

@@ -97,3 +97,46 @@ export function storyMinute(calendar: OrdinalCalendar | null | undefined, positi
   const value = STORY_MINUTE_ORIGIN + toOrdinal(calendar, position) * hoursPerDay * minutesPerHour + hour * minutesPerHour + minute;
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
+
+export function yearForOrdinal(calendar: OrdinalCalendar, ordinal: number): number {
+  let low = -1000000;
+  let high = 1000001;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (daysBeforeYear(calendar, middle) <= ordinal) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+export function displayYearFor(calendar: OrdinalCalendar, absoluteYear: number, preferredEraId?: string): { eraId: string | undefined; year: number } {
+  const preferred = calendar.eras.find(era => era.id === preferredEraId);
+  const ordered = preferred ? [preferred, ...calendar.eras.filter(era => era.id !== preferred.id)] : calendar.eras;
+  for (const era of ordered) {
+    const year = era.direction === 'backward' ? era.offset - absoluteYear + 1 : absoluteYear - era.offset + 1;
+    if (year >= 1) return { eraId: era.id, year };
+  }
+  return { eraId: calendar.defaultEraId, year: Math.max(1, Math.abs(absoluteYear)) };
+}
+
+/** The calendar date of a minute on the story axis; the inverse of `storyMinute`. */
+export function dateOfStoryMinute(calendar: OrdinalCalendar | null | undefined, value: number | null | undefined, preferredEraId?: string): { eraId: string | undefined; year: number; month: number; day: number; hour: number; minute: number } | null {
+  if (!calendar || !Array.isArray(calendar.months) || !calendar.months.length || !Array.isArray(calendar.eras) || !calendar.eras.length) return null;
+  if (!Number.isSafeInteger(value)) return null;
+  const hoursPerDay = positiveInteger(calendar.hoursPerDay, 24);
+  const minutesPerHour = positiveInteger(calendar.minutesPerHour, 60);
+  const minutesPerDay = hoursPerDay * minutesPerHour;
+  const elapsed = Number(value) - STORY_MINUTE_ORIGIN;
+  const ordinal = Math.floor(elapsed / minutesPerDay);
+  const inDay = elapsed - ordinal * minutesPerDay;
+  const absoluteYear = yearForOrdinal(calendar, ordinal);
+  let dayOfYear = ordinal - daysBeforeYear(calendar, absoluteYear);
+  let month = 1;
+  while (month < calendar.months.length) {
+    const length = daysInMonth(calendar, absoluteYear, month);
+    if (dayOfYear < length) break;
+    dayOfYear -= length;
+    month += 1;
+  }
+  return { ...displayYearFor(calendar, absoluteYear, preferredEraId), month, day: dayOfYear + 1, hour: Math.floor(inDay / minutesPerHour), minute: inDay % minutesPerHour };
+}

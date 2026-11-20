@@ -110,7 +110,7 @@ describe('Narrative entity identity', () => {
          starts_full, unit, applies_to_json, update_policy, position, enabled, updated_at)
       VALUES ('workspace-one', 'health', 'health', 'Health', '', '#ffffff', 0, 100, 1, '', '["Characters"]', 'automatic', 0, 1, 1)
     `).run();
-    db.prepare(`INSERT INTO roleplay_resource_values VALUES ('workspace-one', 'health', 'entity', 'selka', 100, 0, NULL, NULL, 1, 1)`).run();
+    db.prepare(`INSERT INTO roleplay_resource_values (workspace_id, definition_id, target_type, target_id, current_value, adjustment, base_value, growth_value, version, updated_at) VALUES ('workspace-one', 'health', 'entity', 'selka', 100, 0, NULL, NULL, 1, 1)`).run();
     db.prepare(`
       INSERT INTO narrative_state_jobs
         (workspace_id, origin_id, status, deep_analysis, input_tokens, output_tokens, created_at, updated_at)

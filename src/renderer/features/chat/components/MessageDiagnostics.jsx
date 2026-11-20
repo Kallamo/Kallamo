@@ -10,6 +10,7 @@ import {
   formatHistory,
   formatLabelLegend,
   formatNarrativeCalls,
+  formatAssembly,
   formatPlannerDecisions,
   formatRetrievalDiagnostics,
   prettyJsonText
@@ -436,6 +437,7 @@ function RetrievalView({ debug, copy }) {
       )}
 
       <div className="space-y-1.5">
+        {retrieval.assembly && <Disclosure title="What the turn needed">{formatAssembly(retrieval.assembly)}</Disclosure>}
         {retrieval.bundle?.scopes?.length > 0 && <Disclosure title="Planner decisions">{formatPlannerDecisions(retrieval.bundle)}</Disclosure>}
         <Disclosure title="Exact final narrative context">{retrieval.finalContextText || 'No additional narrative context was sent.'}</Disclosure>
       </div>
@@ -722,6 +724,28 @@ function NarrativeView({ debug, names, copy }) {
             <p className="mt-1.5 text-[0.6875rem] text-text-muted select-text">
               {story.error}{story.willRetry === false ? ' · Reprocess this turn to record it.' : ''}
             </p>
+          )}
+        </div>
+      )}
+
+      {story?.maintenance && (
+        <div>
+          <SectionTitle>Scene ended · {story.maintenance.reason === 'moved' ? 'left the place' : 'time skip'}</SectionTitle>
+          <p className="text-xs text-text-secondary">
+            {[
+              `${story.maintenance.faded?.length || 0} slipped out of reach`,
+              `${story.maintenance.settled || 0} settled`,
+              `${story.maintenance.merged || 0} merged`
+            ].join(' · ')}
+          </p>
+          {(story.maintenance.faded || []).length > 0 && (
+            <ul className="mt-1.5 space-y-1">
+              {story.maintenance.faded.map(item => (
+                <li key={item.recordId} className="text-xs text-text-muted select-text">
+                  <span className="text-text-secondary">{names?.get(item.holderId) || 'Someone'}</span>, unused {item.idleDays} days: {item.text}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

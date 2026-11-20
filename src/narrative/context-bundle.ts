@@ -1,11 +1,10 @@
 import type { NarrativePosition, Perspective } from './contracts';
-import {
-  ContextPlanner,
-  type ContextCandidate,
-  type ContextDecisionOutcome,
-  type ContextDecisionReason,
-  type ContextPackage,
-  type ContextPolicy
+import type {
+  ContextCandidate,
+  ContextDecisionOutcome,
+  ContextDecisionReason,
+  ContextPackage,
+  ContextPolicy
 } from './context-planner';
 
 export type EpistemicAssessmentState =
@@ -78,62 +77,4 @@ export interface ContextBundleResult {
   decisions: ContextBundleDecision[];
   scopes: ContextBundleScopeResult[];
   composition?: ContextBundleCompositionMetrics;
-}
-
-export class ContextBundlePlanner {
-  private readonly planner = new ContextPlanner();
-
-  plan(request: ContextBundleRequest, candidates: ScopedContextCandidate[]): ContextBundleResult {
-    const paidCandidateIds = new Set<string>();
-    let usedTokens = 0;
-    const decisions: ContextBundleDecision[] = [];
-    const scopes = [...request.scopes]
-      .sort((left, right) => right.priority - left.priority)
-      .map(scope => {
-        const scoped = candidates
-          .filter(entry => entry.scopeIds.includes(scope.id))
-          .map(entry => paidCandidateIds.has(entry.candidate.id)
-            ? { ...entry.candidate, tokenCost: 0 }
-            : entry.candidate);
-        const remainingBudget = Math.max(0, request.tokenBudget - usedTokens);
-        const scopeBudget = scope.tokenLimit === undefined
-          ? remainingBudget
-          : Math.min(remainingBudget, Math.max(0, Math.floor(scope.tokenLimit)));
-        const result = this.planner.plan({
-          id: `${request.id}:${scope.id}`,
-          workspaceId: request.workspaceId,
-          query: request.query,
-          perspective: scope.perspective,
-          through: request.through,
-          tokenBudget: scopeBudget,
-          policy: request.policy
-        }, scoped);
-        result.decisions.forEach(decision => decisions.push({ scopeId: scope.id, ...decision }));
-        result.package.items.forEach(item => paidCandidateIds.add(item.candidateId));
-        usedTokens += result.package.usedTokens;
-        return {
-          scopeId: scope.id,
-          label: scope.label,
-          priority: scope.priority,
-          package: {
-            ...result.package,
-            tokenBudget: request.tokenBudget,
-            usedTokens: result.package.items.reduce((total, item) => {
-              const original = candidates.find(entry => entry.candidate.id === item.candidateId)?.candidate;
-              return total + (original?.tokenCost ?? 0);
-            }, 0)
-          }
-        };
-      });
-
-    return {
-      requestId: request.id,
-      workspaceId: request.workspaceId,
-      through: request.through,
-      tokenBudget: request.tokenBudget,
-      usedTokens,
-      decisions,
-      scopes
-    };
-  }
 }

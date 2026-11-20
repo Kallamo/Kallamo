@@ -55,6 +55,16 @@ const SCENE_REJECTIONS = {
   'invalid-change': () => 'the scene change could not apply'
 };
 
+// ", a local move: 10 to 15 minutes". The ceiling only shows when the move was all the turn did.
+const describeTravelBand = travel => {
+  if (!travel?.category) return '';
+  const minutes = count => `${count} minute${count === 1 ? '' : 's'}`;
+  const band = travel.ceilingMinutes
+    ? `${travel.floorMinutes} to ${minutes(travel.ceilingMinutes)}`
+    : `at least ${minutes(travel.floorMinutes)}`;
+  return `, a ${travel.category} move: ${band}`;
+};
+
 // One line on where the scene ended up, readable enough to pass along without the story.
 export const describeSceneLocation = (summary, names) => {
   if (!summary?.outcome) return null;
@@ -63,7 +73,7 @@ export const describeSceneLocation = (summary, names) => {
   const to = place(summary.locationId);
   if (summary.outcome === 'not-analyzed') return 'Not checked this turn: triage did not mark the scene';
   if (summary.outcome === 'kept') return `Kept at ${from}: the analysis reported no move`;
-  if (summary.outcome === 'moved') return `Moved from ${from} to ${to}`;
+  if (summary.outcome === 'moved') return `Moved from ${from} to ${to}${describeTravelBand(summary.travel)}`;
   if (summary.outcome === 'awaiting-approval') return `Move to ${to} is waiting for approval`;
   const why = SCENE_REJECTIONS[summary.reason];
   return `Stayed at ${from}: ${why ? why(to) : String(summary.reason || 'rejected').replace(/-/g, ' ')}`;
@@ -264,10 +274,31 @@ export const formatAgenticTrace = diagnostic => {
   ].join('\n');
 };
 
+const count = value => Number(value || 0).toLocaleString('en-US');
+
+// What the turn needed and what each need cost, then what the ceiling shrank and what the story refused.
+export const formatAssembly = assembly => {
+  if (!assembly) return '';
+  const share = assembly.ceiling ? ` (${Math.round((assembly.used / assembly.ceiling) * 100)}% of the ceiling)` : '';
+  return [
+    `Context: ${count(assembly.used)} tokens of a ${count(assembly.ceiling)} ceiling${share}`,
+    `Core: ${count(assembly.core?.items)} item(s), ${count(assembly.core?.tokens)} tokens`,
+    ...(assembly.brief ? [`Brief: ${assembly.brief.note} · ${count(assembly.brief.inputTokens)} in / ${count(assembly.brief.outputTokens)} out`] : []),
+    '',
+    'NEEDS',
+    ...(assembly.needs?.length
+      ? assembly.needs.map(need => `- ${need.kind}${need.label ? ` "${need.label}"` : ''} [${need.source}]: ${need.met ? `${need.items} item(s), ${count(need.tokens)} tokens` : 'nothing found'}`)
+      : ['- None: the core covered the turn']),
+    ...(assembly.degraded?.length ? ['', 'SHRUNK TO FIT', ...assembly.degraded.map(step => `- ${step.key}: ${step.from} → ${step.to}`)] : []),
+    ...(assembly.admitRejected?.length ? ['', 'REFUSED BY THE STORY', ...assembly.admitRejected.map(item => `- ${item.key}: ${item.reason}`)] : [])
+  ].join('\n');
+};
+
 export const formatRetrievalDiagnostics = diagnostic => {
   const retrieval = diagnostic?.retrieval;
   if (!retrieval) return diagnostic?.standardRagContextGathered || '';
   return [
+    ...(retrieval.assembly ? ['WHAT THE TURN NEEDED', formatAssembly(retrieval.assembly), ''] : []),
     `Mode: ${retrieval.mode || 'standard'}`,
     `Generation policy: ${diagnostic?.generation?.policyId || 'none'}`,
     `Generation target: ${diagnostic?.generation?.profileName || 'Unknown AI Profile'}`,

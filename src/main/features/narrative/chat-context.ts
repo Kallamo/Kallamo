@@ -1,109 +1,15 @@
 import type Database from 'better-sqlite3';
 import type { NarrativePosition, Perspective } from '../../../narrative/contracts';
-import {
-  ContextPlanner,
-  type ContextCandidate,
-  type ContextEpistemicMetadata,
-  type ContextPlanResult,
-  type ContextSourceType
-} from '../../../narrative/context-planner';
-import type { ContextBundleResult } from '../../../narrative/context-bundle';
-import { NarrativeSceneRepository } from '../../../narrative/scenes';
-import {
-  createRoleplayStrategy,
-  createStandardStrategy,
-  getWorkspaceExperienceMode,
-  type KallamoContextStrategy
-} from './mode-orchestration';
+import type { ContextCandidate, ContextEpistemicMetadata, ContextSourceType } from '../../../narrative/context-planner';
 import { RoleplaySystem } from './roleplay-system';
 import { RoleplayProgression } from './roleplay-progression';
 import { RoleplaySkills } from './roleplay-skills';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
-import { normalizeRetrievalSettings } from '../../../shared/retrieval-settings-runtime';
-import { EpistemicResolver } from './epistemic-resolver';
-import {
-  KNOWLEDGE_CATEGORY_LABELS,
-  MEMORY_CATEGORY_LABELS,
-  normalizeKnowledgeCategory,
-  normalizeMemoryCategory,
-  statementKey
-} from '../../../narrative/narrative-taxonomy';
-import { canSubjectAccessOccurrence, isFactionOccurrenceMemoryShared } from '../worldbuild/event-occurrences';
-import { knowledgeGroupsOf, sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
-import { describeLocationChain, loadLocationChain } from '../worldbuild/location-graph';
+import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { derivedAge } from '../../../shared/world-age';
-import { relationTitle } from '../../../shared/relation-phrases';
-import { NarrativeContextManifestRepository, type NarrativeContextManifest } from './context-manifest';
-import { RoleplayContextOrchestrator } from './roleplay-context-orchestrator';
 import { CharacterSceneMemory, formatCharacterMemorySection } from './character-scene-memory';
-import { admitForCharacter, type StoryRefusal } from './umwelt/story-admission';
-import { searchStory, type StoryHit } from './umwelt/story-search';
-import {
-  currentNarrativeSequence,
-  loadCurrentNarrativeRecords,
-  type NarrativeRecordRow,
-  type ProjectedNarrativeRecord
-} from './narrative-record-projection';
 
-const { discoverEntityIds } = require('./worldbuild-entity-discovery');
-
-export type RetrievedContextKind = 'workspace-text' | 'workspace-memory' | 'worldbuild-canon';
-export type EntityExpansion = 'none' | 'summary' | 'dossier';
-
-export interface RetrievedContextItem {
-  id: string;
-  kind: RetrievedContextKind;
-  source: string;
-  content: string;
-  relevance?: number;
-  entityExpansion?: EntityExpansion;
-  entityIds?: string[];
-  factIds?: string[];
-  provenanceIds?: string[];
-}
-
-export interface PlanChatContextInput {
-  requestId: string;
-  workspaceId: string;
-  query: string;
-  tokenBudget: number;
-  items: RetrievedContextItem[];
-  /** The request as a vector of the local embedding model, when it is the one in use. */
-  queryVector?: number[] | null;
-}
-
-export interface PlannedChatContext {
-  plan: ContextPlanResult;
-  context: string;
-  bundle?: ContextBundleResult;
-  manifest?: NarrativeContextManifest;
-  storySearch?: StorySearchTrace[];
-  /** Why each Worldbuild entity was considered, for the retrieval diagnostics. */
-  entityOrigins?: EntityOrigin[];
-}
-
-export type EntityOriginKind = 'always' | 'scene' | 'location' | 'mentioned' | 'search' | 'related';
-
-export interface EntityOrigin {
-  id: string;
-  name: string;
-  origin: EntityOriginKind;
-}
-
-/** What the story search found for one perspective, for the turn diagnostics. */
-export interface StorySearchTrace {
-  scope: string;
-  scopeName: string;
-  hits: Array<StoryHit & { holderName: string | null }>;
-}
-
-// Searched groups per character, and records taken from each search.
-const SEARCHED_GROUPS = 4;
-const OWN_HITS = 5;
-const GROUP_HITS = 3;
-// Scenes recalled per character; the latest events are left to the chat history, which still holds them.
-const RECALLED_SCENES = 3;
-const RECENT_EVENTS = 12;
+type EntityExpansion = 'summary' | 'dossier';
 
 interface EntityRow {
   id: string;
@@ -144,20 +50,13 @@ interface InventoryAggregate {
   linkIds: string[];
 }
 
+/**
+ * The Worldbuild and scene readers the turn context is built from: scene state, Knowledge cards,
+ * pinned rules and scene memory. Choosing what enters the context is the assembler's work.
+ */
 export class NarrativeChatContext {
-  private readonly planner = new ContextPlanner();
-  private readonly scenes: NarrativeSceneRepository;
   private readonly roleplay: RoleplaySystem;
   private readonly knowledgeCards: WorldbuildKnowledgeService;
-  private readonly epistemicResolver: EpistemicResolver;
-  private readonly manifests: NarrativeContextManifestRepository;
-  private queryVector: number[] | null = null;
-  // Every perspective of one plan reads the same story, so it is projected once per plan.
-  private planRecords: ProjectedNarrativeRecord[] | null = null;
-  private planHits = new Map<string, Map<string, StoryHit>>();
-  private searchTrace: StorySearchTrace[] = [];
-  private planOrigins: EntityOrigin[] | null = null;
-  private readonly roleplayOrchestrator: RoleplayContextOrchestrator;
   private readonly characterMemory: CharacterSceneMemory;
 
   constructor(
@@ -165,287 +64,61 @@ export class NarrativeChatContext {
     private readonly estimateTokens: (text: string) => number
   ) {
     this.characterMemory = new CharacterSceneMemory(db);
-    this.scenes = new NarrativeSceneRepository(db);
     this.roleplay = new RoleplaySystem(db);
     this.knowledgeCards = createWorldbuildKnowledgeService(db);
-    this.epistemicResolver = new EpistemicResolver(db);
-    this.manifests = new NarrativeContextManifestRepository(db);
-    this.roleplayOrchestrator = new RoleplayContextOrchestrator(estimateTokens);
   }
 
-  plan(input: PlanChatContextInput): PlannedChatContext {
-    this.planRecords = null;
-    this.planHits = new Map();
-    this.searchTrace = [];
-    this.planOrigins = null;
-    try {
-      const planned = this.planOnce(input);
-      const withOrigins = this.planOrigins ? { ...planned, entityOrigins: this.planOrigins } : planned;
-      return this.searchTrace.length ? { ...withOrigins, storySearch: this.searchTrace } : withOrigins;
-    } finally {
-      this.planRecords = null;
-      this.planHits = new Map();
-      this.planOrigins = null;
-    }
+  /** Brings the Worldbuild Knowledge cards in line with the story before anyone's knowledge is read. */
+  prepare(workspaceId: string): void {
+    this.knowledgeCards.reconcileWorkspace(workspaceId);
   }
 
-  /**
-   * Story records the request is about by its words or meaning, within what the perspective may
-   * read: a character's own records and their groups', or the narrator's Facts.
-   */
-  private storyHits(workspaceId: string, perspective: Perspective, query: string): Map<string, StoryHit> {
-    const subjectId = perspective.access === 'subjective' ? perspective.focalSubjectId : undefined;
-    const scope = subjectId ?? (perspective.access === 'omniscient' ? 'narrator' : null);
-    if (!scope) return new Map();
-    const cached = this.planHits.get(scope);
-    if (cached) return cached;
-    const searches = subjectId
-      ? [
-          { holderId: subjectId, limit: OWN_HITS },
-          ...knowledgeGroupsOf(this.db, workspaceId, subjectId).slice(0, SEARCHED_GROUPS).map(group => ({ holderId: group.id, limit: GROUP_HITS }))
-        ]
-      : [{ holderId: null, limit: OWN_HITS }];
-    const hits = new Map<string, StoryHit>();
-    for (const search of searches) {
-      for (const hit of searchStory(this.db, workspaceId, { holderId: search.holderId, text: query, vector: this.queryVector, limit: search.limit })) {
-        if (!hits.has(hit.docId)) hits.set(hit.docId, hit);
-      }
-    }
-    this.planHits.set(scope, hits);
-    if (hits.size) {
-      const names = this.getEntityNames(workspaceId, [...new Set([...hits.values()].flatMap(hit => hit.holderId ? [hit.holderId] : []).concat(subjectId ? [subjectId] : []))]);
-      this.searchTrace.push({
-        scope,
-        scopeName: subjectId ? names.get(subjectId) ?? subjectId : 'Narrator',
-        hits: [...hits.values()].map(hit => ({ ...hit, holderName: hit.holderId ? names.get(hit.holderId) ?? hit.holderId : null }))
-      });
-    }
-    return hits;
+  /** Resources, level, skills and inventory of these entities, one line each, for the scene core. */
+  stateLines(workspaceId: string, entityIds: string[]): string[] {
+    if (!entityIds.length) return [];
+    return [
+      ...this.loadRoleplayCandidates(workspaceId, entityIds),
+      ...this.loadInventoryCandidates(workspaceId, entityIds)
+    ].map(candidate => candidate.content);
   }
 
-  private currentRecords(workspaceId: string): ProjectedNarrativeRecord[] {
-    this.planRecords ??= loadCurrentNarrativeRecords(this.db, {
-      workspaceId,
-      recordTypes: ['fact', 'state', 'knowledge', 'belief', 'memory', 'relationship']
-    });
-    return this.planRecords;
-  }
-
-  private planOnce(input: PlanChatContextInput): PlannedChatContext {
-    this.queryVector = input.queryVector ?? null;
-    this.knowledgeCards.reconcileWorkspace(input.workspaceId);
-    const strategy = this.resolveStrategy(input.workspaceId);
-    const retrievalSettings = this.getRetrievalSettings();
-    const entityExpansion = strategy.mode === 'roleplay'
-      ? 'dossier'
-      : resolveEntityExpansion(input.items);
-    const linkedChunkIds = this.resolveLinkedChunkIds(input.workspaceId, input.items);
-    const retrieved = input.items.flatMap(item => {
-      if (item.kind === 'worldbuild-canon' && item.entityIds?.length) return [];
-      return [this.toRetrievedCandidate(input.workspaceId, item, linkedChunkIds, strategy.hasActiveScene)];
-    });
-    const { ids: seedEntityIds, focusIds, origins } = this.resolveRelevantEntityIds(
-      input.workspaceId,
-      input.query,
-      input.items,
-      strategy.perspective
-    );
-    const entityIds = this.expandEntityIds(
-      input.workspaceId,
-      seedEntityIds,
-      retrievalSettings.worldbuildBreadth,
-      retrievalSettings.worldbuildEntityLimit
-    );
-    const structured = [
-      ...(strategy.mode === 'roleplay' ? this.loadSceneCandidates(input.workspaceId) : []),
-      ...(entityExpansion === 'none' ? [] : this.loadEntityCandidates(
-        input.workspaceId,
-        entityIds,
-        strategy.perspective,
-        entityExpansion
-      )),
-      ...(entityExpansion === 'dossier'
-        ? this.loadKnownRelationshipCandidates(input.workspaceId, entityIds, strategy.perspective)
-        : []),
-      ...(entityExpansion === 'dossier'
-        ? this.loadRelationCandidates(input.workspaceId, entityIds, strategy.perspective)
-        : []),
-      ...(strategy.mode === 'roleplay' ? this.loadInventoryCandidates(input.workspaceId, entityIds) : []),
-      ...this.loadEpistemicCandidates(
-        input.workspaceId,
-        entityIds,
-        input.query,
-        input.items.flatMap(item => item.factIds ?? []),
-        strategy.perspective,
-        entityExpansion === 'dossier'
-      ),
-      ...(strategy.mode === 'roleplay' ? this.loadRoleplayCandidates(input.workspaceId, entityIds) : [])
-    ];
-    const alwaysCandidates = this.loadAlwaysInContextCandidates(input.workspaceId);
-    this.planOrigins = this.describeOrigins(input.workspaceId, entityIds, origins, alwaysCandidates);
-    const uniqueCandidates = withAlwaysInContext(
-      alwaysCandidates,
-      deduplicateCandidates([...retrieved, ...structured])
-    );
-    const candidates = strategy.prepareCandidates(strategy.mode === 'standard'
-      ? deduplicateStandardEvidence(uniqueCandidates)
-      : uniqueCandidates);
-    const plan = this.planner.plan({
-      id: input.requestId,
-      workspaceId: input.workspaceId,
-      query: input.query,
-      perspective: strategy.perspective,
-      through: strategy.through,
-      tokenBudget: Math.max(0, Math.floor(input.tokenBudget)),
-      policy: { allowInaccessible: false }
-    }, candidates);
-    if (strategy.mode === 'roleplay') {
-      return this.planRoleplay(input, strategy, entityIds, new Set(focusIds), retrieved, plan);
-    }
-    return { plan, context: composeContext(plan) };
-  }
-
-  private planRoleplay(
-    input: PlanChatContextInput,
-    strategy: KallamoContextStrategy,
-    entityIds: string[],
-    focusIds: Set<string>,
-    retrieved: ContextCandidate[],
-    fallbackPlan: ContextPlanResult
-  ): PlannedChatContext {
-    const scene = this.roleplay.getScene(input.workspaceId);
-    const configuredPlayerId = this.roleplay.getSettings(input.workspaceId).playerEntityId;
-    const playerId = configuredPlayerId
-      ?? (scene?.perspective.access === 'subjective' ? scene.perspective.focalSubjectId : undefined);
-    const participantIds = uniqueIds(scene?.participantIds ?? []);
-    const actorIds = participantIds.filter(id => id !== playerId);
-    const subjectIds = uniqueIds([
-      playerId,
-      ...participantIds,
-      ...(scene?.possibleObserverIds ?? []),
-      ...(scene?.nearbyIds ?? [])
-    ]);
-    const targetIds = uniqueIds(entityIds);
-    const names = this.getEntityNames(input.workspaceId, uniqueIds([...subjectIds, ...targetIds]));
-    const assessments = this.epistemicResolver.resolve({
-      workspaceId: input.workspaceId,
-      subjectIds,
-      targetIds,
-      through: strategy.through
-    }).assessments;
-    const authorityPerspective: Perspective = { access: 'omniscient' };
-    // A full sheet for whoever the turn is about; a one-line mention for an entity that only came
-    // along because a retrieved passage or a relation named it.
-    const authorityCandidates = withAlwaysInContext(this.loadAlwaysInContextCandidates(input.workspaceId), deduplicateCandidates([
-      ...this.loadSceneCandidates(input.workspaceId),
-      ...this.loadEntityCandidates(input.workspaceId, entityIds.filter(id => focusIds.has(id)), authorityPerspective),
-      ...this.loadEntityMentions(input.workspaceId, entityIds.filter(id => !focusIds.has(id))),
-      ...this.loadEpistemicCandidates(
-        input.workspaceId,
-        entityIds,
-        input.query,
-        input.items.flatMap(item => item.factIds ?? []),
-        authorityPerspective
-      ).filter(candidate => candidate.epistemic.kind === 'canon'),
-      ...retrieved.filter(candidate => candidate.source.type === 'canon')
-    ]));
-    const refusals: StoryRefusal[] = [];
-    const subjects = uniqueIds([playerId, ...actorIds]).map(subjectId => {
-      const perspective: Perspective = { access: 'subjective', focalSubjectId: subjectId };
-      return {
-        id: subjectId,
-        name: names.get(subjectId) ?? subjectId,
-        kind: subjectId === playerId ? 'player' as const : 'actor' as const,
-        candidates: this.admitStoryCandidates(input.workspaceId, subjectId, refusals, createRoleplayStrategy(perspective, strategy.through, strategy.hasActiveScene)
-          .prepareCandidates(deduplicateCandidates([
-            ...this.loadEntityCandidates(input.workspaceId, entityIds, perspective),
-            // Only bonds that touch the turn's focus: two absent entities' ties rarely shape a scene.
-            ...this.loadKnownRelationshipCandidates(input.workspaceId, entityIds.filter(id => focusIds.has(id)), perspective),
-            ...this.loadRelationCandidates(input.workspaceId, entityIds, perspective),
-            ...this.loadEpistemicCandidates(
-              input.workspaceId,
-              entityIds,
-              input.query,
-              input.items.flatMap(item => item.factIds ?? []),
-              perspective
-            ),
-            ...this.loadInventoryCandidates(input.workspaceId, entityIds),
-            ...this.loadRoleplayCandidates(input.workspaceId, entityIds),
-            ...this.loadRecalledScenes(input.workspaceId, subjectId, input.query, names.get(subjectId) ?? subjectId)
-          ])))
-      };
-    });
-    // Scene memory is bounded per character and always sent, so the planner gets what it leaves.
-    const memorySection = this.composeCharacterMemory(
-      input.workspaceId,
-      uniqueIds([...participantIds, ...(scene?.possibleObserverIds ?? [])]).filter(id => id !== playerId)
-    );
-    const orchestrated = this.roleplayOrchestrator.plan({
-      requestId: input.requestId,
-      workspaceId: input.workspaceId,
-      query: input.query,
-      through: strategy.through,
-      tokenBudget: Math.max(0, Math.floor(input.tokenBudget) - (memorySection ? this.estimateTokens(memorySection) : 0)),
-      authorityCandidates,
-      evidenceCandidates: strategy.hasActiveScene
-        ? retrieved.filter(candidate => candidate.source.type !== 'canon')
-        : [],
-      subjects,
-      assessments,
-      targetNames: names
-    });
-    const manifest = this.manifests.save({
-      requestId: input.requestId,
-      workspaceId: input.workspaceId,
-      sequence: strategy.through.sequence,
-      ...(scene?.id ? { sceneId: scene.id } : {}),
-      ...(playerId ? { playerSubjectId: playerId } : {}),
-      subjectIds,
-      targetIds,
-      assessments,
-      deepenedPairs: orchestrated.deepenedPairs,
-      ...summarizeRefusals(refusals)
-    });
-    return {
-      plan: orchestrated.playerPlan ?? fallbackPlan,
-      bundle: orchestrated.bundle,
-      manifest,
-      context: [orchestrated.context, memorySection].filter(Boolean).join('\n\n')
-    };
+  /** The scene memory section without its heading. */
+  sceneMemory(workspaceId: string, entityIds: string[]): string {
+    return this.composeCharacterMemory(workspaceId, entityIds).replace(/^\s*---[^\n]*---\s*\n+/, '').trim();
   }
 
   /**
-   * Earlier scenes the request recalls, from the story's events. They are offered to the character
-   * who witnessed them only; the story refuses the rest.
+   * The names, fields and relationships one character knows of these entities. The sheets are
+   * already in the context, so only field names are given.
    */
-  private loadRecalledScenes(workspaceId: string, subjectId: string, query: string, subjectName: string): ContextCandidate[] {
-    const hits = searchStory(this.db, workspaceId, { holderId: null, docType: 'event', text: query, vector: this.queryVector, limit: RECALLED_SCENES * 2, skipLatestEvents: RECENT_EVENTS });
-    return hits.flatMap(hit => {
-      const text = hit.event?.description || hit.event?.title;
-      if (!text) return [];
-      return [this.candidate({
-        id: `scene:${hit.docId}`,
-        workspaceId,
-        sourceType: 'memory',
-        sourceId: hit.docId,
-        content: `A scene ${subjectName} witnessed earlier in the story: ${text}`,
-        relevance: hit.match === 'both' ? 0.88 : 0.86,
-        epistemic: { kind: 'memory', subjectId, accessibility: 'available' },
-        provenanceIds: [hit.docId]
-      })];
-    });
+  knownLines(workspaceId: string, holderId: string, entityIds: string[]): Array<{ targetId: string; text: string }> {
+    const targets = entityIds.filter(id => id !== holderId);
+    if (!targets.length) return [];
+    const perspective: Perspective = { access: 'subjective', focalSubjectId: holderId };
+    const names = this.getEntityNames(workspaceId, uniqueIds([holderId, ...targets]));
+    const lines: Array<{ targetId: string; text: string }> = [];
+    for (const candidate of this.loadEntityCandidates(workspaceId, targets, perspective)) {
+      const match = /^known-entity:[^:]+:(.+)$/.exec(candidate.id);
+      if (!match) continue;
+      const [first, ...rest] = candidate.content.split(/\r?\n/).filter(Boolean);
+      const knownAs = first?.replace(/^Known identity:\s*/i, '').trim();
+      const canonical = names.get(match[1]) ?? knownAs;
+      const fields = [...new Set(rest.flatMap(line => {
+        const separator = line.indexOf(':');
+        return separator > 0 ? [line.slice(0, separator).trim()] : [];
+      }))];
+      const label = knownAs && knownAs !== canonical ? `${canonical}, as "${knownAs}"` : canonical;
+      lines.push({ targetId: match[1], text: `Knows ${label}${fields.length ? `: ${fields.join(', ')}` : ''}` });
+    }
+    // A relationship is worth a line only between things the context holds.
+    for (const candidate of this.loadKnownRelationshipCandidates(workspaceId, targets, perspective, uniqueIds([holderId, ...targets]))) {
+      lines.push({ targetId: candidate.source.id, text: candidate.content });
+    }
+    return lines;
   }
 
-  /** The story confirms each record a character's context draws from; the rest stays out, with its reason. */
-  private admitStoryCandidates(workspaceId: string, subjectId: string, refusals: StoryRefusal[], candidates: ContextCandidate[]): ContextCandidate[] {
-    const { admitted, refused } = admitForCharacter(this.db, workspaceId, subjectId, candidates.map(candidate => ({
-      id: candidate.id,
-      ...(candidate.id.startsWith('scene:') ? { eventId: candidate.source.id } : {}),
-      ...(STORY_RECORD_SOURCES.has(candidate.source.type) && candidate.id.startsWith(`${candidate.source.type}:`) ? { recordId: candidate.source.id } : {})
-    })));
-    refusals.push(...refused);
-    const kept = new Set(admitted.map(candidate => candidate.id));
-    return candidates.filter(candidate => kept.has(candidate.id));
+  alwaysInContextIds(workspaceId: string): string[] {
+    return this.loadAlwaysInContextCandidates(workspaceId).map(candidate => candidate.source.id);
   }
 
   private composeCharacterMemory(workspaceId: string, entityIds: string[]): string {
@@ -459,77 +132,26 @@ export class NarrativeChatContext {
     return formatCharacterMemorySection(views, names);
   }
 
-  private getRetrievalSettings(): {
-    worldbuildBreadth: 'focused' | 'balanced' | 'broad';
-    worldbuildEntityLimit: number;
-  } {
-    const hasSettings = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
-    const row = hasSettings
-      ? this.db.prepare("SELECT value FROM settings WHERE key = 'advanced'").get() as { value?: string } | undefined
-      : undefined;
-    const advanced = row?.value ? parseObject(row.value) : {};
-    return normalizeRetrievalSettings(advanced);
-  }
-
-  private expandEntityIds(
-    workspaceId: string,
-    seedIds: string[],
-    breadth: 'focused' | 'balanced' | 'broad',
-    limit: number
-  ): string[] {
-    return discoverEntityIds(seedIds, breadth, limit, (frontier: string[], edgeLimit: number) => {
-      const placeholders = frontier.map(() => '?').join(', ');
-      return this.db.prepare(`
-        SELECT links.fromId, links.toId
-        FROM entity_links AS links
-        JOIN entities AS source ON source.id = links.fromId AND source.workspaceId = links.workspaceId
-        JOIN entities AS target ON target.id = links.toId AND target.workspaceId = links.workspaceId
-        WHERE links.workspaceId = ?
-          AND (links.fromId IN (${placeholders}) OR links.toId IN (${placeholders}))
-          AND source.status != 'proposed' AND target.status != 'proposed'
-        ORDER BY links.rowid
-        LIMIT ?
-      `).all(workspaceId, ...frontier, ...frontier, edgeLimit) as Array<{ fromId: string; toId: string }>;
-    });
-  }
-
-  private resolveStrategy(workspaceId: string): KallamoContextStrategy {
-    const through = this.getLatestPosition(workspaceId);
-    if (getWorkspaceExperienceMode(this.db, workspaceId) === 'standard') {
-      return createStandardStrategy(through);
-    }
-    const scene = this.scenes.getActive(workspaceId);
-    if (scene) return createRoleplayStrategy(
-      scene.perspective,
-      { sequence: Math.max(scene.position.sequence, through.sequence), timestamp: through.timestamp ?? scene.position.timestamp },
-      true
-    );
-    const playerEntityId = this.roleplay.getSettings(workspaceId).playerEntityId;
-    if (playerEntityId) return createRoleplayStrategy({ access: 'subjective', focalSubjectId: playerEntityId }, through, false);
-    return createRoleplayStrategy({ access: 'explicit', allowedSubjectIds: [] }, through, false);
-  }
-
   private loadRoleplayCandidates(workspaceId: string, entityIds: string[]): ContextCandidate[] {
     const settings = this.roleplay.getSettings(workspaceId);
     const ids = new Set(entityIds);
     if (settings.playerEntityId) ids.add(settings.playerEntityId);
     const usedDefinitions = new Map<string, ReturnType<RoleplaySystem['listEntityResources']>[number]>();
+    const names = this.getEntityNames(workspaceId, [...ids]);
+    // One line per person, under their name: values without an owner are read as anyone's.
     const values = [...ids].flatMap(entityId => {
-      const entity = this.db.prepare(`
-        SELECT 1 FROM entities WHERE workspaceId = ? AND id = ? AND status != 'proposed'
-      `).get(workspaceId, entityId);
-      if (!entity) return [];
-      return this.roleplay.listEntityResources(workspaceId, entityId).map(resource => {
-        usedDefinitions.set(resource.definitionId, resource);
-        return this.candidate({
-          id: `roleplay-state:${entityId}:${resource.definitionId}`,
-          workspaceId, sourceType: 'state', sourceId: `${entityId}:${resource.key}`,
-          content: `${resource.name}: ${resource.current} / ${resource.maximum}${resource.unit ? ` ${resource.unit}` : ''}`,
-          relevance: 1,
-          epistemic: { kind: 'knowledge', subjectId: entityId, accessibility: 'available' },
-          provenanceIds: [resource.definitionId, entityId]
-        });
-      });
+      if (!names.has(entityId)) return [];
+      const resources = this.roleplay.listEntityResources(workspaceId, entityId);
+      if (!resources.length) return [];
+      resources.forEach(resource => usedDefinitions.set(resource.definitionId, resource));
+      return [this.candidate({
+        id: `roleplay-state:${entityId}`,
+        workspaceId, sourceType: 'state', sourceId: entityId,
+        content: `${names.get(entityId)}: ${resources.map(resource => `${resource.name} ${resource.current} / ${resource.maximum}${resource.unit ? ` ${resource.unit}` : ''}`).join(', ')}.`,
+        relevance: 1,
+        epistemic: { kind: 'knowledge', subjectId: entityId, accessibility: 'available' },
+        provenanceIds: [entityId, ...resources.map(resource => resource.definitionId)]
+      })];
     });
     // What a resource means travels once, beside the values, so the narrator plays it as written.
     const rules = [...usedDefinitions.values()].flatMap(resource => {
@@ -615,39 +237,6 @@ export class NarrativeChatContext {
     })];
   }
 
-  private loadSceneCandidates(workspaceId: string): ContextCandidate[] {
-    const scene = this.roleplay.getScene(workspaceId);
-    if (!scene) return [];
-    const names = this.getEntityNames(workspaceId, uniqueIds([
-      scene.locationId,
-      ...scene.participantIds,
-      ...scene.possibleObserverIds,
-      ...scene.nearbyIds,
-      ...scene.objectIds
-    ]));
-    const nearbyIds = uniqueIds([...scene.possibleObserverIds, ...scene.nearbyIds]);
-    // The surroundings travel with the place, so the narrator knows the tavern is in a port
-    // city without having to look the city up.
-    const locationChain = loadLocationChain(this.db, workspaceId, scene.locationId);
-    // Names only: the narrator never looks anything up by ID, so one would only cost tokens.
-    const lines = [
-      `Location: ${locationChain.length ? describeLocationChain(locationChain) : scene.locationId ? names.get(scene.locationId) ?? scene.locationId : 'Unspecified'}`,
-      `Active participants: ${formatEntityList(scene.participantIds, names)}`,
-      `Nearby characters: ${formatEntityList(nearbyIds, names)}. Presence alone does not mean they noticed or learned what happened.`,
-      `Objects present: ${formatEntityList(scene.objectIds, names)}`
-    ];
-    return [this.candidate({
-      id: `roleplay-scene:${scene.id}`,
-      workspaceId,
-      sourceType: 'state',
-      sourceId: scene.id,
-      content: lines.join('\n'),
-      relevance: 1,
-      epistemic: { kind: 'canon', access: 'public' },
-      provenanceIds: [scene.id]
-    })];
-  }
-
   private getEntityNames(workspaceId: string, entityIds: string[]): Map<string, string> {
     if (!entityIds.length) return new Map();
     const placeholders = entityIds.map(() => '?').join(', ');
@@ -669,89 +258,6 @@ export class NarrativeChatContext {
       calendar: read('worldbuild_calendars', 'SELECT definition_json AS json FROM worldbuild_calendars WHERE workspace_id = ?'),
       clock: read('roleplay_time_state', 'SELECT position_json AS json FROM roleplay_time_state WHERE workspace_id = ?')
     };
-  }
-
-  // Read straight from the stored definition: the context only needs names, and must not create one.
-  private getCalendarNames(workspaceId: string): CalendarNames | null {
-    const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worldbuild_calendars'").get();
-    const row = exists
-      ? this.db.prepare('SELECT definition_json FROM worldbuild_calendars WHERE workspace_id = ?').get(workspaceId) as { definition_json: string } | undefined
-      : undefined;
-    if (!row) return null;
-    try {
-      const definition = JSON.parse(row.definition_json) as { months?: Array<{ name?: string }>; eras?: Array<{ id?: string; shortName?: string; name?: string }> };
-      return {
-        months: (definition.months ?? []).map(month => String(month?.name ?? '')),
-        eras: new Map((definition.eras ?? []).map(era => [String(era?.id ?? ''), String(era?.shortName || era?.name || '')]))
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  private getLatestPosition(workspaceId: string): NarrativePosition {
-    return { sequence: currentNarrativeSequence(this.db, workspaceId) };
-  }
-
-  /** The focus is what a record, the scene, the perspective or the request names; tags alone never make it. */
-  private resolveRelevantEntityIds(
-    workspaceId: string,
-    query: string,
-    items: RetrievedContextItem[],
-    perspective: Perspective
-  ): { ids: string[]; focusIds: string[]; origins: Map<string, EntityOriginKind> } {
-    const ids = new Set(items.flatMap(item => item.entityIds ?? []));
-    const focus = new Set(ids);
-    // Later reasons overwrite earlier ones, so the strongest reason an entity came in is kept.
-    const origins = new Map<string, EntityOriginKind>([...ids].map(id => [id, 'search']));
-    const chunkIds = items
-      .filter(item => item.entityExpansion !== 'none')
-      .map(item => item.id)
-      .filter(Boolean);
-    if (chunkIds.length) {
-      const placeholders = chunkIds.map(() => '?').join(', ');
-      const rows = this.db.prepare(`
-        SELECT DISTINCT ct.entity AS id
-        FROM chunk_tags AS ct
-        JOIN entities AS e ON e.id = ct.entity AND e.workspaceId = ?
-        WHERE ct.chunkId IN (${placeholders})
-      `).all(workspaceId, ...chunkIds) as Array<{ id: string }>;
-      rows.forEach(row => {
-        ids.add(row.id);
-        if (!origins.has(row.id)) origins.set(row.id, 'search');
-      });
-    }
-    const scene = this.roleplay.getScene(workspaceId);
-    const add = (origin: EntityOriginKind) => (id: string | undefined) => {
-      if (!id) return;
-      ids.add(id);
-      focus.add(id);
-      origins.set(id, origin);
-    };
-    this.resolveMentionedEntityIds(workspaceId, query).forEach(add('mentioned'));
-    if (scene?.locationId) add('location')(scene.locationId);
-    [
-      perspective.focalSubjectId,
-      ...(perspective.allowedSubjectIds ?? []),
-      ...(scene?.participantIds ?? []),
-      ...(scene?.possibleObserverIds ?? []),
-      ...(scene?.nearbyIds ?? []),
-      ...(scene?.objectIds ?? [])
-    ].forEach(add('scene'));
-    return { ids: [...ids], focusIds: [...focus], origins };
-  }
-
-  /** Names each entity the plan considered with why it came in; expansion through links is "related". */
-  private describeOrigins(
-    workspaceId: string,
-    entityIds: string[],
-    origins: Map<string, EntityOriginKind>,
-    alwaysCandidates: ContextCandidate[]
-  ): EntityOrigin[] {
-    const byId = new Map<string, EntityOriginKind>(entityIds.map(id => [id, origins.get(id) ?? 'related']));
-    alwaysCandidates.forEach(candidate => byId.set(candidate.source.id, 'always'));
-    const names = this.getEntityNames(workspaceId, [...byId.keys()]);
-    return [...byId].flatMap(([id, origin]) => names.has(id) ? [{ id, name: names.get(id)!, origin }] : []);
   }
 
   /** Systems the user marked to go with every message: world rules, outside retrieval and the entity limit. */
@@ -780,80 +286,6 @@ export class NarrativeChatContext {
         epistemic: { kind: 'canon', access: 'public' },
         provenanceIds: [entity.id]
       })] : [];
-    });
-  }
-
-  private loadEntityMentions(workspaceId: string, entityIds: string[]): ContextCandidate[] {
-    if (!entityIds.length) return [];
-    const placeholders = entityIds.map(() => '?').join(', ');
-    const entities = this.db.prepare(`
-      SELECT id, type, canonicalName, lore, data, status
-      FROM entities
-      WHERE workspaceId = ? AND id IN (${placeholders}) AND status != 'proposed'
-    `).all(workspaceId, ...entityIds) as EntityRow[];
-    return entities.map(entity => this.candidate({
-      id: `entity:${entity.id}`,
-      workspaceId,
-      sourceType: 'canon',
-      sourceId: entity.id,
-      content: composeEntityMention(entity),
-      relevance: 0.5,
-      epistemic: { kind: 'canon', access: 'public' },
-      provenanceIds: [entity.id]
-    }));
-  }
-
-  private resolveMentionedEntityIds(workspaceId: string, query: string): string[] {
-    const normalizedQuery = query.toLocaleLowerCase();
-    if (!normalizedQuery.trim()) return [];
-    const rows = this.db.prepare(`
-      SELECT id, canonicalName, aliases FROM entities
-      WHERE workspaceId = ? AND status != 'proposed'
-    `).all(workspaceId) as Array<{ id: string; canonicalName: string; aliases: string | null }>;
-    return rows.flatMap(row => {
-      const aliases = parseStringList(row.aliases);
-      const matched = [row.canonicalName, ...aliases].some(name => {
-        const normalized = name.trim().toLocaleLowerCase();
-        return normalized.length >= 2 && normalizedQuery.includes(normalized);
-      });
-      return matched ? [row.id] : [];
-    });
-  }
-
-  private resolveLinkedChunkIds(workspaceId: string, items: RetrievedContextItem[]): Set<string> {
-    const chunkIds = items.map(item => item.id).filter(Boolean);
-    if (!chunkIds.length) return new Set();
-    const placeholders = chunkIds.map(() => '?').join(', ');
-    const rows = this.db.prepare(`
-      SELECT DISTINCT ct.chunkId AS id
-      FROM chunk_tags AS ct
-      JOIN entities AS e ON e.id = ct.entity AND e.workspaceId = ?
-      WHERE ct.chunkId IN (${placeholders})
-    `).all(workspaceId, ...chunkIds) as Array<{ id: string }>;
-    return new Set(rows.map(row => row.id));
-  }
-
-  private toRetrievedCandidate(
-    workspaceId: string,
-    item: RetrievedContextItem,
-    linkedChunkIds: Set<string>,
-    hasActiveScene: boolean
-  ): ContextCandidate {
-    const epistemic: ContextEpistemicMetadata = item.kind === 'worldbuild-canon'
-      ? { kind: 'canon', access: 'public' }
-      : {
-        kind: 'unclassified',
-        sensitivity: !hasActiveScene || linkedChunkIds.has(item.id) ? 'unknown' : 'neutral'
-      };
-    return this.candidate({
-      id: `retrieved:${item.kind}:${item.id}`,
-      workspaceId,
-      sourceType: item.kind === 'worldbuild-canon' ? 'canon' : 'text',
-      sourceId: item.id,
-      content: item.content,
-      relevance: normalizeRelevance(item.relevance),
-      epistemic,
-      provenanceIds: item.provenanceIds
     });
   }
 
@@ -1025,143 +457,6 @@ export class NarrativeChatContext {
     });
   }
 
-  private loadEpistemicCandidates(
-    workspaceId: string,
-    entityIds: string[],
-    query: string,
-    explicitFactIds: string[],
-    perspective: Perspective,
-    includeEntityRecords = true
-  ): ContextCandidate[] {
-    const relevantIds = new Set(entityIds);
-    const requiredFactIds = new Set(explicitFactIds);
-    const queryTerms = meaningfulTerms(query);
-    const sharedCache = new Map<string, Set<string>>();
-    const hits = this.storyHits(workspaceId, perspective, query);
-    const rows = this.currentRecords(workspaceId);
-    // Tellers and entity-reference objects are named in one read, so no uuid reaches the model.
-    const calendar = this.getCalendarNames(workspaceId);
-    const informantNames = this.getEntityNames(workspaceId, [...new Set(rows.flatMap(({ row, payload }) => [
-      ...(Array.isArray(payload.informantIds) ? payload.informantIds.map(String) : []),
-      ...entityReferencesIn(payload),
-      ...(row.record_type === 'relationship' ? [row.subject_id, String(payload.targetEntityId ?? '')] : [])
-    ]))]);
-    return rows.flatMap(({ row, payload }) => {
-      const aboutId = String((payload.proposition as Record<string, unknown> | undefined)?.subjectId ?? '');
-      const stateEntityId = String(payload.entityId ?? '');
-      const targetId = String(payload.targetEntityId ?? '');
-      const relatedEntityIds = Array.isArray(payload.relatedEntityIds)
-        ? payload.relatedEntityIds.map(String)
-        : [];
-      const isEntityRelevant = relevantIds.has(row.subject_id)
-        || relevantIds.has(aboutId)
-        || relevantIds.has(stateEntityId)
-        || relevantIds.has(targetId)
-        || relatedEntityIds.some(id => relevantIds.has(id));
-      const isFactRelevant = row.record_type === 'fact'
-        && (requiredFactIds.has(row.record_id) || hasMeaningfulOverlap(queryTerms, JSON.stringify(payload)));
-      const hit = hits.get(row.record_id);
-      if ((!includeEntityRecords || !isEntityRelevant) && !isFactRelevant && !hit) return [];
-      if (
-        row.record_type === 'fact'
-        && (payload.proposition as Record<string, unknown> | undefined)?.predicate === 'recorded-occurrence'
-        && perspective.access === 'subjective'
-        && perspective.focalSubjectId
-        && !canSubjectAccessOccurrence(this.db, workspaceId, row.source_event_id, perspective.focalSubjectId, rows)
-      ) return [];
-      const normalized = normalizeRecord(row, payload, informantNames, calendar);
-      if (!normalized) return [];
-      if (
-        perspective.access === 'subjective'
-        && perspective.focalSubjectId
-        && (row.record_type === 'knowledge' || row.record_type === 'belief')
-        && row.subject_id !== perspective.focalSubjectId
-        && this.isGroupKnowledgeShared(workspaceId, row.subject_id, aboutId, perspective.focalSubjectId, sharedCache)
-      ) {
-        normalized.epistemic = row.record_type === 'knowledge'
-          ? { kind: 'knowledge', subjectId: perspective.focalSubjectId, accessibility: accessibility(payload.accessibility) }
-          : { kind: 'belief', subjectId: perspective.focalSubjectId, relationToCanon: beliefRelation(payload.relationToCanon) };
-      }
-      if (
-        perspective.access === 'subjective'
-        && perspective.focalSubjectId
-        && row.record_type === 'memory'
-        && row.subject_id !== perspective.focalSubjectId
-        && isFactionOccurrenceMemoryShared(
-          this.db,
-          workspaceId,
-          row.source_event_id,
-          row.subject_id,
-          perspective.focalSubjectId
-        )
-      ) {
-        normalized.epistemic = {
-          kind: 'memory',
-          subjectId: perspective.focalSubjectId,
-          accessibility: accessibility(payload.accessibility)
-        };
-      }
-      return [this.candidate({
-        id: `${row.record_type}:${row.record_id}`,
-        workspaceId,
-        sourceType: row.record_type === 'fact' ? 'canon' : row.record_type,
-        sourceId: row.record_id,
-        content: `Narrative sequence: ${row.narrative_sequence}\n${normalized.content}`,
-        relevance: requiredFactIds.has(row.record_id) ? 1 : (isEntityRelevant ? 0.95 : hit ? (hit.match === 'both' ? 0.93 : 0.9) : 0.85),
-        position: { sequence: row.narrative_sequence },
-        epistemic: normalized.epistemic,
-        provenanceIds: [row.source_event_id, row.record_id]
-      })];
-    });
-  }
-
-  private loadRelationCandidates(workspaceId: string, entityIds: string[], perspective: Perspective): ContextCandidate[] {
-    if (!entityIds.length) return [];
-    const placeholders = entityIds.map(() => '?').join(', ');
-    const rows = this.db.prepare(`
-      SELECT links.id, links.fromId, links.toId, links.relType, links.label, links.metadata_json AS metadataJson,
-        source.canonicalName AS sourceName, target.canonicalName AS targetName
-      FROM entity_links AS links
-      JOIN entities AS source ON source.id = links.fromId AND source.workspaceId = links.workspaceId
-      JOIN entities AS target ON target.id = links.toId AND target.workspaceId = links.workspaceId
-      WHERE links.workspaceId = ?
-        AND (links.fromId IN (${placeholders}) OR links.toId IN (${placeholders}))
-        AND source.status != 'proposed' AND target.status != 'proposed'
-    `).all(workspaceId, ...entityIds, ...entityIds) as Array<{
-      id: string; fromId: string; toId: string; relType: string; label: string | null;
-      sourceName: string; targetName: string; metadataJson: string | null;
-    }>;
-    const authorized = new Set(perspective.access === 'subjective'
-      ? [perspective.focalSubjectId!]
-      : perspective.access === 'explicit' ? perspective.allowedSubjectIds ?? [] : []);
-    // A relationship the narrative ledger holds is rendered from the ledger; the edge would repeat it.
-    const ledgerPairs = new Set(this.currentRecords(workspaceId).filter(({ row }) => row.record_type === 'relationship')
-      .map(({ row, payload }) => `${row.subject_id}\u0000${String(payload.targetEntityId ?? '')}`));
-    return rows
-      .filter(row => row.relType !== 'related_to' || !ledgerPairs.has(`${row.fromId}\u0000${row.toId}`))
-      .filter(row => perspective.access === 'omniscient' || authorized.has(row.fromId)).map(row => {
-      const metadata = parseObject(row.metadataJson);
-      const value = Number(metadata.value);
-      const description = String(metadata.description ?? '').trim();
-      const lines = [
-        `${row.sourceName} → ${row.targetName}`,
-        `Title: ${relationTitle(row.relType, row.label)}`,
-        ...(Number.isFinite(value) ? [`Value: ${Math.max(-100, Math.min(100, value))}`] : []),
-        ...(description ? [`Description: ${description}`] : [])
-      ];
-      return this.candidate({
-        id: `relation:${row.id}`,
-        workspaceId,
-        sourceType: 'relationship',
-        sourceId: row.id,
-        content: lines.join('\n'),
-        relevance: 1,
-        epistemic: { kind: 'relationship', subjectIds: [row.fromId] },
-        provenanceIds: [row.id, row.fromId, row.toId]
-      });
-    });
-  }
-
   private loadInventoryCandidates(workspaceId: string, entityIds: string[]): ContextCandidate[] {
     if (!entityIds.length) return [];
     const placeholders = entityIds.map(() => '?').join(', ');
@@ -1227,7 +522,9 @@ export class NarrativeChatContext {
   private loadKnownRelationshipCandidates(
     workspaceId: string,
     entityIds: string[],
-    perspective: Perspective
+    perspective: Perspective,
+    /** When given, both ends of a relationship must be among these. */
+    within?: string[]
   ): ContextCandidate[] {
     if (!entityIds.length || perspective.access === 'omniscient') return [];
     const ownerIds = perspective.access === 'subjective'
@@ -1261,7 +558,8 @@ export class NarrativeChatContext {
       WHERE relationships.workspace_id = ?
         AND relationships.card_id IN (${cardIds.map(() => '?').join(', ')})
         AND (relationships.from_id IN (${entityPlaceholders}) OR relationships.to_id IN (${entityPlaceholders}))
-    `).all(workspaceId, ...cardIds, ...entityIds, ...entityIds) as Array<{
+        ${within ? `AND relationships.from_id IN (${within.map(() => '?').join(', ')}) AND relationships.to_id IN (${within.map(() => '?').join(', ')})` : ''}
+    `).all(workspaceId, ...cardIds, ...entityIds, ...entityIds, ...(within ? [...within, ...within] : [])) as Array<{
       relationshipId: string; fromId: string; fromName: string;
       relationType: string; relationLabel: string | null;
       toId: string; toName: string; metadataJson: string | null;
@@ -1291,23 +589,6 @@ export class NarrativeChatContext {
     }));
   }
 
-  /** Whether a statement a faction or a place holds about a target reaches this member. */
-  private isGroupKnowledgeShared(
-    workspaceId: string,
-    groupId: string,
-    targetId: string,
-    memberId: string,
-    cache: Map<string, Set<string>>
-  ): boolean {
-    let readable = cache.get(memberId);
-    if (!readable) {
-      readable = new Set(sharedKnowledgeCards(this.db, workspaceId, [memberId])
-        .map(card => `${card.groupId}\u0000${card.targetId}`));
-      cache.set(memberId, readable);
-    }
-    return readable.has(`${groupId}\u0000${targetId}`);
-  }
-
   private candidate(input: {
     id: string;
     workspaceId: string;
@@ -1333,144 +614,6 @@ export class NarrativeChatContext {
   }
 }
 
-// Candidates rendered from a story record carry its kind as their source and `<kind>:<record id>` as their id.
-const STORY_RECORD_SOURCES = new Set(['knowledge', 'belief', 'memory', 'relationship']);
-
-function normalizeRecord(
-  row: NarrativeRecordRow,
-  payload: Record<string, unknown>,
-  nameById: Map<string, string> = new Map(),
-  calendar: CalendarNames | null = null
-): { content: string; epistemic: ContextEpistemicMetadata } | undefined {
-  const subjectId = row.subject_id;
-  if (row.record_type === 'fact') {
-    if ((payload.status ?? 'active') !== 'active') return undefined;
-    const proposition = payload.proposition as Record<string, unknown> | undefined;
-    const predicate = String(proposition?.predicate ?? '').trim();
-    if (!predicate || proposition?.object === undefined) return undefined;
-    // An occurrence is told by its title, summary and dates; its own ID means nothing to the narrator.
-    const object = predicate === 'recorded-occurrence' && proposition.object && typeof proposition.object === 'object'
-      ? withoutOccurrenceId(proposition.object as Record<string, unknown>)
-      : proposition.object;
-    return {
-      content: withCategory(payload, `${predicate}: ${formatNarrativeValue(object, nameById)}`),
-      epistemic: { kind: 'canon', access: 'public' }
-    };
-  }
-  if (row.record_type === 'state') {
-    const property = String(payload.property ?? '').trim();
-    if (!property || payload.value === undefined) return undefined;
-    return {
-      content: `${property}: ${formatNarrativeValue(payload.value, nameById)}`,
-      epistemic: { kind: 'canon', access: 'public' }
-    };
-  }
-  if (row.record_type === 'relationship') {
-    const targetId = String(payload.targetEntityId ?? '');
-    const dimension = String(payload.dimension ?? '').trim();
-    if (!targetId || !dimension || !Number.isFinite(Number(payload.value))) return undefined;
-    const title = String(payload.title ?? '').trim();
-    const description = String(payload.description ?? '').trim();
-    return {
-      content: [
-        `${nameById.get(subjectId) ?? subjectId} → ${nameById.get(targetId) ?? targetId}`,
-        ...(title ? [`Title: ${title}`] : []),
-        `Dimension: ${dimension}`,
-        `Value: ${Number(payload.value)}`,
-        ...(description ? [`Description: ${description}`] : [])
-      ].join('\n'),
-      epistemic: { kind: 'relationship', subjectIds: [subjectId, targetId] }
-    };
-  }
-
-  if (row.record_type === 'memory') {
-    if ((payload.status ?? 'active') === 'forgotten') return undefined;
-    const content = String(payload.summary ?? '').trim();
-    if (!content) return undefined;
-    const happenedOn = formatWorldDay(payload.occurredOn, calendar);
-    return {
-      content: withCategory(payload, happenedOn ? `${content}
-Happened on: ${happenedOn}` : content),
-      epistemic: { kind: 'memory', subjectId, accessibility: accessibility(payload.accessibility) }
-    };
-  }
-  if (payload.status !== 'active') return undefined;
-  const proposition = payload.proposition as Record<string, unknown> | undefined;
-  const statement = proposition?.object === undefined || proposition?.object === null
-    ? ''
-    : formatNarrativeValue(proposition.object, nameById).trim();
-  if (!statement) return undefined;
-  // A denial read as the bare statement makes a character assert the very thing they hold false.
-  const content = payload.negated === true ? `Holds that this is not so: ${statement}` : statement;
-  if (row.record_type === 'belief') {
-    const relation = payload.relationToCanon;
-    const held = payload.attitude === 'suspects' ? `${content}\nHeld as: a suspicion, not a conviction` : content;
-    return {
-      content: withCategory(payload, held),
-      epistemic: {
-        kind: 'belief',
-        subjectId,
-        relationToCanon: relation === 'aligned' || relation === 'contradicted' ? relation : 'unknown'
-      }
-    };
-  }
-  // Hearsay that reads like first-hand perception makes a character state a rumour as fact.
-  const informants = Array.isArray(payload.informantIds) ? payload.informantIds.map(String).filter(Boolean) : [];
-  const attribution = payload.acquisition === 'reported'
-    ? `Learned: reported${informants.length ? ` by ${informants.map(id => nameById.get(id) ?? id).join(', ')}` : ''}`
-    : payload.acquisition === 'inferred'
-      ? 'Learned: inferred by the subject'
-      : payload.acquisition === 'participant' || payload.acquisition === 'witness'
-        ? 'Learned: observed first-hand'
-        : '';
-  return {
-    content: attribution ? `${content}\n${attribution}` : content,
-    epistemic: { kind: 'knowledge', subjectId, accessibility: accessibility(payload.accessibility) }
-  };
-}
-
-/** A secret and world lore read the same as bare sentences; the category says which may be repeated aloud. */
-interface CalendarNames {
-  months: string[];
-  eras: Map<string, string>;
-}
-
-function formatWorldDay(value: unknown, calendar: CalendarNames | null): string {
-  if (!value || typeof value !== 'object') return '';
-  const date = value as Record<string, unknown>;
-  const [year, month, day] = [date.year, date.month, date.day].map(Number);
-  if (![year, month, day].every(part => Number.isInteger(part) && part >= 1)) return '';
-  const monthName = calendar?.months[month - 1] || `month ${month}`;
-  const era = calendar?.eras.get(String(date.eraId ?? '')) ?? '';
-  return `${day} ${monthName} ${year}${era ? ` ${era}` : ''}`;
-}
-
-function withCategory(payload: Record<string, unknown>, content: string): string {
-  const label = categoryLabel(payload.category);
-  return label ? `${content}
-Kind: ${label}` : content;
-}
-
-// Someone else's record is refused on every turn for everyone, so only its count is kept.
-function summarizeRefusals(refusals: StoryRefusal[]): { refusals?: StoryRefusal[]; notHeldCounts?: Record<string, number> } {
-  const kept = refusals.filter(refusal => refusal.reason !== 'not-held');
-  const notHeldCounts: Record<string, number> = {};
-  for (const refusal of refusals) {
-    if (refusal.reason === 'not-held') notHeldCounts[refusal.subjectId] = (notHeldCounts[refusal.subjectId] ?? 0) + 1;
-  }
-  return {
-    ...(kept.length ? { refusals: kept } : {}),
-    ...(Object.keys(notHeldCounts).length ? { notHeldCounts } : {})
-  };
-}
-
-function categoryLabel(value: unknown): string | undefined {
-  const category = normalizeKnowledgeCategory(value);
-  if (category) return KNOWLEDGE_CATEGORY_LABELS[category];
-  const memory = normalizeMemoryCategory(value);
-  return memory ? MEMORY_CATEGORY_LABELS[memory] : undefined;
-}
-
 function composeKnownEntity(
   entity: EntityRow,
   fields: FieldRow[],
@@ -1489,7 +632,8 @@ function composeKnownEntity(
       ? (data.customFields as Record<string, unknown> | undefined)?.[key.slice('customFields.'.length)]
       : key === 'age' ? ageOf(data) : data[key];
     if (value === undefined || value === null || value === '') continue;
-    lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(field ? choiceLabels(field, value) : value)}`);
+    // One line per field: a value written in paragraphs would otherwise read as more fields.
+    lines.push(`${field?.label || nativeFieldLabel(key)}: ${formatNarrativeValue(field ? choiceLabels(field, value) : value).replace(/\s*\n+\s*/g, ' ')}`);
   }
   return lines.join('\n');
 }
@@ -1519,14 +663,6 @@ function choiceLabels(field: FieldRow, value: unknown): unknown {
   return Array.isArray(value) ? value.map(label) : label(value);
 }
 
-// The name, type and first sentence of the description: enough to place a name a passage uses.
-function composeEntityMention(entity: EntityRow): string {
-  const data = parseObject(entity.data);
-  const description = String(data.description ?? data.content ?? entity.lore ?? '').replace(/\s+/g, ' ').trim();
-  const sentence = description.match(/^.{1,200}?[.!?](?=\s|$)/)?.[0] ?? description.slice(0, 200);
-  return sentence ? `${entity.canonicalName} (${entity.type}): ${sentence}` : `${entity.canonicalName} (${entity.type})`;
-}
-
 function composeEntitySummary(entity: EntityRow): string {
   const data = parseObject(entity.data);
   const description = String(data.description ?? data.content ?? '').trim();
@@ -1545,25 +681,7 @@ function nativeFieldLabel(key: string): string {
   return labels[key] || key;
 }
 
-function beliefRelation(value: unknown): 'aligned' | 'contradicted' | 'unknown' {
-  return value === 'aligned' || value === 'contradicted' ? value : 'unknown';
-}
-
 const ENTITY_REFERENCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function entityReferencesIn(payload: Record<string, unknown>): string[] {
-  const candidates = [
-    (payload.proposition as Record<string, unknown> | undefined)?.object,
-    payload.value
-  ];
-  return candidates
-    .filter((value): value is string => typeof value === 'string' && ENTITY_REFERENCE_PATTERN.test(value.trim()))
-    .map(value => value.trim());
-}
-
-function withoutOccurrenceId({ occurrenceId: _occurrenceId, ...rest }: Record<string, unknown>): Record<string, unknown> {
-  return rest;
-}
 
 function formatNarrativeValue(value: unknown, nameById: Map<string, string> = new Map()): string {
   if (typeof value !== 'string') return JSON.stringify(value);
@@ -1592,90 +710,6 @@ function composeEntity(entity: EntityRow, fields: FieldRow[]): string {
   return parts.join('\n');
 }
 
-function composeContext(plan: ContextPlanResult): string {
-  const sections = new Map<ContextSourceType, string[]>();
-  plan.package.items.forEach(item => {
-    const values = sections.get(item.source.type) ?? [];
-    values.push(composePackageItem(item));
-    sections.set(item.source.type, values);
-  });
-  const labels: Array<[ContextSourceType, string]> = [
-    ['canon', 'CANONICAL CONTEXT'],
-    ['state', 'ROLEPLAY STATE'],
-    ['knowledge', 'SUBJECT KNOWLEDGE'],
-    ['belief', 'BELIEFS AND UNCERTAINTY'],
-    ['relationship', 'RELATIONSHIP CONTEXT'],
-    ['memory', 'SUBJECT MEMORIES'],
-    ['text', 'RETRIEVED EVIDENCE']
-  ];
-  return labels.flatMap(([type, label]) => {
-    const values = sections.get(type);
-    return values?.length ? [`--- ${label} ---\n${values.join('\n\n')}`] : [];
-  }).join('\n\n');
-}
-
-function composePackageItem(item: ContextPlanResult['package']['items'][number]): string {
-  const details = [`Source: ${item.source.type}:${item.source.id}`];
-  const epistemic = item.epistemic;
-  if ('subjectId' in epistemic) details.push(`Owner: ${epistemic.subjectId}`);
-  if (epistemic.kind === 'belief') details.push(`Canon relation: ${epistemic.relationToCanon}`);
-  if ('accessibility' in epistemic) details.push(`Accessibility: ${epistemic.accessibility}`);
-  if (item.provenanceIds.length) details.push(`Provenance: ${item.provenanceIds.join(', ')}`);
-  return `[${details.join(' | ')}]\n${item.content}`;
-}
-
-/**
- * Pinned Systems lead and replace any copy retrieval found under the same id, so a one-line
- * mention never stands in for them. The planner's sort is stable, so leading wins budget ties.
- */
-function withAlwaysInContext(always: ContextCandidate[], rest: ContextCandidate[]): ContextCandidate[] {
-  const ids = new Set(always.map(candidate => candidate.id));
-  return [...always, ...rest.filter(candidate => !ids.has(candidate.id))];
-}
-
-function deduplicateCandidates(candidates: ContextCandidate[]): ContextCandidate[] {
-  const unique = new Map<string, ContextCandidate>();
-  candidates.forEach(candidate => unique.set(candidate.id, candidate));
-  return [...unique.values()];
-}
-
-/** One statement reaches the prompt once; the merged copies keep every source id. */
-function deduplicateStandardEvidence(candidates: ContextCandidate[]): ContextCandidate[] {
-  const selected: ContextCandidate[] = [];
-  const memoryIndexes = new Map<string, number>();
-  for (const candidate of candidates) {
-    const kind = candidate.epistemic.kind;
-    if (kind !== 'memory' && kind !== 'knowledge' && kind !== 'belief') {
-      selected.push(candidate);
-      continue;
-    }
-    // Two subjects knowing the same thing stay two records; an identical memory collapses.
-    const owner = kind === 'memory' || !('subjectId' in candidate.epistemic)
-      ? ''
-      : candidate.epistemic.subjectId;
-    const contentKey = statementKey(candidate.content.replace(/^Narrative sequence:\s*\d+\s*/i, ''));
-    const key = `${kind}:${owner}:${contentKey}`;
-    const existingIndex = memoryIndexes.get(key);
-    if (existingIndex === undefined) {
-      memoryIndexes.set(key, selected.length);
-      selected.push(candidate);
-      continue;
-    }
-    const existing = selected[existingIndex];
-    const newer = (candidate.position?.sequence ?? 0) > (existing.position?.sequence ?? 0)
-      ? candidate
-      : existing;
-    selected[existingIndex] = {
-      ...newer,
-      provenanceIds: uniqueIds([
-        ...(existing.provenanceIds ?? []),
-        ...(candidate.provenanceIds ?? [])
-      ])
-    };
-  }
-  return selected;
-}
-
 function parseObject(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -1685,53 +719,6 @@ function parseObject(value: unknown): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function accessibility(value: unknown): 'available' | 'suppressed' | 'inaccessible' {
-  return value === 'suppressed' || value === 'inaccessible' ? value : 'available';
-}
-
-function normalizeRelevance(value: number | undefined): number {
-  return Number.isFinite(value) ? Math.max(0, Math.min(1, value!)) : 0.5;
-}
-
-function resolveEntityExpansion(items: RetrievedContextItem[]): EntityExpansion {
-  if (items.some(item => item.entityExpansion === 'dossier')) return 'dossier';
-  if (items.some(item => item.entityExpansion === 'summary')) return 'summary';
-  if (items.length && items.every(item => item.entityExpansion === 'none')) return 'none';
-  return 'dossier';
-}
-
-function parseStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value !== 'string' || !value.trim()) return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return value.split(',').map(item => item.trim()).filter(Boolean);
-  }
-}
-
-function meaningfulTerms(value: string): Set<string> {
-  return new Set(
-    String(value || '')
-      .toLocaleLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter(term => term.length >= 4)
-  );
-}
-
-function hasMeaningfulOverlap(queryTerms: Set<string>, value: string): boolean {
-  if (!queryTerms.size) return false;
-  const candidateTerms = meaningfulTerms(value);
-  let matches = 0;
-  for (const term of queryTerms) {
-    if (!candidateTerms.has(term)) continue;
-    matches += 1;
-    if (matches >= Math.min(2, queryTerms.size)) return true;
-  }
-  return false;
 }
 
 function formatValue(value: unknown): string {
@@ -1746,10 +733,6 @@ function humanizeKey(key: string): string {
 
 function uniqueIds(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-function formatEntityList(ids: string[], names: Map<string, string>): string {
-  return ids.length ? ids.map(id => names.get(id) ?? 'Unnamed').join(', ') : 'None';
 }
 
 export function createNarrativeChatContext(

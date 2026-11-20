@@ -698,7 +698,8 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
           // First-hand acquisition is the more reliable of the two, so it carries the
           // higher confidence the extraction path already assigns for the same reason.
           confidence: draft.kind === 'knowledge' && draft.acquisition !== 'reported' ? 0.95 : 0.75,
-          accessibility: 'available',
+          // Rewording a statement leaves it as reachable as it was.
+          accessibility: editing?.accessibility ?? 'available',
           category: draft.category,
           acquisition: draft.acquisition,
           informantIds: draft.acquisition === 'reported' ? draft.informantIds : [],
@@ -759,6 +760,34 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
   const cancelEditing = () => {
     setEditing(null);
     setDraft(emptyStatementDraft());
+  };
+
+  const bringBack = async (entry: WorldbuildKnowledgeEntry) => {
+    try {
+      const result = await api.saveWorldbuildSubjectEntry({
+        workspaceId,
+        subjectId: owner.id,
+        kind: entry.kind,
+        existingId: entry.id,
+        entry: {
+          aboutId: entry.aboutId ?? card.targetId,
+          statement: entry.statement ?? '',
+          confidence: entry.confidence ?? 0.95,
+          accessibility: 'available',
+          category: entry.category ?? undefined,
+          acquisition: entry.acquisition,
+          informantIds: entry.informantIds ?? [],
+        },
+      });
+      if (!result.success) {
+        showToast(result.error || 'Could not bring it back.', 'error');
+        return;
+      }
+      await reload();
+      showToast('Within reach again.', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not bring it back.', 'error');
+    }
   };
 
   const removeStatement = async () => {
@@ -1029,6 +1058,7 @@ function KnowledgeCardModal({ workspaceId, owner, card, entity, entities, roster
                 entities={entities}
                 onEdit={entry.managed ? undefined : () => startEditing(entry)}
                 onDelete={entry.managed ? undefined : () => setDeleting(entry)}
+                onRestore={!entry.managed && entry.accessibility === 'suppressed' ? () => bringBack(entry) : undefined}
                 onTrace={() => api.traceWorldbuildSubjectRecord(workspaceId, entry.id).then(result => result.trace ?? null)}
               />
             ))}
@@ -1699,9 +1729,9 @@ function storyDay(clock: WorldDateValue | null): WorldDateValue | null {
   return { eraId, year, month, day };
 }
 
-function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, onOpenOrigin, onTrace }: {
+function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, onOpenOrigin, onTrace, onRestore }: {
   entry: WorldbuildKnowledgeEntry; entities?: WorldbuildEntity[]; calendar?: Record<string, any> | null;
-  onEdit?(): void; onDelete?(): void; onOpenOrigin?(): void; onTrace?(): Promise<WorldbuildKnowledgeTrace | null>;
+  onEdit?(): void; onDelete?(): void; onOpenOrigin?(): void; onTrace?(): Promise<WorldbuildKnowledgeTrace | null>; onRestore?(): void;
 }) {
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1752,6 +1782,7 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
               {route && RouteIcon && <>{dot}<span className="inline-flex items-center gap-1 text-text-muted"><RouteIcon className="h-3 w-3" aria-hidden="true" />{route.label}{tellers.length ? ` by ${joinNames(tellers)}` : ''}</span></>}
               {toldBelief && <>{dot}<span className="text-text-muted">Told by {joinNames(tellers)}</span></>}
               {canon && <>{dot}<span className={canon.className}>{canon.label}</span></>}
+              {entry.accessibility !== 'available' && MEMORY_STATES[entry.accessibility] && <>{dot}<span title={MEMORY_STATES[entry.accessibility].description} className={`rounded-full border px-1.5 text-[11px] font-medium ${MEMORY_STATES[entry.accessibility].badge}`}>{MEMORY_STATES[entry.accessibility].label}</span></>}
             </>
           )}
         </div>
@@ -1763,6 +1794,7 @@ function Statement({ entry, entities = [], calendar = null, onEdit, onDelete, on
           <IconButton ref={menuRef} icon={MoreHorizontal} size="sm" label={`${label} entry actions`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)} />
           <Menu anchorRef={menuRef} open={menuOpen} onClose={() => setMenuOpen(false)} label={`${label} entry actions`} className="w-48" align="right">
             {onEdit && <MenuItem icon={Pencil} label="Edit" onSelect={() => { setMenuOpen(false); onEdit(); }} />}
+            {onRestore && <MenuItem icon={Eye} label="Bring back" onSelect={() => { setMenuOpen(false); onRestore(); }} />}
             {onTrace && <MenuItem icon={Route} label="How they know" onSelect={showTrace} />}
             <SpoilerMenuItem field={entryKey(entry)} onDone={() => setMenuOpen(false)} />
             {onDelete && <MenuItem icon={Trash2} label="Delete" danger onSelect={() => { setMenuOpen(false); onDelete(); }} />}

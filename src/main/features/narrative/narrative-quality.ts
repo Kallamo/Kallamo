@@ -14,9 +14,10 @@ import {
   type RelationshipCause
 } from '../../../narrative/narrative-taxonomy';
 import type { Proposition, WorldDay } from '../../../narrative/contracts';
+import { MIN_MEMORY_SALIENCE } from './memory-relevance';
 
 export interface ExtractedNarrativeEvent {
-  type: 'movement' | 'possession-transfer' | 'revelation' | 'deception' | 'discovery' | 'relationship-change' | 'custom';
+  type: 'movement' | 'possession-transfer' | 'revelation' | 'deception' | 'discovery' | 'relationship-change' | 'custom' | 'maintenance';
   description: string;
   excerpt: string;
   participantIds: string[];
@@ -54,6 +55,7 @@ export type ExtractedNarrativeOperation =
     sourceRecordId?: string;
     premiseIds?: string[];
     sharedWith?: string[];
+    salience?: number;
   }
   | {
     type: 'belief';
@@ -72,6 +74,7 @@ export type ExtractedNarrativeOperation =
     premiseIds?: string[];
     /** Second order: the subject thinks this holder holds the proposition. */
     heldById?: string;
+    salience?: number;
   }
   | {
     type: 'memory';
@@ -84,6 +87,8 @@ export type ExtractedNarrativeOperation =
     /** Set by a caller that already knows the day, such as a dated Event occurrence. */
     occurredOn?: WorldDay;
     supersedesMemoryId?: string;
+    /** Other memories this one gathers; they end when it is written. */
+    mergesMemoryIds?: string[];
     authored?: boolean;
   }
   | {
@@ -159,7 +164,6 @@ export const OPERATION_BUDGET: Record<ExtractedNarrativeOperation['type'], numbe
 export const EVENT_BUDGET_PER_TURN = 12;
 
 const MIN_KNOWLEDGE_CONFIDENCE = 0.8;
-const MIN_MEMORY_SALIENCE = 0.65;
 const MIN_RELATIONSHIP_CONFIDENCE = 0.85;
 const MIN_STATEMENT_WORDS = 3;
 const MIN_STATEMENT_CHARACTERS = 12;
@@ -251,6 +255,8 @@ export function assessExtractedOperation(
     if (Number(operation.salience) < MIN_MEMORY_SALIENCE) return reject('low-salience');
     const category = normalizeMemoryCategory(operation.category);
     if (!context.modelAuthored) return accept({ ...operation, ...(category ? { category } : {}) });
+    // Changing a stored memory (out of reach, back, merged) keeps what it was, category or not.
+    if (operation.supersedesMemoryId && !category) return accept(operation);
     if (isTrivialStatement(summary)) return reject('trivial-statement');
     if (!category) return reject('missing-category');
     if (!isDurableMemoryCategory(category)) return reject('transient-category');
