@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import {
   Backpack, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clapperboard, Gamepad2, HandHelping, Image as ImageIcon, Loader2, MapPin,
   MoreHorizontal, PanelRightOpen, Pencil, Search, Swords, Trash2, X
@@ -9,7 +9,8 @@ import { itemFamily, itemMeta, meta } from '../worldbuild/worldbuildConfig';
 import { formatWorldDate } from '../worldbuild/WorldDateInput';
 import { DAYLIGHT, daylightPhase } from './daylight';
 import Tooltip from '../../components/ui/Tooltip';
-import { framedImageStyle, usePortraitOf } from '../worldbuild/portraits';
+import { PortraitContext, usePortraitOf } from '../worldbuild/portraits';
+import FramedImage from '../worldbuild/FramedImage';
 
 export const PRESENCE = {
   participating: { label: 'Participating', icon: Swords, hint: 'Acts and speaks in the scene.' },
@@ -58,39 +59,60 @@ export function Avatar({ entity, player = false, size = 'md' }) {
   const tone = player ? 'border-accent/55 bg-surface-canvas text-accent' : meta(entity?.type).medallion;
   const sizes = { sm: 'h-8 w-8 rounded-[0.5625rem] text-xs', md: 'h-9 w-9 rounded-control text-sm', lg: 'h-10 w-10 rounded-card text-[0.9375rem]' };
   return (
-    <span
-      className={`inline-flex shrink-0 items-center justify-center overflow-hidden border font-bold uppercase ${sizes[size]} ${tone}`}
-      style={framedImageStyle(portrait)}
-    >
-      {!portrait && (entity?.canonicalName?.[0] || '?')}
+    <span className={`relative inline-flex shrink-0 items-center justify-center overflow-hidden border font-bold uppercase ${sizes[size]} ${tone}`}>
+      {portrait ? <FramedImage image={portrait} className="absolute inset-0" /> : (entity?.canonicalName?.[0] || '?')}
     </span>
   );
 }
 
 /** The collapsed panel: a slim rail that keeps the scene in view beside the chat. */
-export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, locationName, locationType, inventoryCount, onOpen }) {
+export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, progress, locationName, locationType, inventoryCount, onOpen }) {
+  const portraits = useContext(PortraitContext);
   const visible = others.slice(0, COLLAPSED_ACTOR_LIMIT);
   const hidden = others.slice(COLLAPSED_ACTOR_LIMIT);
   const railButton = 'inline-flex items-center justify-center rounded-control transition-colors hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
   const separator = <span aria-hidden="true" className="my-1.5 h-px w-7 bg-border-subtle" />;
   const phase = DAYLIGHT[daylightPhase(clock?.hour)];
   const PhaseIcon = phase.icon;
-  const actorTip = (entity, state) => (
-    <span className="block">
-    <span className="flex items-center gap-2.5">
-      <Avatar entity={entity} player={state === 'playing'} size="sm" />
-      <span className="min-w-0">
-        <span className="block truncate text-[0.8125rem] font-semibold text-text-primary">{entity.canonicalName}</span>
-        <span className="flex items-center gap-1.5">
-          <span className={meta(entity.type).soft}>{typeLabels?.get(entity.type) || meta(entity.type).label}</span>
-          <span aria-hidden="true" className="text-text-disabled">·</span>
-          <span className={state === 'playing' ? 'text-accent' : 'text-text-muted'}>{state === 'playing' ? 'You play them' : PRESENCE[state]?.label}</span>
-        </span>
+  // A portrait opens the tip as a square image as wide as the tip, which widens to give the face room.
+  const tipClass = entity => (portraits[entity.id] ? 'w-[18rem] !max-w-[18rem] overflow-hidden' : '');
+  const actorTip = (entity, state) => {
+    const portrait = portraits[entity.id];
+    const levels = state === 'playing' && progress?.entityId === entity.id && progress.progresses && progress.mode === 'levels' ? progress : null;
+    const role = (
+      <span className="flex items-center gap-1.5">
+        <span className={meta(entity.type).soft}>{typeLabels?.get(entity.type) || meta(entity.type).label}</span>
+        <span aria-hidden="true" className="text-text-disabled">·</span>
+        <span className={state === 'playing' ? 'text-accent' : 'text-text-muted'}>{state === 'playing' ? 'You play them' : PRESENCE[state]?.label}</span>
       </span>
-    </span>
-      <ResourceTable resources={resourcesOf?.(entity.id) || []} />
-    </span>
-  );
+    );
+    return (
+      <div>
+        {portrait ? (
+          <div className="relative -mx-3 -mt-2 aspect-square">
+            <FramedImage image={portrait} label={`Portrait of ${entity.canonicalName}`} className="absolute inset-0" />
+            <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-b from-transparent from-60% to-surface-panel-muted" />
+            <span className="absolute inset-x-3 bottom-1.5 block">
+              <span className="block truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</span>
+              {role}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2.5">
+            <Avatar entity={entity} player={state === 'playing'} size="sm" />
+            <span className="min-w-0">
+              <span className="block truncate text-[0.8125rem] font-semibold text-text-primary">{entity.canonicalName}</span>
+              {role}
+            </span>
+          </div>
+        )}
+        {levels && <div className="mt-2.5 flex flex-col gap-2.5"><ProgressBlock progress={levels} namedAttributes={false} /></div>}
+        {portrait && !levels
+          ? <div className="mt-2"><ResourceTable resources={resourcesOf?.(entity.id) || []} bare /></div>
+          : <ResourceTable resources={resourcesOf?.(entity.id) || []} />}
+      </div>
+    );
+  };
   return (
     <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full w-16 shrink-0 flex-col items-center gap-1 border-l border-border-subtle pb-3 pt-[3.25rem]">
       <Tooltip side="left" content="Open roleplay panel">
@@ -133,14 +155,14 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
       {separator}
       <div className="flex flex-col items-center gap-1.5">
         {player && (
-          <Tooltip side="left" content={actorTip(player, 'playing')}>
+          <Tooltip side="left" className={tipClass(player)} content={actorTip(player, 'playing')}>
             <button type="button" onClick={() => onOpen('scene')} aria-label={`${player.canonicalName}, playing`} className={`${railButton} p-0.5`}>
               <Avatar entity={player} player size="sm" />
             </button>
           </Tooltip>
         )}
         {visible.map(entity => (
-          <Tooltip key={entity.id} side="left" content={actorTip(entity, presenceOf(entity.id))}>
+          <Tooltip key={entity.id} side="left" className={tipClass(entity)} content={actorTip(entity, presenceOf(entity.id))}>
             <button type="button" onClick={() => onOpen('scene')} aria-label={`${entity.canonicalName}, ${PRESENCE[presenceOf(entity.id)]?.label}`} className={`${railButton} p-0.5`}>
               <Avatar entity={entity} size="sm" />
             </button>
@@ -394,10 +416,10 @@ const shareOf = (value, minimum, maximum) => Math.max(0, Math.min(100, ((value -
 const shortName = name => (name.length <= 4 ? name : name.slice(0, 3));
 
 // The played character carries their resources, and their level and attributes when they progress.
-function ResourceTable({ resources }) {
+function ResourceTable({ resources, bare = false }) {
   if (!resources.length) return null;
   return (
-    <span className="mt-2.5 grid min-w-[13rem] grid-cols-[minmax(0,auto)_minmax(2.5rem,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 border-t border-border-subtle pt-2.5">
+    <span className={`grid min-w-[13rem] grid-cols-[minmax(0,auto)_minmax(2.5rem,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 ${bare ? '' : 'mt-2.5 border-t border-border-subtle pt-2.5'}`}>
       {resources.map(resource => (
         <span key={resource.definitionId} className="contents">
           <span className="max-w-[6rem] truncate text-text-secondary">{resource.name}</span>
@@ -411,12 +433,15 @@ function ResourceTable({ resources }) {
   );
 }
 
-// One thin bar per resource; the numbers sit in each bar's tooltip.
-function SlimBars({ resources, className = '' }) {
+// One thin bar per resource, three to a row so none shrinks to a dash; the numbers sit in
+// each bar's tooltip. Past `limit`, the rest fold into a chip that lists them.
+function SlimBars({ resources, limit = Infinity, className = '' }) {
   if (!resources.length) return null;
-  return (
-    <div className={`grid gap-2 ${className}`} style={{ gridTemplateColumns: `repeat(${resources.length}, minmax(0, 1fr))` }}>
-      {resources.map(resource => (
+  const shown = resources.slice(0, limit);
+  const hidden = resources.slice(limit);
+  const bars = (
+    <div className="grid min-w-0 flex-1 gap-x-2" style={{ gridTemplateColumns: `repeat(${Math.min(shown.length, 3)}, minmax(0, 1fr))` }}>
+      {shown.map(resource => (
         <Tooltip key={resource.definitionId} content={<span><span className="text-text-secondary">{resource.name}</span> <span className="whitespace-nowrap tabular-nums text-text-primary">{pair(resource)}</span></span>}>
           <span
             tabIndex={0}
@@ -435,53 +460,60 @@ function SlimBars({ resources, className = '' }) {
       ))}
     </div>
   );
-}
-
-const cardOpenKey = entityId => `kallamo.roleplay.playerCard.${entityId}`;
-function readCardOpen(entityId) {
-  try { return localStorage.getItem(cardOpenKey(entityId)) !== 'closed'; } catch { return true; }
-}
-
-export function PlayerCard({ entity, typeLabel, resources = [], progress = null }) {
-  const levels = progress?.progresses && progress.mode === 'levels';
-  const hasVitals = resources.length > 0 || levels;
-  const [open, setOpen] = useState(() => readCardOpen(entity.id));
-  useEffect(() => { setOpen(readCardOpen(entity.id)); }, [entity.id]);
-  const toggle = () => setOpen(value => {
-    try { localStorage.setItem(cardOpenKey(entity.id), value ? 'closed' : 'open'); } catch { /* the choice just is not remembered */ }
-    return !value;
-  });
+  if (!hidden.length) return <div className={`flex ${className}`}>{bars}</div>;
   return (
-    <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/12 to-accent/[0.03] p-2.5">
-      <div className="flex items-center gap-3">
-        <Avatar entity={entity} player size="lg" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[0.9375rem] font-semibold text-text-primary">{entity.canonicalName}</span>
-          <span className="flex items-center gap-1.5 text-xs">
-            <span className={`font-medium ${meta(entity.type).soft}`}>{typeLabel || meta(entity.type).label}</span>
-            <span aria-hidden="true" className="text-text-disabled">·</span>
-            <span className="inline-flex items-center gap-1 text-accent/90"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>
-          </span>
+    <div className={`flex items-center gap-2 ${className}`}>
+      {bars}
+      <Tooltip content={<ResourceTable resources={hidden} bare />}>
+        <span tabIndex={0} aria-label={`${hidden.length} more ${hidden.length === 1 ? 'resource' : 'resources'}`}
+          className="inline-flex h-4.5 shrink-0 items-center rounded-full bg-tint/[0.08] px-1.5 text-[0.6875rem] font-semibold tabular-nums text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          +{hidden.length}
         </span>
-        {hasVitals && (
-          <Tooltip content={open ? 'Hide details' : 'Show details'}>
-            <button
-              type="button"
-              onClick={toggle}
-              aria-expanded={open}
-              aria-label={open ? 'Hide details' : 'Show details'}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-tint/[0.04] text-text-muted transition-colors hover:bg-tint/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              {open ? <ChevronUp aria-hidden="true" className="h-4 w-4" /> : <ChevronDown aria-hidden="true" className="h-4 w-4" />}
-            </button>
-          </Tooltip>
-        )}
+      </Tooltip>
+    </div>
+  );
+}
+
+// Level, XP and attributes of the played character, shared by its card and the rail.
+function ProgressBlock({ progress, namedAttributes = true }) {
+  return (
+    <>
+      <div>
+        <div className="flex items-baseline gap-2 text-[0.8125rem]">
+          <span className="font-semibold text-text-secondary">XP</span>
+          <span className="flex-1 text-xs font-semibold text-entity-event">Level {progress.level}</span>
+          <span className="shrink-0 whitespace-nowrap tabular-nums text-text-muted">{amount(progress.xp)} / {progress.goal == null ? '—' : amount(progress.goal)}</span>
+        </div>
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-tint/[0.08]">
+          <div className="h-full rounded-full bg-entity-event" style={{ width: `${progress.goal ? shareOf(progress.xp, 0, progress.goal) : 100}%` }} />
+        </div>
       </div>
-      {hasVitals && !open && <SlimBars resources={resources} className="mt-2 px-0.5" />}
-      {hasVitals && open && (
-        <div className="mt-2.5 flex flex-col gap-2.5 border-t border-tint/[0.07] px-0.5 pt-2.5">
+      {progress.attributes.length > 0 && (
+        <div className="grid grid-cols-4 gap-1.5">
+          {progress.attributes.map(attribute => {
+            const cell = (
+              <span key={attribute.traitId} className="flex flex-col items-center rounded-lg bg-tint/[0.04] py-1.5">
+                <span className="text-xs text-text-muted">{shortName(attribute.name)}</span>
+                <span className="text-[0.9375rem] font-bold tabular-nums text-text-primary">{attribute.value}</span>
+              </span>
+            );
+            return namedAttributes ? <Tooltip key={attribute.traitId} content={attribute.name}>{cell}</Tooltip> : cell;
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// Past three resources the open card lays them in two columns, so it grows by rows of two.
+function PlayerVitals({ resources, progress, className = '' }) {
+  return (
+    <div className={`flex flex-col gap-2.5 ${className}`}>
+      {progress && <ProgressBlock progress={progress} />}
+      {resources.length > 0 && (
+        <div className={`grid gap-x-3.5 gap-y-2.5 ${resources.length > 3 ? 'grid-cols-2' : 'grid-cols-1'} ${progress ? 'border-t border-tint/[0.07] pt-2.5' : ''}`}>
           {resources.map(resource => (
-            <div key={resource.definitionId}>
+            <div key={resource.definitionId} className="min-w-0">
               <div className="flex items-baseline gap-2 text-[0.8125rem]">
                 <span className="min-w-0 flex-1 truncate font-semibold text-text-secondary">{resource.name}</span>
                 <span className="shrink-0 whitespace-nowrap tabular-nums text-text-muted">{pair(resource)}</span>
@@ -491,37 +523,90 @@ export function PlayerCard({ entity, typeLabel, resources = [], progress = null 
               </div>
             </div>
           ))}
-          {levels && (
-            <div>
-              <div className="flex items-baseline gap-2 text-[0.8125rem]">
-                <span className="font-semibold text-text-secondary">XP</span>
-                <span className="flex-1 text-xs font-semibold text-entity-event">Level {progress.level}</span>
-                <span className="shrink-0 whitespace-nowrap tabular-nums text-text-muted">{amount(progress.xp)} / {progress.goal == null ? '—' : amount(progress.goal)}</span>
-              </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-tint/[0.08]">
-                <div className="h-full rounded-full bg-entity-event" style={{ width: `${progress.goal ? shareOf(progress.xp, 0, progress.goal) : 100}%` }} />
-              </div>
-            </div>
-          )}
-          {levels && progress.attributes.length > 0 && (
-            <div className="grid grid-cols-4 gap-1.5">
-              {progress.attributes.map(attribute => (
-                <Tooltip key={attribute.traitId} content={attribute.name}>
-                  <span className="flex flex-col items-center rounded-lg bg-tint/[0.04] py-1.5">
-                    <span className="text-xs text-text-muted">{shortName(attribute.name)}</span>
-                    <span className="text-[0.9375rem] font-bold tabular-nums text-text-primary">{attribute.value}</span>
-                  </span>
-                </Tooltip>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>
   );
 }
 
+const cardOpenKey = entityId => `kallamo.roleplay.playerCard.${entityId}`;
+function readCardOpen(entityId) {
+  try { return localStorage.getItem(cardOpenKey(entityId)) !== 'closed'; } catch { return true; }
+}
+
+export function PlayerCard({ entity, typeLabel, resources = [], progress = null }) {
+  const portrait = usePortraitOf(entity.id);
+  const levels = progress?.progresses && progress.mode === 'levels';
+  const hasVitals = resources.length > 0 || levels;
+  const [open, setOpen] = useState(() => readCardOpen(entity.id));
+  useEffect(() => { setOpen(readCardOpen(entity.id)); }, [entity.id]);
+  const toggle = () => setOpen(value => {
+    try { localStorage.setItem(cardOpenKey(entity.id), value ? 'closed' : 'open'); } catch { /* the choice just is not remembered */ }
+    return !value;
+  });
+  const toggleButton = onImage => hasVitals && (
+    <Tooltip content={open ? 'Hide details' : 'Show details'}>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-label={open ? 'Hide details' : 'Show details'}
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${onImage
+          ? 'border border-tint/15 bg-surface-canvas/55 text-text-primary backdrop-blur-md hover:bg-surface-canvas/80'
+          : 'bg-tint/[0.04] text-text-muted hover:bg-tint/[0.08] hover:text-text-primary'}`}
+      >
+        {open ? <ChevronUp aria-hidden="true" className="h-4 w-4" /> : <ChevronDown aria-hidden="true" className="h-4 w-4" />}
+      </button>
+    </Tooltip>
+  );
+  const role = (
+    <span className="flex items-center gap-1.5 text-xs">
+      <span className={`font-medium ${meta(entity.type).soft}`}>{typeLabel || meta(entity.type).label}</span>
+      <span aria-hidden="true" className="text-text-disabled">·</span>
+      <span className="inline-flex items-center gap-1 text-accent/90"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>
+    </span>
+  );
+
+  // With a portrait the card leads with it, the name sitting on its veil.
+  if (portrait) {
+    return (
+      <div className="overflow-hidden rounded-card border border-accent/30 bg-gradient-to-br from-accent/12 to-accent/[0.03]">
+        <div className="relative h-44">
+          <FramedImage image={portrait} label={`Portrait of ${entity.canonicalName}`} className="absolute inset-0" />
+          <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-b from-transparent from-30% to-surface-sidebar/95" />
+          {hasVitals && <span className="absolute right-2 top-2">{toggleButton(true)}</span>}
+          <span className="absolute inset-x-3 bottom-2.5 flex items-end gap-2">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-base font-semibold text-text-primary">{entity.canonicalName}</span>
+              {role}
+            </span>
+            {levels && !open && <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-entity-event">Level {progress.level}</span>}
+          </span>
+        </div>
+        {hasVitals && !open && <SlimBars resources={resources} className="px-3 pb-2.5 pt-1.5" />}
+        {hasVitals && open && <PlayerVitals resources={resources} progress={levels ? progress : null} className="border-t border-tint/[0.07] p-3" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/12 to-accent/[0.03] p-2.5">
+      <div className="flex items-center gap-3">
+        <Avatar entity={entity} player size="lg" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[0.9375rem] font-semibold text-text-primary">{entity.canonicalName}</span>
+          {role}
+        </span>
+        {toggleButton(false)}
+      </div>
+      {hasVitals && !open && <SlimBars resources={resources} className="mt-2 px-0.5" />}
+      {hasVitals && open && <PlayerVitals resources={resources} progress={levels ? progress : null} className="mt-2.5 border-t border-tint/[0.07] px-0.5 pt-2.5" />}
+    </div>
+  );
+}
+
 export function CastRow({ entity, typeLabel, presence, resources = [], onPlay, onPresence, onRemove }) {
+  const portrait = usePortraitOf(entity.id);
   const [open, setOpen] = useState(false);
   const anchorRef = useRef(null);
   const typeMeta = meta(entity.type);
@@ -531,18 +616,18 @@ export function CastRow({ entity, typeLabel, presence, resources = [], onPlay, o
     setOpen(false);
     action();
   };
-  return (
-    <div className={`group/cast rounded-card px-2 py-1.5 transition-colors ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}>
-    <div className="flex items-center gap-2.5">
-      <Avatar entity={entity} />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</span>
-        <span className="flex items-center gap-1.5 text-xs">
-          <span className={`font-medium ${typeMeta.soft}`}>{typeLabel || typeMeta.label}</span>
-          <span aria-hidden="true" className="text-text-disabled">·</span>
-          <span className="inline-flex items-center gap-1 text-text-muted"><PresenceIcon aria-hidden="true" className="h-3 w-3" />{presenceMeta.label}</span>
-        </span>
+  const identity = (
+    <span className="min-w-0 flex-1">
+      <span className="block truncate text-sm font-semibold text-text-primary">{entity.canonicalName}</span>
+      <span className="flex items-center gap-1.5 text-xs">
+        <span className={`font-medium ${typeMeta.soft}`}>{typeLabel || typeMeta.label}</span>
+        <span aria-hidden="true" className="text-text-disabled">·</span>
+        <span className="inline-flex items-center gap-1 text-text-muted"><PresenceIcon aria-hidden="true" className="h-3 w-3" />{presenceMeta.label}</span>
       </span>
+    </span>
+  );
+  const actions = (
+    <>
       <button
         ref={anchorRef}
         type="button"
@@ -564,8 +649,29 @@ export function CastRow({ entity, typeLabel, presence, resources = [], onPlay, o
         <MenuSeparator />
         <MenuItem icon={X} label="Remove from scene" danger onSelect={choose(onRemove)} />
       </Menu>
-    </div>
-    <SlimBars resources={resources} className="mt-1 pl-[2.875rem] pr-9" />
+    </>
+  );
+
+  if (portrait) {
+    return (
+      <div className={`group/cast flex gap-3 rounded-card p-2 transition-colors ${open ? 'bg-tint/[0.06]' : 'bg-tint/[0.03] hover:bg-tint/[0.05]'}`}>
+        <FramedImage image={portrait} label={`Portrait of ${entity.canonicalName}`} className="relative h-16 w-12 shrink-0 rounded-control border border-border-default" />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-start gap-2 pt-0.5">{identity}{actions}</div>
+          <SlimBars resources={resources} limit={3} className="mt-auto pr-9" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`group/cast rounded-card px-2 py-1.5 transition-colors ${open ? 'bg-tint/[0.05]' : 'hover:bg-tint/[0.03]'}`}>
+      <div className="flex items-center gap-2.5">
+        <Avatar entity={entity} />
+        {identity}
+        {actions}
+      </div>
+      <SlimBars resources={resources} limit={3} className="mt-1 pl-[2.875rem] pr-9" />
     </div>
   );
 }
@@ -577,7 +683,7 @@ export function CastGroup({ presence, count, children }) {
       <p className="mb-0.5 flex items-center gap-2 px-1 text-xs text-text-muted">
         <Icon aria-hidden="true" className="h-3.5 w-3.5" />{label}<span className="text-text-disabled tabular-nums">{count}</span>
       </p>
-      {children}
+      <div className="space-y-1">{children}</div>
     </div>
   );
 }

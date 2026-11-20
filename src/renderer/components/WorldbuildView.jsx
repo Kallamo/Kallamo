@@ -24,7 +24,8 @@ import WorldOverview from '../features/worldbuild/WorldOverview';
 import WorldbuildMergeDialog from '../features/worldbuild/WorldbuildMergeDialog';
 import { worldbuildViewCache } from '../features/worldbuild/worldbuildViewCache';
 import WorldbuildImageDialog from '../features/worldbuild/WorldbuildImageDialog';
-import { framedImageStyle, loadPortraits, usePortraits } from '../features/worldbuild/portraits';
+import { loadPortraits, usePortraits } from '../features/worldbuild/portraits';
+import FramedImage from '../features/worldbuild/FramedImage';
 import SearchableSelect from './ui/SearchableSelect';
 import ConfirmDialog from './ui/ConfirmDialog';
 import ExportWorldbuildModal from './modals/ExportWorldbuildModal';
@@ -401,11 +402,10 @@ function SheetActionsMenu({ onPortrait, hasPortrait, onEditName, onMerge, onRepr
 const canHavePortrait = (entity) => entity?.type === 'Characters' || (entity?.type === 'Creatures' && (entity.data?.scope || 'individual') !== 'group');
 
 function SheetMedallion({ meta, portrait, onPortrait }) {
-  const style = framedImageStyle(portrait);
   const label = portrait ? 'Change portrait' : 'Add portrait';
-  // A portrait is the sheet's face, so it is shown large; the type icon keeps its usual size.
-  const tile = style
-    ? <span role="img" aria-label="Portrait" className="block h-[6.5rem] w-[6.5rem] shrink-0 rounded-card border border-border-default" style={style} />
+  // A portrait keeps the 3:4 frame the portrait dialog crops to; the type icon keeps its usual size.
+  const tile = portrait?.imagePath
+    ? <FramedImage image={portrait} label="Portrait" className="relative h-36 w-27 shrink-0 rounded-card border border-border-default shadow-panel @xl:h-44 @xl:w-33" />
     : <span className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-card border ${meta.medallion}`}>{React.createElement(meta.icon, { className: 'h-7 w-7' })}</span>;
   if (!onPortrait) return tile;
   return (
@@ -2245,7 +2245,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const portraitAllowed = !isNew && !!selected?.id && canHavePortrait(selected);
   const sheetPortrait = portraitAllowed ? portraits[selected.id] || null : null;
   const coverAllowed = !isNew && !!selected?.id && selectedIsLocation && selected.status !== 'proposed' && !!electronAPI.uploadRoleplayLocationBackground;
-  const coverStyle = coverAllowed ? framedImageStyle(locationCover) : undefined;
+  const coverImage = coverAllowed && locationCover?.imagePath ? locationCover : null;
   // The shape of this sheet, read beside its type: a unique item, a species, a place's scale.
   // The type line names the kind in the type's colour ("Item · weapon"), then a quieter fact.
   const sheetTypeLabel = !selected ? ''
@@ -2294,7 +2294,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           className={`group flex min-h-9 w-full items-center gap-2.5 rounded-control py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 pl-2 ${trailing || toggle ? 'pr-9' : 'pr-2'} ${active && !manageMode ? 'bg-accent/[0.13]' : picked ? 'bg-surface-hover/70' : 'hover:bg-surface-hover/60'}`}>
           {manageMode && <span aria-hidden="true" className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border-[1.5px] ${picked ? 'border-accent bg-accent text-on-accent' : 'border-border-strong'}`}>{picked && <Check className="h-3 w-3" strokeWidth={3} />}</span>}
           {portraits[entity.id]?.imagePath && canHavePortrait(entity)
-              ? <span aria-hidden="true" className="block h-6 w-6 shrink-0 rounded-md border border-border-default" style={framedImageStyle(portraits[entity.id])} />
+              ? <FramedImage image={portraits[entity.id]} className="relative h-6 w-6 shrink-0 rounded-md border border-border-default" />
               : <span data-tooltip={sizeTip} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${t.medallion}`}><Icon className="h-3.5 w-3.5" /></span>}
           <span className={`min-w-0 flex-1 truncate text-sm font-medium ${active && !manageMode ? 'text-accent' : 'text-text-secondary group-hover:text-text-primary'}`}>{entity.canonicalName}</span>
           {status && <span className={`shrink-0 text-xs ${STATUS_TONE[status]}`}>{STATUS[status].label}</span>}
@@ -2489,7 +2489,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       {imageDialog && selectedId && createPortal(
         <WorldbuildImageDialog
           title={imageDialog === 'portrait' ? `Portrait for ${selected.canonicalName}` : `Background for ${selected.canonicalName}`}
-          shape={imageDialog === 'portrait' ? 'square' : 'wide'}
+          shape={imageDialog === 'portrait' ? 'portrait' : 'wide'}
           image={imageDialog === 'portrait' ? sheetPortrait : (locationCover && !locationCover.inherited ? locationCover : null)}
           busy={imageBusy}
           onChoose={(filePath) => chooseImage(imageDialog, filePath)}
@@ -2869,11 +2869,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               </SheetNotice>
             )}
             <div data-tour={isNew ? 'wb-new-head' : 'wb-sheet-head'} data-entity-id={isNew ? undefined : selected.id} data-entity-name={isNew ? undefined : selected.canonicalName} data-entity-type={selected.type}
-              className={`ws-card relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
+              className={`ws-card @container relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
               <div aria-hidden="true" className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${m.wash} via-transparent to-transparent`} />
               <div className="relative p-5">
-              {coverStyle && <>
-                <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={coverStyle} />
+              {coverImage && <>
+                <FramedImage image={coverImage} className="pointer-events-none absolute inset-0" />
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-r from-surface-panel via-surface-panel/80 to-surface-panel/20" />
               </>}
               <div className="relative">
@@ -2903,7 +2903,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                       {rel.isRace?.entity && <><span className="text-text-disabled" aria-hidden="true">·</span><SpoilerCover field="race" compact><span className="text-text-secondary">{rel.isRace.entity.canonicalName}</span></SpoilerCover></>}
                       {playerEntityId && playerEntityId === selected.id && <span className="ml-1 inline-flex h-5.5 items-center gap-1 rounded-full border border-accent/30 px-2 font-medium text-accent"><Gamepad2 aria-hidden="true" className="h-3.5 w-3.5" />You play them</span>}
                     </div>
-                    <h1 className="mt-1 line-clamp-2 break-words text-2xl font-bold leading-tight text-text-primary">{selected.canonicalName}</h1>
+                    <h1 className={`mt-1 line-clamp-2 break-words font-bold leading-tight text-text-primary ${sheetPortrait ? 'text-[1.75rem]' : 'text-2xl'}`}>{selected.canonicalName}</h1>
                     {coverAllowed && locationCover?.inherited && (() => {
                       const source = entities.find(e => e.id === locationCover.sourceLocationId);
                       return source ? <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-text-subtle"><ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />Background from<EntityChip entity={source} onOpen={openEntityById} /></div> : null;
@@ -3162,7 +3162,7 @@ function KnownMembers({ links, portraits, onOpen }) {
               <button key={link.linkId} type="button" onClick={() => onOpen(entity.id)}
                 className="flex min-h-9 items-center gap-2.5 rounded-control px-2 py-1.5 text-left transition-colors hover:bg-surface-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 {portrait?.imagePath
-                  ? <span aria-hidden="true" className="block h-6 w-6 shrink-0 rounded-md border border-border-default" style={framedImageStyle(portrait)} />
+                  ? <FramedImage image={portrait} className="relative h-6 w-6 shrink-0 rounded-md border border-border-default" />
                   : <span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${typeInfo.medallion}`}>{React.createElement(typeInfo.icon, { className: 'h-3.5 w-3.5' })}</span>}
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-secondary">{entity.canonicalName}</span>
                 {status && <span className={`shrink-0 text-xs ${STATUS_TONE[status]}`}>{STATUS[status].label}</span>}

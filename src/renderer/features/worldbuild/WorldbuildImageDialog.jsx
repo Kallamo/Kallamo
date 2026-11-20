@@ -2,13 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Minus, Plus, Trash2, Upload } from 'lucide-react';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
-import { framedImageStyle } from './portraits';
+import FramedImage from './FramedImage';
 
 const DEFAULT_FOCUS = { x: 50, y: 50, zoom: 1 };
 
 // Choosing and framing an entity image. The frame is saved as a focus point and a zoom,
 // so every size the image appears in shows the same part of it.
-export default function WorldbuildImageDialog({ title, image, shape = 'square', busy = false, onChoose, onSaveFocus, onRemove, onClose }) {
+export default function WorldbuildImageDialog({ title, image, shape = 'portrait', busy = false, onChoose, onSaveFocus, onRemove, onClose }) {
   const inputRef = useRef(null);
   const frameRef = useRef(null);
   const drag = useRef(null);
@@ -52,16 +52,16 @@ export default function WorldbuildImageDialog({ title, image, shape = 'square', 
         <div className={`flex gap-5 p-5 ${wide ? 'flex-col' : 'flex-col sm:flex-row sm:items-center'}`}>
           <div ref={frameRef} role="img" aria-label={framed ? 'Drag or use the arrow keys to frame the image' : 'No image yet'} tabIndex={framed ? 0 : -1}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onKeyDown={onKeyDown}
-            style={framedImageStyle(framed)}
-            className={`relative shrink-0 overflow-hidden rounded-card border border-border-default bg-surface-canvas/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${framed ? 'cursor-grab active:cursor-grabbing' : ''} ${wide ? 'aspect-[16/6] w-full' : 'h-64 w-64'}`}>
+            className={`relative shrink-0 overflow-hidden rounded-card border border-border-default bg-surface-canvas/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${framed ? 'cursor-grab active:cursor-grabbing' : ''} ${wide ? 'aspect-[16/6] w-full' : 'h-64 w-48'}`}>
+            {framed && <FramedImage image={framed} className="absolute inset-0" />}
             {!framed && <button type="button" onClick={() => inputRef.current?.click()} className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm font-semibold text-text-muted hover:text-text-primary"><Upload className="h-5 w-5" aria-hidden="true" />Choose an image</button>}
           </div>
           <div className="min-w-0 flex-1 space-y-4">
             {framed && !wide && (
               <div className="flex items-end gap-3" aria-hidden="true">
-                <span className="h-16 w-16 rounded-card border border-border-default" style={framedImageStyle(framed)} />
-                <span className="h-9 w-9 rounded-full border border-border-default" style={framedImageStyle(framed)} />
-                <span className="h-6 w-6 rounded-full border border-border-default" style={framedImageStyle(framed)} />
+                <FramedImage image={framed} className="relative h-16 w-12 rounded-control border border-border-default" />
+                <FramedImage image={framed} className="relative h-16 w-16 rounded-control border border-border-default" />
+                <FramedImage image={framed} className="relative h-8 w-8 rounded-[0.5625rem] border border-border-default" />
               </div>
             )}
             {framed && <p className="caption">{wide ? 'Drag to frame it. The header and the scene use the same framing.' : 'Drag to frame the face. The same crop is used in every size.'}</p>}

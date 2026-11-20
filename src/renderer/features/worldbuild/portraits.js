@@ -31,17 +31,3 @@ export const PortraitContext = createContext({});
 export const usePortraitOf = (entityId) => useContext(PortraitContext)[entityId] || null;
 
 export const portraitUrl = (portrait) => portrait?.imagePath ? `app-file:///${encodeURI(String(portrait.imagePath).replace(/\\/g, '/'))}` : null;
-
-/** Background style for a portrait or scene image, framed by its saved focus point. */
-export function framedImageStyle(image) {
-  const url = portraitUrl(image);
-  if (!url) return undefined;
-  const focus = image.focus || {};
-  const zoom = Math.max(1, Number(focus.zoom) || 1);
-  return {
-    backgroundImage: `url("${url}")`,
-    backgroundPosition: `${focus.x ?? 50}% ${focus.y ?? 50}%`,
-    backgroundSize: zoom > 1 ? `${zoom * 100}%` : 'cover',
-    backgroundRepeat: 'no-repeat',
-  };
-}

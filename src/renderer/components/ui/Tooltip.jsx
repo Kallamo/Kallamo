@@ -23,7 +23,7 @@ function place(side, anchor, tip) {
 }
 
 /** Use instead of the native `title`. Wraps one element without adding a node. */
-export default function Tooltip({ content, side = 'top', children, disabled = false }) {
+export default function Tooltip({ content, side = 'top', children, disabled = false, className = '' }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState(null);
   const anchorRef = useRef(null);
@@ -92,7 +92,7 @@ export default function Tooltip({ content, side = 'top', children, disabled = fa
           role="tooltip"
           data-floating-layer="tooltip"
           style={{ position: 'fixed', top: position?.top ?? -9999, left: position?.left ?? -9999, zIndex: 100000 }}
-          className={`pointer-events-none max-w-[16rem] rounded-card border border-border-default bg-surface-panel-muted px-3 py-2 text-xs leading-snug text-text-secondary shadow-overlay transition-opacity duration-150 ${position ? 'opacity-100' : 'opacity-0'}`}
+          className={`pointer-events-none max-w-[16rem] rounded-card border border-border-default bg-surface-panel-muted px-3 py-2 text-xs leading-snug text-text-secondary shadow-overlay transition-opacity duration-150 ${position ? 'opacity-100' : 'opacity-0'} ${className}`}
         >
           {content}
         </div>,
