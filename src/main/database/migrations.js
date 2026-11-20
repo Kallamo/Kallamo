@@ -1638,6 +1638,50 @@ const MIGRATIONS = [
         db.exec("ALTER TABLE roleplay_workspace_settings ADD COLUMN entity_creation_json TEXT NOT NULL DEFAULT '{}'");
       }
     }
+  },
+  {
+    // A resource keeps whole numbers or tenths, and time too small to show is banked on the value.
+    // Earlier betas stored time drains with float noise (31.27999999999999), rounded here.
+    id: 'roleplay_resource_decimals_v1',
+    up: (db) => {
+      if (!hasTable(db, 'roleplay_resource_definitions') || !hasTable(db, 'roleplay_resource_values')) return;
+      const definitionColumns = db.prepare('PRAGMA table_info(roleplay_resource_definitions)').all().map(column => column.name);
+      if (!definitionColumns.includes('decimals')) {
+        db.exec('ALTER TABLE roleplay_resource_definitions ADD COLUMN decimals INTEGER NOT NULL DEFAULT 0 CHECK (decimals IN (0, 1))');
+      }
+      const valueColumns = db.prepare('PRAGMA table_info(roleplay_resource_values)').all().map(column => column.name);
+      if (!valueColumns.includes('time_remainder')) {
+        db.exec('ALTER TABLE roleplay_resource_values ADD COLUMN time_remainder REAL NOT NULL DEFAULT 0');
+      }
+      if (!valueColumns.includes('time_origin_id')) {
+        db.exec('ALTER TABLE roleplay_resource_values ADD COLUMN time_origin_id TEXT');
+      }
+      db.exec(`
+        UPDATE roleplay_resource_values SET current_value = ROUND(current_value)
+        WHERE current_value IS NOT NULL AND current_value != ROUND(current_value)
+      `);
+      if (hasTable(db, 'roleplay_resource_changes')) {
+        db.exec(`
+          UPDATE roleplay_resource_changes SET
+            previous_value = ROUND(previous_value, 2),
+            next_value = ROUND(next_value, 2),
+            delta = CASE WHEN delta IS NULL THEN NULL ELSE ROUND(delta, 2) END
+        `);
+      }
+    }
+  },
+  {
+    // When the story last drew on a held record: what keeps it within reach as story time passes.
+    id: 'narrative_record_use_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS narrative_record_use (
+        workspace_id TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        story_minute INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, record_id, origin_id)
+      );
+    `)
   }
 ];
 

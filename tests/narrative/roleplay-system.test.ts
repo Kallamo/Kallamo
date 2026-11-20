@@ -385,6 +385,104 @@ describe('Kallamo roleplay system', () => {
     expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(100);
   });
 
+  test('a slow drain is banked until it moves the shown value, once per turn', () => {
+    const battery = roleplay.saveDefinition('workspace-one', {
+      name: 'Battery', key: 'battery', color: '#16a34a', minimum: 0, maximum: 100,
+      appliesTo: ['Characters'], updatePolicy: 'automatic', timeRate: 4, timeDirection: 'drains', timePeriod: 'day'
+    });
+    roleplay.setTargetValue('workspace-one', battery.id, 'entity', 'elias', { current: 31 });
+    const remainder = () => (db.prepare(`
+      SELECT time_remainder AS value FROM roleplay_resource_values WHERE definition_id = ? AND target_id = 'elias'
+    `).get(battery.id) as { value: number }).value;
+
+    // 55 minutes of a 4-a-day drain is about 0.15: seven turns before a whole point shows.
+    const perTurn = Array.from({ length: 7 }, (_, index) => roleplay.applyElapsedTime('workspace-one', `turn-${index}`, 55, ['elias']));
+    expect(perTurn.slice(0, 6).every(changes => changes.length === 0)).toBe(true);
+    expect(perTurn[6]).toEqual([expect.objectContaining({ previousValue: 31, nextValue: 30, delta: -1, reason: '55 minutes passed' })]);
+    expect(remainder()).toBeCloseTo(1 - 7 * 55 * 4 / 1440, 4);
+
+    const banked = remainder();
+    expect(roleplay.applyElapsedTime('workspace-one', 'turn-6', 55, ['elias'])).toEqual([]);
+    expect(remainder()).toBe(banked);
+  });
+
+  test('a resource with one decimal follows a day of the calendar\'s own length', () => {
+    db.prepare('INSERT INTO worldbuild_calendars (workspace_id, definition_json, updated_at) VALUES (?, ?, ?)')
+      .run('workspace-one', JSON.stringify({ hoursPerDay: 20 }), 1);
+    const battery = roleplay.saveDefinition('workspace-one', {
+      name: 'Battery', key: 'battery', color: '#16a34a', minimum: 0, maximum: 100, decimals: 1,
+      appliesTo: ['Characters'], updatePolicy: 'automatic', timeRate: 4, timeDirection: 'drains', timePeriod: 'day'
+    });
+    roleplay.setTargetValue('workspace-one', battery.id, 'entity', 'elias', { current: 10 });
+
+    expect(roleplay.applyElapsedTime('workspace-one', 'turn-1', 60, ['elias'])).toEqual([
+      expect.objectContaining({ previousValue: 10, nextValue: 9.8, delta: -0.2 })
+    ]);
+    for (let turn = 2; turn <= 4; turn += 1) roleplay.applyElapsedTime('workspace-one', `turn-${turn}`, 60, ['elias']);
+    expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(9.2);
+  });
+
+  test('time stops at either end of a resource and banks nothing past it', () => {
+    const stamina = roleplay.saveDefinition('workspace-one', {
+      name: 'Stamina', key: 'stamina', color: '#f59e0b', minimum: 0, maximum: 100,
+      appliesTo: ['Characters'], updatePolicy: 'automatic', timeRate: 1, timeDirection: 'recovers'
+    });
+    const hunger = roleplay.saveDefinition('workspace-one', {
+      name: 'Hunger', key: 'hunger', color: '#a16207', minimum: 0, maximum: 10,
+      appliesTo: ['Characters'], updatePolicy: 'automatic', timeRate: 2, timeDirection: 'drains'
+    });
+    roleplay.setTargetValue('workspace-one', stamina.id, 'entity', 'elias', { current: 99 });
+    roleplay.setTargetValue('workspace-one', hunger.id, 'entity', 'elias', { current: 1 });
+    const banked = (definitionId: string) => (db.prepare(`
+      SELECT time_remainder AS value FROM roleplay_resource_values WHERE definition_id = ? AND target_id = 'elias'
+    `).get(definitionId) as { value: number }).value;
+
+    const changes = roleplay.applyElapsedTime('workspace-one', 'turn-1', 90, ['elias']);
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ definitionId: stamina.id, nextValue: 100 }),
+      expect.objectContaining({ definitionId: hunger.id, nextValue: 0 })
+    ]));
+    expect(banked(stamina.id)).toBe(0);
+    expect(banked(hunger.id)).toBe(0);
+    expect(roleplay.applyElapsedTime('workspace-one', 'turn-2', 90, ['elias'])).toEqual([]);
+  });
+
+  test('values keep only the decimals the resource allows, however they are moved', () => {
+    const focus = roleplay.saveDefinition('workspace-one', {
+      name: 'Focus', key: 'focus', color: '#7c3aed', minimum: 0, maximum: 50, decimals: 1,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    roleplay.setTargetValue('workspace-one', focus.id, 'entity', 'elias', { current: 31.3 });
+    for (let step = 0; step < 3; step += 1) {
+      roleplay.proposeChange({ id: `drop-${step}`, workspaceId: 'workspace-one', definitionId: focus.id, entityId: 'elias', delta: -0.1, source: 'manual' });
+    }
+    expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(31);
+
+    roleplay.saveDefinition('workspace-one', { ...focus, decimals: 0 });
+    roleplay.proposeChange({ id: 'set', workspaceId: 'workspace-one', definitionId: focus.id, entityId: 'elias', value: 7.46, source: 'manual' });
+    expect(roleplay.listEntityResources('workspace-one', 'elias')[0].current).toBe(7);
+  });
+
+  test('the decimals migration rounds values that earlier betas stored with float noise', () => {
+    const battery = roleplay.saveDefinition('workspace-one', {
+      name: 'Battery', key: 'battery', color: '#16a34a', minimum: 0, maximum: 100,
+      appliesTo: ['Characters'], updatePolicy: 'automatic'
+    });
+    db.prepare(`
+      INSERT INTO roleplay_resource_values (workspace_id, definition_id, target_type, target_id, current_value, adjustment, version, updated_at)
+      VALUES ('workspace-one', ?, 'entity', 'elias', 31.129999999999992, 0, 1, 1)
+    `).run(battery.id);
+    db.prepare(`
+      INSERT INTO roleplay_resource_changes (workspace_id, change_id, definition_id, entity_id, previous_value, next_value, delta, status, source, created_at)
+      VALUES ('workspace-one', 'old', ?, 'elias', 31.27999999999999, 31.129999999999992, -0.15000000000000002, 'applied', 'time', 1)
+    `).run(battery.id);
+    db.prepare("DELETE FROM schema_migrations WHERE id = 'roleplay_resource_decimals_v1'").run();
+    runDatabaseMigrations(db);
+
+    expect((db.prepare("SELECT current_value AS value FROM roleplay_resource_values WHERE target_id = 'elias'").get() as { value: number }).value).toBe(31);
+    expect(roleplay.listChanges('workspace-one', 'elias')[0]).toMatchObject({ previousValue: 31.28, nextValue: 31.13, delta: -0.15 });
+  });
+
   test('the AI changes a maximum only where the resource allows it, and always for review', () => {
     const health = createHealth('automatic');
     const lasting = {

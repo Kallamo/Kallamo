@@ -47,7 +47,11 @@ export interface RoleplayResourceDefinition {
   timeRate: number;
   timeDirection: 'recovers' | 'drains';
   timePeriod: 'hour' | 'day';
+  /** Decimal places a value keeps: 0 for whole numbers, 1 for tenths. */
+  decimals: ResourceDecimals;
 }
+
+export type ResourceDecimals = 0 | 1;
 
 /** How one character's maximum is made: base, growth for each level past the first, adjustment. */
 export interface ResourceMaximumParts {
@@ -187,10 +191,13 @@ interface DefinitionRow {
   starts_full: number; unit: string; applies_to_json: string; update_policy: RoleplayUpdatePolicy;
   position: number; enabled: number; scope?: string; lowest_effect?: string; time_rate?: number;
   time_direction?: string; time_period?: string; growth_per_level?: number; refill_on_level_up?: number;
-  ai_changes_maximum?: number; maximum_rule?: string;
+  ai_changes_maximum?: number; maximum_rule?: string; decimals?: number;
 }
 
-interface ValueRow { target_id: string; current_value: number | null; adjustment: number; base_value: number | null; growth_value: number | null }
+interface ValueRow {
+  target_id: string; current_value: number | null; adjustment: number; base_value: number | null; growth_value: number | null;
+  time_remainder?: number | null; time_origin_id?: string | null;
+}
 
 interface Group { id: string; type: 'race' | 'species'; name: string }
 
@@ -375,8 +382,8 @@ export class RoleplaySystem {
           workspace_id, definition_id, resource_key, name, description, color,
           minimum, maximum, starts_full, unit, applies_to_json, update_policy,
           position, enabled, scope, lowest_effect, time_rate, time_direction, time_period,
-          growth_per_level, refill_on_level_up, ai_changes_maximum, maximum_rule, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          growth_per_level, refill_on_level_up, ai_changes_maximum, maximum_rule, decimals, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(workspace_id, definition_id) DO UPDATE SET
           resource_key = excluded.resource_key, name = excluded.name,
           description = excluded.description, color = excluded.color,
@@ -388,15 +395,16 @@ export class RoleplaySystem {
           time_direction = excluded.time_direction, time_period = excluded.time_period,
           growth_per_level = excluded.growth_per_level, refill_on_level_up = excluded.refill_on_level_up,
           ai_changes_maximum = excluded.ai_changes_maximum, maximum_rule = excluded.maximum_rule,
-          updated_at = excluded.updated_at
+          decimals = excluded.decimals, updated_at = excluded.updated_at
       `).run(workspaceId, id, key, input.name.trim(), input.description?.trim() || '', input.color,
         input.minimum, input.maximum, input.startsFull === false ? 0 : 1, input.unit?.trim() || '', JSON.stringify(appliesTo),
         input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, scope,
         input.lowestEffect?.trim() || '', Math.max(0, Number(input.timeRate) || 0),
         input.timeDirection === 'drains' ? 'drains' : 'recovers', input.timePeriod === 'day' ? 'day' : 'hour',
         Number(input.growthPerLevel) || 0, input.refillOnLevelUp ? 1 : 0,
-        input.aiChangesMaximum ? 1 : 0, input.maximumRule?.trim() || '', Date.now());
-      // A lower base or growth leaves no one above their new maximum.
+        input.aiChangesMaximum ? 1 : 0, input.maximumRule?.trim() || '', normalizeDecimals(input.decimals), Date.now());
+      // A lower base or growth leaves no one above their new maximum; fewer decimals round what is stored.
+      this.roundStoredCurrents(workspaceId, id);
       this.clampStoredCurrents(workspaceId, id);
     })();
     return this.requireDefinition(workspaceId, id);
@@ -435,6 +443,7 @@ export class RoleplaySystem {
       next.base = null;
       next.growth = null;
       next.adjustment = Math.round(next.adjustment * 100) / 100;
+      if (next.current !== null) next.current = roundToDecimals(next.current, definition.decimals);
     } else {
       next.current = null;
       next.adjustment = 0;
@@ -456,6 +465,13 @@ export class RoleplaySystem {
             base_value = excluded.base_value, growth_value = excluded.growth_value,
             version = roleplay_resource_values.version + 1, updated_at = excluded.updated_at
         `).run(workspaceId, definitionId, targetType, targetId, next.current, next.adjustment, next.base, next.growth, Date.now());
+        // A value set by hand starts clean; time banked before it no longer applies.
+        if (patch.current !== undefined) {
+          this.db.prepare(`
+            UPDATE roleplay_resource_values SET time_remainder = 0
+            WHERE workspace_id = ? AND definition_id = ? AND target_type = ? AND target_id = ?
+          `).run(workspaceId, definitionId, targetType, targetId);
+        }
       }
       this.clampStoredCurrents(workspaceId, definitionId);
     })();
@@ -493,7 +509,7 @@ export class RoleplaySystem {
       if (definition.scope === 'chosen' && !own && !fromGroup) return [];
       const parts = maximumParts(definition, own, fromGroup, group, level);
       const maximum = maximumOf(definition, parts);
-      const current = clamp(own?.current_value ?? (definition.startsFull ? maximum : definition.minimum), definition.minimum, maximum);
+      const current = settleValue(own?.current_value ?? (definition.startsFull ? maximum : definition.minimum), definition, maximum);
       return [{ ...definition, definitionId: definition.id, current, maximum, parts }];
     });
   }
@@ -565,7 +581,8 @@ export class RoleplaySystem {
     const hasDelta = Number.isFinite(input.delta);
     if (!hasDelta && !Number.isFinite(input.value)) throw new Error('Resource value must be finite.');
     const maximum = Math.max(definition.minimum, state.maximum + maximumDelta);
-    const nextValue = clamp(hasDelta ? state.current + Number(input.delta) : Number(input.value), definition.minimum, maximum);
+    const nextValue = settleValue(hasDelta ? state.current + Number(input.delta) : Number(input.value), definition, maximum);
+    const delta = hasDelta ? roundToDecimals(Number(input.delta), definition.decimals) : roundToDecimals(nextValue - state.current, definition.decimals);
     // A lasting change to a maximum always waits for review, whatever the resource's policy.
     const status = input.source === 'ai' && (maximumDelta || definition.updatePolicy !== 'automatic') ? 'pending' : 'applied';
     this.db.transaction(() => {
@@ -575,7 +592,7 @@ export class RoleplaySystem {
           delta, maximum_delta, reason, status, source, provenance_id, created_at, resolved_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(input.workspaceId, input.id, input.definitionId, input.entityId, state.current,
-        nextValue, hasDelta ? Number(input.delta) : nextValue - state.current, maximumDelta,
+        nextValue, delta, maximumDelta,
         String(input.reason || '').trim().slice(0, 240), status, input.source,
         input.provenanceId ?? null, Date.now(), status === 'applied' ? Date.now() : null);
       if (status === 'applied') this.applyToEntity(input.workspaceId, state, input.entityId, nextValue, maximumDelta);
@@ -597,7 +614,7 @@ export class RoleplaySystem {
         if (!state) throw new Error('Resource no longer applies to this entity.');
         const maximum = Math.max(definition.minimum, state.maximum + change.maximumDelta);
         const delta = change.delta ?? change.nextValue - change.previousValue;
-        const nextValue = clamp(state.current + delta, definition.minimum, maximum);
+        const nextValue = settleValue(state.current + delta, definition, maximum);
         this.applyToEntity(workspaceId, state, change.entityId, nextValue, change.maximumDelta);
         this.db.prepare(`
           UPDATE roleplay_resource_changes SET previous_value = ?, next_value = ?
@@ -614,7 +631,8 @@ export class RoleplaySystem {
 
   /**
    * Story time moves resources that recover or drain. It reaches the given people and anyone
-   * already holding a value of their own, so a world of untouched NPCs stays untouched.
+   * already holding a value of their own, so a world of untouched NPCs stays untouched. What is too
+   * small to show is banked on the value and joins the next turn's, so a slow drain still lands.
    */
   applyElapsedTime(workspaceId: string, provenanceId: string, minutes: number, entityIds: string[]): RoleplayResourceChange[] {
     if (!(minutes > 0)) return [];
@@ -624,8 +642,9 @@ export class RoleplaySystem {
     const changes: RoleplayResourceChange[] = [];
     for (const definition of definitions) {
       const perMinute = definition.timeRate / (definition.timePeriod === 'day' ? hoursPerDay * 60 : 60);
-      const amount = Math.round(perMinute * minutes * 100) / 100;
-      if (!amount) continue;
+      const sign = definition.timeDirection === 'drains' ? -1 : 1;
+      const amount = sign * perMinute * minutes;
+      const step = 10 ** -definition.decimals;
       const holders = new Set([
         ...entityIds,
         ...(this.db.prepare(`
@@ -641,14 +660,32 @@ export class RoleplaySystem {
           continue;
         }
         if (!state) continue;
-        const delta = definition.timeDirection === 'drains' ? -amount : amount;
-        if (clamp(state.current + delta, definition.minimum, state.maximum) === state.current) continue;
-        changes.push(this.proposeChange({
-          id: `${provenanceId}:time:${definition.id}:${entityId}`,
-          workspaceId, definitionId: definition.id, entityId, delta,
-          reason: describeElapsedMinutes(minutes, hoursPerDay),
-          source: 'time', provenanceId
-        }));
+        const stored = this.getValue(workspaceId, definition.id, 'entity', entityId);
+        // A turn analysed again must not bank its time twice.
+        if (stored?.time_origin_id === provenanceId) continue;
+        const banked = Number(stored?.time_remainder ?? 0);
+        // At the end it moves toward, nothing moves and nothing is banked: a full battery saves no charge.
+        const atEnd = sign < 0 ? state.current <= definition.minimum : state.current >= state.maximum;
+        if (atEnd) {
+          if (banked) this.writeEntityValue(workspaceId, definition.id, entityId, { remainder: 0, timeOriginId: provenanceId });
+          continue;
+        }
+        const total = banked + amount;
+        const visible = roundToDecimals(Math.trunc(roundToDecimals(total / step, 6)) * step, definition.decimals);
+        this.db.transaction(() => {
+          let remainder = roundToDecimals(total - visible, 6);
+          if (visible) {
+            const change = this.proposeChange({
+              id: `${provenanceId}:time:${definition.id}:${entityId}`,
+              workspaceId, definitionId: definition.id, entityId, delta: visible,
+              reason: describeElapsedMinutes(minutes, hoursPerDay),
+              source: 'time', provenanceId
+            });
+            changes.push(change);
+            if (change.nextValue <= definition.minimum || change.nextValue >= state.maximum) remainder = 0;
+          }
+          this.writeEntityValue(workspaceId, definition.id, entityId, { remainder, timeOriginId: provenanceId });
+        })();
       }
     }
     return changes;
@@ -1072,7 +1109,8 @@ export class RoleplaySystem {
 
   private getValue(workspaceId: string, definitionId: string, targetType: RoleplayTargetType, targetId: string) {
     return this.db.prepare(`
-      SELECT target_id, current_value, adjustment, base_value, growth_value FROM roleplay_resource_values
+      SELECT target_id, current_value, adjustment, base_value, growth_value, time_remainder, time_origin_id
+      FROM roleplay_resource_values
       WHERE workspace_id = ? AND definition_id = ? AND target_type = ? AND target_id = ?
     `).get(workspaceId, definitionId, targetType, targetId) as ValueRow | undefined;
   }
@@ -1087,20 +1125,39 @@ export class RoleplaySystem {
     });
   }
 
-  private writeEntityValue(workspaceId: string, definitionId: string, entityId: string, patch: { current?: number | null; adjustment?: number }): void {
+  private writeEntityValue(
+    workspaceId: string,
+    definitionId: string,
+    entityId: string,
+    patch: { current?: number | null; adjustment?: number; remainder?: number; timeOriginId?: string }
+  ): void {
     const stored = this.getValue(workspaceId, definitionId, 'entity', entityId);
     this.db.prepare(`
       INSERT INTO roleplay_resource_values (
         workspace_id, definition_id, target_type, target_id,
-        current_value, adjustment, base_value, growth_value, version, updated_at
-      ) VALUES (?, ?, 'entity', ?, ?, ?, NULL, NULL, 1, ?)
+        current_value, adjustment, base_value, growth_value, time_remainder, time_origin_id, version, updated_at
+      ) VALUES (?, ?, 'entity', ?, ?, ?, NULL, NULL, ?, ?, 1, ?)
       ON CONFLICT(workspace_id, definition_id, target_type, target_id) DO UPDATE SET
         current_value = excluded.current_value, adjustment = excluded.adjustment,
+        time_remainder = excluded.time_remainder, time_origin_id = excluded.time_origin_id,
         version = roleplay_resource_values.version + 1, updated_at = excluded.updated_at
     `).run(workspaceId, definitionId, entityId,
       patch.current === undefined ? stored?.current_value ?? null : patch.current,
       patch.adjustment === undefined ? Number(stored?.adjustment ?? 0) : Math.round(patch.adjustment * 100) / 100,
+      patch.remainder === undefined ? Number(stored?.time_remainder ?? 0) : patch.remainder,
+      patch.timeOriginId === undefined ? stored?.time_origin_id ?? null : patch.timeOriginId,
       Date.now());
+  }
+
+  /** Stored values with more decimals than the resource keeps are rounded to them. */
+  private roundStoredCurrents(workspaceId: string, definitionId: string): void {
+    const { decimals } = this.requireDefinition(workspaceId, definitionId);
+    const factor = 10 ** decimals;
+    this.db.prepare(`
+      UPDATE roleplay_resource_values SET current_value = ROUND(current_value * ?) / ?
+      WHERE workspace_id = ? AND definition_id = ? AND target_type = 'entity'
+        AND current_value IS NOT NULL AND current_value != ROUND(current_value * ?) / ?
+    `).run(factor, factor, workspaceId, definitionId, factor, factor);
   }
 
   /** Stored values above a maximum that has since dropped are brought down to it. */
@@ -1194,8 +1251,25 @@ function hydrateDefinition(row: DefinitionRow): RoleplayResourceDefinition {
     lowestEffect: String(row.lowest_effect ?? ''),
     timeRate: Number(row.time_rate ?? 0),
     timeDirection: row.time_direction === 'drains' ? 'drains' : 'recovers',
-    timePeriod: row.time_period === 'day' ? 'day' : 'hour'
+    timePeriod: row.time_period === 'day' ? 'day' : 'hour',
+    decimals: normalizeDecimals(row.decimals)
   };
+}
+
+function normalizeDecimals(value: unknown): ResourceDecimals {
+  return Number(value) === 1 ? 1 : 0;
+}
+
+// Symmetric, so a drain and a recovery of the same size round to the same amount.
+function roundToDecimals(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  const rounded = Math.sign(value) * Math.round(Math.abs(value) * factor) / factor;
+  return rounded || 0;
+}
+
+/** A value as the resource keeps it: on its decimals, then within its range. */
+function settleValue(value: number, definition: Pick<RoleplayResourceDefinition, 'minimum' | 'decimals'>, maximum: number): number {
+  return clamp(roundToDecimals(clamp(value, definition.minimum, maximum), definition.decimals), definition.minimum, maximum);
 }
 
 function hydrateChange(row: Record<string, unknown>): RoleplayResourceChange {

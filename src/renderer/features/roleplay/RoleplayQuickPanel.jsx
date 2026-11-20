@@ -11,7 +11,7 @@ import { PortraitContext, usePortraits } from '../worldbuild/portraits';
 import {
   CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
 } from './RoleplayPanelParts';
-import { describeSkillChange, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
+import { describeSkillChange, describeTimeResourceChanges, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
 import { describeSpanCheck } from '../chat/frame-format';
 import SEEDED_BY from '../../../shared/seed-provenance.json';
 
@@ -376,6 +376,7 @@ function RoleplayQuickPanel({
         presenceOf={entityId => presenceOf(entityId, scene)}
         typeLabels={typeLabels}
         resourcesOf={entityId => vitals.resources.get(entityId) || []}
+        progress={vitals.progress}
         inventoryCount={inventory.length}
         onOpen={openPanel}
       />
@@ -681,7 +682,12 @@ function groupRecentTurns(configuration) {
   };
   (configuration.sceneChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'scene' }));
   (configuration.inventoryChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'inventory' }));
-  (configuration.changes || []).forEach(change => add(change.provenanceId, { ...change, kind: 'resource' }));
+  // What story time moved joins the turn's Time entry as one line, not one entry per resource.
+  const timeResourceChanges = new Map();
+  (configuration.changes || []).forEach(change => {
+    if (change.source !== 'time' || !change.provenanceId) return add(change.provenanceId, { ...change, kind: 'resource' });
+    timeResourceChanges.set(change.provenanceId, [...(timeResourceChanges.get(change.provenanceId) || []), change]);
+  });
   const traitNames = new Map((configuration.traits || []).map(trait => [trait.id, trait.name]));
   (configuration.progressChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'progress', progressKind: change.kind, traitName: traitNames.get(change.traitId) }));
   skillChangeItems(configuration).forEach(change => add(change.provenanceId, change));
@@ -699,7 +705,7 @@ function groupRecentTurns(configuration) {
     });
   });
   frames.forEach(frame => {
-    if (frame.advance) add(frame.originId, { id: `${frame.originId}:time`, kind: 'time', status: 'applied', createdAt: frame.createdAt, frame });
+    if (frame.advance) add(frame.originId, { id: `${frame.originId}:time`, kind: 'time', status: 'applied', createdAt: frame.createdAt, frame, resourceChanges: timeResourceChanges.get(frame.originId) || [] });
   });
   return [...turns.values()]
     .filter(turn => (turn.frame || turn.manual) && turn.changes.length)
@@ -778,6 +784,9 @@ function describeRecentChange(change, names, definitions) {
     if (skipped) details.push(`Elapsed: ${skipped}.`);
     if (advance?.clamped) details.push(`Limited from a requested ${describeElapsed(advance.requestedDuration) || 'longer span'}.`);
     if (advance?.raisedToMinimum) details.push('Raised to the minimum this move costs.');
+    if (advance?.loweredToMove) details.push('Lowered to the most this move costs.');
+    const resources = describeTimeResourceChanges(change.resourceChanges, names, definitions);
+    if (resources) details.push(`Resources: ${resources}.`);
     const spanNote = describeSpanCheck(advance?.spanCheck);
     if (spanNote) details.push(spanNote.text.endsWith('.') ? spanNote.text : `${spanNote.text}.`);
     return details;

@@ -23,6 +23,20 @@ export function skillChangeItems(configuration) {
   }));
 }
 
+/**
+ * A turn's resource changes from story time, as one line: "Battery −1 (Mara), Stamina +3 (Tomas)".
+ * Empty when nothing visible moved.
+ */
+export function describeTimeResourceChanges(changes, names, definitions) {
+  const definitionNames = new Map((definitions || []).map(definition => [definition.id, definition.name]));
+  return (changes || []).flatMap(change => {
+    const delta = Math.round((change.delta ?? change.nextValue - change.previousValue) * 100) / 100;
+    if (!delta) return [];
+    const amount = `${delta > 0 ? '+' : '−'}${Math.abs(delta)}`;
+    return [`${definitionNames.get(change.definitionId) || 'Tracked state'} ${amount} (${names.get(change.entityId) || 'someone'})`];
+  }).join(', ');
+}
+
 /** Where a new character starts, as one line for the entity review. Empty when there is no profile. */
 export function startingProfileText(profile) {
   if (!profile) return '';

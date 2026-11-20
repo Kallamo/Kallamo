@@ -17,7 +17,7 @@ import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 export const EMPTY_RESOURCE = {
   name: '', key: '', description: '', color: '#dc2626', minimum: 0, maximum: 100, startsFull: true, unit: '',
   updatePolicy: 'review', enabled: true, scope: 'everyone', lowestEffect: '',
-  timeRate: 0, timeDirection: 'recovers', timePeriod: 'hour',
+  timeRate: 0, timeDirection: 'recovers', timePeriod: 'hour', decimals: 0,
   growthPerLevel: 0, refillOnLevelUp: false, aiChangesMaximum: false, maximumRule: ''
 };
 
@@ -139,6 +139,10 @@ export default function ResourceModal({ initial, levels = false, workspaceId, ap
                     <span className={subLabel}>A new holder starts</span>
                     <div><SegmentedControl label="A new holder starts" value={draft.startsFull ? 'full' : 'empty'} onChange={value => set({ startsFull: value === 'full' })} options={[{ value: 'full', label: 'Full' }, { value: 'empty', label: 'Empty' }]} /></div>
                   </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className={subLabel}>Values</span>
+                  <div><SegmentedControl label="Values" value={Number(draft.decimals) === 1 ? 'tenths' : 'whole'} onChange={value => set({ decimals: value === 'tenths' ? 1 : 0 })} options={[{ value: 'whole', label: 'Whole numbers' }, { value: 'tenths', label: 'One decimal' }]} /></div>
                 </div>
                 {!rangeValid && <p className="text-xs text-status-danger">The maximum must be above the lowest.</p>}
                 <Help>
