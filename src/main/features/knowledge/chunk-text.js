@@ -63,6 +63,19 @@ function splitLongParagraph(paragraph, maxChunkSize) {
     return pieces;
 }
 
+// The overlap carried into the next chunk starts at a sentence when that leaves a real overlap, else at a
+// word, never inside one. A stub of a sentence would be too short to find when the file is rebuilt.
+function overlapTail(chunk, size) {
+    const tail = chunk.slice(-size);
+    const sentence = tail.search(/[.!?…。！？]["'”’»)\]]*\s+\S/u);
+    if (sentence >= 0) {
+        const fromSentence = tail.slice(sentence).replace(/^[.!?…。！？"'”’»)\]\s]+/u, '').trim();
+        if (fromSentence.length >= size / 3) return fromSentence;
+    }
+    const word = tail.search(/\s\S/u);
+    return word >= 0 ? tail.slice(word).trim() : '';
+}
+
 function chunkText(text, maxChunkSize = 1000) {
     if (!text || text.trim().length === 0) return [];
 
@@ -82,7 +95,7 @@ function chunkText(text, maxChunkSize = 1000) {
                 if (currentChunk.length > 50) {
                     chunks.push(currentChunk.trim());
                 }
-                const tail = currentChunk.slice(-overlapSize).trim();
+                const tail = overlapTail(currentChunk, overlapSize);
                 currentChunk = tail.length > 0 ? tail : "";
             }
 
