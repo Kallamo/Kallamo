@@ -123,6 +123,34 @@ describe('travel category', () => {
     expect(travelCategory('tavern', 'other-city', LINKS, SIZES)).toBe('macro');
   });
 
+  test('rooms of one place are a short walk, rooms of different places never are', () => {
+    const links = [...LINKS, inside('kitchen', 'tavern'), inside('stable', 'tavern'), inside('anvil-room', 'forge')];
+    const sizes: LocationSizes = new Map([...SIZES, ['kitchen', 'spot'], ['stable', 'spot'], ['anvil-room', 'spot']]);
+
+    expect(travelCategory('kitchen', 'stable', links, sizes)).toBe('micro');
+    expect(travelCategory('kitchen', 'anvil-room', links, sizes)).toBe('local');
+    expect(travelCategory('kitchen', 'pier', links, sizes)).toBe('transit');
+  });
+
+  test('a link beside the hierarchy can shorten a trip but never lengthen one', () => {
+    const links = [...LINKS, inside('kitchen', 'tavern'), inside('stable', 'tavern'), { fromId: 'kitchen', toId: 'stable', relType: 'connected_to' }];
+    const sizes: LocationSizes = new Map([...SIZES, ['kitchen', 'spot'], ['stable', 'spot']]);
+
+    expect(travelCategory('kitchen', 'stable', links, sizes)).toBe('micro');
+    expect(travelCategory('tavern', 'other-city', [...LINKS, { fromId: 'tavern', toId: 'other-city', relType: 'connected_to' }], SIZES)).toBe('local');
+  });
+
+  test('an unsized place takes its size from what it holds and what holds it', () => {
+    const links = [...LINKS, inside('house', 'district'), inside('hall', 'house'), inside('attic', 'house')];
+    const sizes: LocationSizes = new Map([...SIZES, ['hall', 'spot'], ['attic', 'spot']]);
+
+    expect(travelCategory('hall', 'attic', links, sizes)).toBe('micro');
+    expect(travelCategory('hall', 'forge', links, sizes)).toBe('local');
+    // Nothing sized inside: what holds it says it is smaller than the area around it.
+    const bare = [...LINKS, inside('shed', 'district'), inside('loft', 'district')];
+    expect(travelCategory('shed', 'loft', bare, SIZES)).toBe('local');
+  });
+
   test('without sizes anything not directly linked stays transit', () => {
     expect(travelCategory('tavern', 'forge', LINKS)).toBe('transit');
     expect(travelCategory('tavern', 'tavern', LINKS, SIZES)).toBeNull();

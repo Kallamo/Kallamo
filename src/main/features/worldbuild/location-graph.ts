@@ -139,18 +139,54 @@ function regionClimbDepth(originId: string, parents: Map<string, string[]>, size
   return index > 0 ? index : null;
 }
 
-/** A direct link decides first; otherwise the smallest container both ends share. null without a move. */
+const SIZE_BY_RANK: Array<LocationSize | null> = [null, 'spot', 'place', 'area', 'region'];
+const TRAVEL_ORDER: TravelCategory[] = ['micro', 'local', 'transit', 'macro'];
+
+/**
+ * Sizes with the unsized filled in from their neighbours: one step above the largest sized thing
+ * inside, never above what holds them. Rooms inside an unsized house in a city make it a place.
+ */
+export function inferLocationSizes(links: LocationLink[], sizes: LocationSizes): LocationSizes {
+  const { parents, children } = buildGraph(links);
+  const inferred: LocationSizes = new Map(sizes);
+  const ids = new Set([...parents.keys(), ...children.keys()]);
+  for (let pass = 0; pass < CHAIN_LIMIT; pass += 1) {
+    let changed = false;
+    for (const id of ids) {
+      if (inferred.get(id)) continue;
+      const childRank = Math.max(0, ...(children.get(id) ?? []).map(child => locationSizeRank(inferred.get(child))));
+      const parentRank = locationSizeRank(inferred.get(parents.get(id)?.[0] ?? ''));
+      const fromChildren = childRank ? Math.min(childRank + 1, 4) : 0;
+      const rank = fromChildren && parentRank ? Math.min(fromChildren, parentRank) : fromChildren || Math.max(parentRank - 1, parentRank ? 1 : 0);
+      if (!rank) continue;
+      inferred.set(id, SIZE_BY_RANK[rank]);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  return inferred;
+}
+
+/**
+ * The smallest container both ends share sets the band. Directly inside the other is micro; a road,
+ * door or portal between them can shorten the trip to local, never lengthen it. null without a move.
+ */
 export function travelCategory(
   startId: string | null | undefined,
   endId: string | null | undefined,
   links: LocationLink[],
-  sizes: LocationSizes = new Map()
+  givenSizes: LocationSizes = new Map()
 ): TravelCategory | null {
   if (!startId || !endId || startId === endId) return null;
-  const direct = links.find(link =>
+  const direct = links.filter(link =>
     (link.fromId === startId && link.toId === endId) || (link.fromId === endId && link.toId === startId));
-  if (direct) return direct.relType === 'inside' ? 'micro' : 'local';
+  if (direct.some(link => link.relType === 'inside')) return 'micro';
+  const byHierarchy = hierarchyCategory(startId, endId, links, inferLocationSizes(links, givenSizes));
+  if (!direct.length) return byHierarchy;
+  return TRAVEL_ORDER[Math.min(TRAVEL_ORDER.indexOf(byHierarchy), TRAVEL_ORDER.indexOf('local'))];
+}
 
+function hierarchyCategory(startId: string, endId: string, links: LocationLink[], sizes: LocationSizes): TravelCategory {
   const { parents } = buildGraph(links);
   const startChain = containerChain(startId, parents);
   const endChain = containerChain(endId, parents);

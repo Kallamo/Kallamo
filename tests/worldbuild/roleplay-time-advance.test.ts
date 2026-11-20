@@ -36,7 +36,7 @@ describe('Roleplay time advance', () => {
   const matrix = () => calendarService.getTimeMatrix(db, WORKSPACE);
   const calendar = () => calendarService.getCalendar(db, WORKSPACE);
 
-  function frame(originId: string, timeAdvance: unknown, minimumMinutes = 0) {
+  function frame(originId: string, timeAdvance: unknown, minimumMinutes = 0, maximumMinutes = 0) {
     return calendarService.applyRoleplayTurnFrame(db, {
       workspaceId: WORKSPACE,
       originId,
@@ -44,7 +44,8 @@ describe('Roleplay time advance', () => {
       startLocationId: 'street',
       endLocationId: 'lookout',
       timeAdvance,
-      minimumMinutes
+      minimumMinutes,
+      maximumMinutes
     });
   }
 
@@ -111,6 +112,28 @@ describe('Roleplay time advance', () => {
 
     expect(result.advance).toMatchObject({ duration: { hours: 1, minutes: 0 } });
     expect(result.advance).not.toHaveProperty('raisedToMinimum');
+  });
+
+  test('lowers a turn that only crossed a room to the most that move costs', () => {
+    const walk = { actionType: 'walk_to_kitchen', basis: 'matrix', duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 15 }, confidence: 0.5 };
+    const result = frame('turn-room', walk, calendarService.matrixMinimumMinutes(matrix(), 'micro'), calendarService.matrixMaximumMinutes(matrix(), 'micro'));
+
+    expect(result.advance).toMatchObject({ duration: { minutes: 5 }, loweredToMove: true, requestedDuration: { minutes: 15 } });
+    // Without a ceiling (something longer happened there too) the estimate stands.
+    expect(frame('turn-room-and-meal', walk, 1).advance).toMatchObject({ duration: { minutes: 15 } });
+  });
+
+  test('a ceiling never undercuts the floor or a stated clock', () => {
+    const clock = calendarService.getRoleplayClock(db, WORKSPACE);
+    const stated = frame('turn-room-explicit', {
+      actionType: 'explicit_clock_progression', basis: 'explicit',
+      duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 5 },
+      targetPosition: { ...clock, minute: clock.minute + 5 }, confidence: 1
+    }, 1, 2);
+    expect(stated.advance).toMatchObject({ basis: 'explicit', duration: { minutes: 5 } });
+    expect(stated.advance).not.toHaveProperty('loweredToMove');
+
+    expect(frame('turn-odd-matrix', null, 10, 5).advance).toMatchObject({ duration: { minutes: 10 } });
   });
 
   /* A time the narrative actually states outranks the matrix: there the author said it. */

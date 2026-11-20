@@ -763,6 +763,26 @@ function matrixMinimumMinutes(matrix, categoryId) {
   return Math.max(0, integer(category?.minimumMinutes));
 }
 
+/** The most a Time Cost Matrix category allows, or zero when the category is not configured. */
+function matrixMaximumMinutes(matrix, categoryId) {
+  const categories = Array.isArray(matrix?.categories) ? matrix.categories : [];
+  const category = categories.find(candidate => candidate.id === categoryId);
+  return Math.max(0, integer(category?.maximumMinutes));
+}
+
+/** A turn that only moved costs at most its journey's category; a clock the narrative states outranks it. */
+function enforceMaximumAdvance(advance, maximumMinutes, calendar) {
+  if (!(maximumMinutes > 0) || !advance) return advance;
+  if (advance.basis === 'explicit' || advance.targetPosition) return advance;
+  if (durationTotalMinutes(calendar, advance.duration) <= maximumMinutes) return advance;
+  return {
+    ...advance,
+    duration: minutesToDuration(calendar, maximumMinutes),
+    loweredToMove: true,
+    requestedDuration: advance.requestedDuration || advance.duration
+  };
+}
+
 /** A journey costs at least the Time Cost Matrix minimum; a clock the narrative states outranks it. */
 function enforceMinimumAdvance(advance, minimumMinutes, calendar, actionType) {
   if (!(minimumMinutes > 0)) return advance;
@@ -789,6 +809,7 @@ function applyRoleplayTurnFrame(db, {
   endLocationId,
   timeAdvance,
   minimumMinutes = 0,
+  maximumMinutes = 0,
   minimumActionType = 'travel_between_locations'
 }) {
   const existing = db.prepare(`
@@ -802,12 +823,12 @@ function applyRoleplayTurnFrame(db, {
   const statedSpan = timeAdvance && typeof timeAdvance === 'object' ? timeAdvance.statedSpan : null;
   const statedFloor = statedSpan?.strength === 'strong' ? Math.max(0, integer(statedSpan.minutes)) : 0;
   const floorMinutes = Math.max(Math.max(0, integer(minimumMinutes)), statedFloor);
-  const normalizedAdvance = withSpanNotes(enforceMinimumAdvance(
+  const normalizedAdvance = withSpanNotes(enforceMaximumAdvance(enforceMinimumAdvance(
     normalizeTimeAdvance(timeAdvance, calendar, currentClock),
     floorMinutes,
     calendar,
     statedFloor >= Math.max(0, integer(minimumMinutes)) && statedFloor > 0 ? 'stated_time_skip' : minimumActionType
-  ), timeAdvance);
+  ), integer(maximumMinutes) > 0 && !statedFloor ? Math.max(integer(maximumMinutes), floorMinutes) : 0, calendar), timeAdvance);
   let endClock = currentClock;
   if (normalizedAdvance) {
     const nextPosition = addDuration(calendar, currentClock, normalizedAdvance.duration);
@@ -1323,6 +1344,7 @@ module.exports = {
   extractElapsedSpan,
   extractClockTarget,
   matrixMinimumMinutes,
+  matrixMaximumMinutes,
   minutesToDuration,
   adoptCalendar,
   ageAt,

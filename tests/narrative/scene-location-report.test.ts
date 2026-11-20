@@ -26,6 +26,14 @@ describe('scene location report', () => {
     expect(pending.outcome).toBe('awaiting-approval');
   });
 
+  test('says what a move cost by the map, with the ceiling only when the move was all the turn did', () => {
+    const moved = summarizeSceneLocation({ analyzed: true, fromLocationId: 'pier', change: { status: 'applied', patch: { locationId: 'residence' } } });
+    expect(describeSceneLocation({ ...moved, travel: { category: 'micro', floorMinutes: 1, ceilingMinutes: 5 } }, names))
+      .toBe("Moved from Pier to Player's Residence, a micro move: 1 to 5 minutes");
+    expect(describeSceneLocation({ ...moved, travel: { category: 'local', floorMinutes: 10, ceilingMinutes: 0 } }, names))
+      .toBe("Moved from Pier to Player's Residence, a local move: at least 10 minutes");
+  });
+
   test('names why a destination was dropped, even when the cast still changed', () => {
     const summary = summarizeSceneLocation({
       analyzed: true,
