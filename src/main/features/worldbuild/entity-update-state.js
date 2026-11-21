@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { canonicalEvidenceSignature } = require('./entity-update-coverage');
 
 function createEntityUpdateState(db) {
   const upsertEvidence = db.prepare(`
@@ -26,6 +27,9 @@ function createEntityUpdateState(db) {
         ELSE entity_update_evidence.evaluated_at
       END
   `);
+  const renameSignature = db.prepare(`
+    UPDATE entity_update_evidence SET signature = ? WHERE workspace_id = ? AND entity_id = ? AND chunk_id = ?
+  `);
   const setEvidenceState = db.prepare(`
     UPDATE entity_update_evidence
     SET state = ?, last_run_id = ?, reason = ?, evaluated_at = ?
@@ -51,8 +55,16 @@ function createEntityUpdateState(db) {
 
   function discover(workspaceId, entityId, entries) {
     const now = Date.now();
+    const stored = new Map(db.prepare(`
+      SELECT chunk_id AS chunkId, signature FROM entity_update_evidence WHERE workspace_id = ? AND entity_id = ?
+    `).all(workspaceId, entityId).map(row => [row.chunkId, row.signature]));
     db.transaction(() => {
       for (const entry of entries) {
+        const previous = stored.get(entry.chunk.id);
+        // An older signature of the same passage keeps its state instead of queueing it again.
+        if (previous && previous !== entry.signature && canonicalEvidenceSignature(previous) === entry.signature) {
+          renameSignature.run(entry.signature, workspaceId, entityId, entry.chunk.id);
+        }
         upsertEvidence.run(
           workspaceId, entityId, entry.chunk.id, entry.signature, 'discovered',
           entry.chunk.isTagged ? 'tagged' : 'mention', null, null, now, null,

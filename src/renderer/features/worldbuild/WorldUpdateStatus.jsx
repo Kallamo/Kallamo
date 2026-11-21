@@ -28,7 +28,9 @@ export default function WorldUpdateStatus({
         </div>
         <div className="mt-2 flex items-center gap-2">
           <p className="min-w-0 flex-1 truncate text-xs text-text-subtle">
-            {progress?.name ? <>Reading passages for <span className="text-text-secondary">{progress.name}</span></> : 'Finding passages to read…'}
+            {progress?.name
+              ? <>{progress.phase === 'filling-fields' ? 'Filling empty fields of' : progress.phase === 'cleaning-lore' ? 'Checking the lore of' : 'Reading passages for'} <span className="text-text-secondary">{progress.name}</span></>
+              : 'Finding passages to read…'}
           </p>
           {!stopping && <Button size="sm" variant="subtle" onClick={onStop}>Stop</Button>}
         </div>

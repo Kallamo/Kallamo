@@ -5,7 +5,9 @@ import { describe, expect, test } from 'vitest';
 const require = createRequire(import.meta.url);
 const { buildEntityUpdateSchema } = require('../../src/main/features/worldbuild/entity-update-schema');
 const { decodeEntityUpdate } = require('../../src/main/features/worldbuild/entity-update-protocol');
-const validate = new Ajv({ strict: false }).compile(buildEntityUpdateSchema());
+const ajv = new Ajv({ strict: false });
+const validate = ajv.compile(buildEntityUpdateSchema({ pass: 'narrative', causes: ['rescue', 'affection'] }));
+const validateSheet = ajv.compile(buildEntityUpdateSchema({ pass: 'canon' }));
 
 function relationship(targetRole: string) {
   return {
@@ -19,6 +21,9 @@ function relationship(targetRole: string) {
     targetRole,
     sourcePerspective: 'Dorian loves and protects Tess.',
     score: 100,
+    direction: '',
+    cause: 'affection',
+    impact: 'meaningful',
     method: '',
     accessibility: '',
     support: 'The passage identifies Tess as his daughter.',
@@ -29,6 +34,7 @@ function relationship(targetRole: string) {
 describe('entity update structured schema', () => {
   test('uses one compact provider-independent grammar', () => {
     expect(validate({ changes: [relationship('Daughter')] })).toBe(true);
+    expect(buildEntityUpdateSchema({ pass: 'narrative', causes: ['rescue', 'affection'] })).toBe(buildEntityUpdateSchema({ pass: 'narrative', causes: ['rescue', 'affection'] }));
     expect(buildEntityUpdateSchema()).toBe(buildEntityUpdateSchema());
   });
 
@@ -44,14 +50,16 @@ describe('entity update structured schema', () => {
     expect(validate({ changes: [{ ...relationship('Daughter'), label: 'Protective Father' }] })).toBe(false);
   });
 
-  test('routes history to the lore step and skills to the Rules', () => {
-    const blank = { ...relationship(''), targetRole: '', sourcePerspective: '', score: 0, targetId: '', subjectId: '', perspectiveOwnerId: '', target: '' };
+  test('routes background to the lore step and skills to the Rules', () => {
+    const sheet = { kind: 'field', key: '', value: '', target: '', targetRole: '', support: 'The passage says so.', evidence: ['E_1'] };
     const decoded = decodeEntityUpdate({ changes: [
-      { ...blank, kind: 'history', key: '', value: 'Dorian left the mines after the collapse.' },
-      { ...blank, kind: 'skill', key: 'Glass Weaving', value: 'Apprentice', target: 'Crafting', sourcePerspective: 'Shaping molten glass into thread.' },
+      { ...sheet, kind: 'history', key: 'before-story', value: 'Dorian left the mines after the collapse.' },
+      { ...sheet, kind: 'skill', key: 'Glass Weaving', value: 'Apprentice', target: 'Crafting', targetRole: 'Shaping molten glass into thread.' },
     ] });
-    expect(validate({ changes: [{ ...blank, kind: 'skill' }] })).toBe(true);
-    expect(decoded.history).toEqual([expect.objectContaining({ value: 'Dorian left the mines after the collapse.' })]);
+    expect(validateSheet({ changes: [{ ...sheet, kind: 'skill' }] })).toBe(true);
+    expect(validateSheet({ changes: [{ ...sheet, kind: 'memory' }] })).toBe(false);
+    expect(validate({ changes: [{ ...relationship('Daughter'), kind: 'skill' }] })).toBe(false);
+    expect(decoded.history).toEqual([expect.objectContaining({ era: 'before-story', value: 'Dorian left the mines after the collapse.' })]);
     expect(decoded.skills).toEqual([expect.objectContaining({ name: 'Glass Weaving', rank: 'Apprentice', parent: 'Crafting', description: 'Shaping molten glass into thread.' })]);
     expect(decoded.narrative).toEqual([]);
   });

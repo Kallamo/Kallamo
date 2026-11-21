@@ -3055,16 +3055,20 @@ ipcMain.handle('dismiss-entity-enrichment-error', async (event, { id } = {}) => 
   }
 });
 
-ipcMain.handle('enrich-entities', async (event, { workspaceId, entityIds = null } = {}) => {
+ipcMain.handle('enrich-entities', async (event, { workspaceId, entityIds = null, mode = 'update' } = {}) => {
   if (enrichState.running) return { success: false, error: 'An entity update is already running.' };
   enrichState = { running: true, workspaceId, progress: null, cancelRequested: false };
   const wc = event.sender;
   try {
-    const { enrichEntities } = require('./workflow-runner');
-    const res = await enrichEntities(workspaceId, (p) => {
+    const { enrichEntities, cleanLoreToBackground } = require('./workflow-runner');
+    const onProgress = (p) => {
       enrichState.progress = { workspaceId, ...p };
       try { wc.send('enrich-entities-progress', { workspaceId, ...p }); } catch (e) {}
-    }, { entityIds: Array.isArray(entityIds) ? entityIds : null, shouldCancel: () => enrichState.cancelRequested });
+    };
+    const options = { entityIds: Array.isArray(entityIds) ? entityIds : null, shouldCancel: () => enrichState.cancelRequested };
+    const res = mode === 'clean-lore'
+      ? { mode, ...(await cleanLoreToBackground(workspaceId, { ...options, progressCallback: onProgress })) }
+      : await enrichEntities(workspaceId, onProgress, options);
     try { wc.send('enrich-entities-complete', { workspaceId, success: true, ...res }); } catch (e) {}
     return { success: true, ...res };
   } catch (e) {

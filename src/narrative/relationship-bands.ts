@@ -175,7 +175,7 @@ export function limitRelationshipChange({ current, requested, impact, cause }: R
 export const RELATIONSHIP_SCALE_GUIDE = [
   'RELATIONSHIP SCALE. A value says how close SOURCE feels to TARGET; the same bond always sits in the same band.',
   '0: neutral, they only know of each other.',
-  '1 to 49: an ordinary relationship or a good start. -1 to -49: friction, dislike or distrust.',
+  '1 to 49: an ordinary relationship or a good start; wary cooperation sits low here. -1 to -49: friction, dislike or distrust that shows in how SOURCE acts.',
   '50 to 74: friendship. -50 to -74: open enmity.',
   '75 to 89: closeness, such as chosen family or deep trust. -75 to -89: hostility, wanting the other harmed.',
   '90 to 100: a rare, nearly unconditional bond. -90 to -100: a rare, mortal hatred.',

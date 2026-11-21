@@ -4,7 +4,7 @@ import {
   Plus, Search, BookOpen, Package, Users, EyeOff, 
   Trash2, Save, X, Pencil, Check, Link2, Globe, Tag, ScrollText, Info, Replace,
   RefreshCw, Sparkles, Upload, Download, ArrowLeft, ChevronRight, ChevronDown, MoreHorizontal, ListChecks, Loader2, Gem, 
-  NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, Gamepad2, IdCard, Landmark, Scale, Lightbulb, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
+  NotebookText, Backpack, Braces, AlertTriangle, LayoutTemplate, BookCheck, CircleHelp, ChevronLeft, UserMinus, Undo2, Crown, AlignLeft, CalendarDays, CalendarRange, Drama, GripVertical, Gamepad2, IdCard, Landmark, Scale, Lightbulb, Eraser, ListTree, LogOut, MapPinned, Merge, PencilLine, ScanEye, ScanFace, Shield, UserRound, ImagePlus, Image as ImageIcon, Crop, Flag, MapPin, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import { AiGlyph, PolicyOpenGlyph, PolicyReviewGlyph, PolicyLockedGlyph, KnowledgeGlyph, ConnectionsGlyph, OccurrencesGlyph, WorldbuildGlyph } from './ui/glyphs';
 import { useApp } from '../context/AppContext';
@@ -1393,6 +1393,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         setCreateWithAiDone({ summary: fromCreateWithAi, result: res });
         return;
       }
+      if (res.mode === 'clean-lore') {
+        const lore = res.lore || {};
+        const parts = [`${lore.proposed || 0} cleaned ${lore.proposed === 1 ? 'lore waits' : 'lores wait'} in review`];
+        if (lore.alreadyBackground) parts.push(`${lore.alreadyBackground} already only background`);
+        if (lore.allStory?.length) parts.push(`${lore.allStory.length} hold only story and were left for you: ${lore.allStory.join(', ')}`);
+        if (lore.failed) parts.push(`${lore.failed} could not be sorted`);
+        showToast(`${res.cancelled ? 'Lore check stopped' : 'Lore check complete'}: ${parts.join(', ')}.`, 'success');
+        return;
+      }
       const bits = [`${res.updated} updated`];
       if (res.staged) bits.push(`${res.staged} staged for review`);
       if (res.upToDate) bits.push(`${res.upToDate} with no unprocessed evidence`);
@@ -1406,6 +1415,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       if (res.emptyFieldSuggestions) bits.push(`${res.emptyFieldSuggestions} empty field suggestions`);
       if (res.emptyFieldsWithoutSupport) bits.push(`${res.emptyFieldsWithoutSupport} empty fields without supporting evidence`);
       if (res.emptyFieldsAwaitingEvidence) bits.push(`${res.emptyFieldsAwaitingEvidence} empty fields still awaiting deferred evidence`);
+      if (res.fieldGaps?.found) bits.push(`${res.fieldGaps.found} empty ${res.fieldGaps.found === 1 ? 'field' : 'fields'} filled from the story`);
+      if (res.fieldGaps?.absent) bits.push(`${res.fieldGaps.absent} empty ${res.fieldGaps.absent === 1 ? 'field' : 'fields'} the story does not show yet`);
+      if (res.fieldGaps?.remaining) bits.push(`${res.fieldGaps.remaining} sheets wait for the next field pass`);
       if (res.tokenUsage?.inputTokens) bits.push(`~${res.tokenUsage.inputTokens.toLocaleString()} input tokens`);
       if (res.tokenUsage?.outputTokens) bits.push(`~${res.tokenUsage.outputTokens.toLocaleString()} output tokens`);
       if (res.failed) bits.push(`${res.failed} failed`);
@@ -1448,7 +1460,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     return electronAPI.onEnrichEntitiesComplete((res) => onEnrichCompleteRef.current(res));
   }, [electronAPI]);
 
-  const runEnrichment = async (entityIds = null) => {
+  const runEnrichment = async (entityIds = null, mode = 'update') => {
     if (enriching || !workspaceId) return;
     if (!hasSystemAi) { showToast('System AI needs both an API Connection and a model in Settings → Engine & Memory.', 'error'); return; }
     enrichProgressRef.current = null;
@@ -1456,7 +1468,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     // The completion event drives the toast, reload and clearing of the progress card. Here we
     // only surface a failure to even start the run (e.g. one is already in flight).
     try {
-      const r = await electronAPI.enrichEntities(workspaceId, { entityIds: Array.isArray(entityIds) ? entityIds : undefined });
+      const r = await electronAPI.enrichEntities(workspaceId, { entityIds: Array.isArray(entityIds) ? entityIds : undefined, mode });
       if (r && r.success === false) { setEnriching(false); createWithAiFillRef.current = null; showToast(`Update failed: ${r.error || 'unknown error'}`, 'error'); }
     } catch (e) { setEnriching(false); createWithAiFillRef.current = null; showToast(`Update failed: ${e.message}`, 'error'); }
   };
@@ -2615,6 +2627,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <Menu anchorRef={moreMenuRef} open={showMoreMenu} onClose={() => setShowMoreMenu(false)} label="Worldbuild actions" className="w-64">
               <MenuItem icon={Upload} label="Import" description="Bring in a .klwb file to review." onSelect={() => { setShowMoreMenu(false); importWorld(); }} />
               <MenuItem icon={Download} label="Export" description={exportableCount ? 'Save this world as a .klwb file.' : 'Nothing to export yet.'} disabled={!exportableCount} onSelect={() => { setShowMoreMenu(false); setShowExportModal(true); }} />
+              <MenuItem icon={Eraser} label="Keep lore to background" description="Suggests taking what happens in the story out of each lore." disabled={enriching || !hasSystemAi} onSelect={() => { setShowMoreMenu(false); runEnrichment(null, 'clean-lore'); }} />
               <MenuSeparator />
               <MenuItem icon={Lightbulb} label="Take the tour" description="A one-minute look around Worldbuild." onSelect={() => { setShowMoreMenu(false); startTour('worldbuild'); }} />
             </Menu>

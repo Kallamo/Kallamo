@@ -29,7 +29,7 @@ function decodeEntityUpdate(value) {
       decoded.links[change.key].push(item);
     } else if (change.kind === 'history') {
       const statement = String(change.value || '').trim();
-      if (statement) decoded.history.push({ kind: 'history', value: statement, support, evidence });
+      if (statement) decoded.history.push({ kind: 'history', era: String(change.key || '').trim(), value: statement, support, evidence });
     } else if (change.kind === 'skill') {
       // The schema is closed, so a skill reuses the generic slots: key names it, value is the
       // rank, target its parent and sourcePerspective the meaning of a skill not yet in the catalog.
@@ -38,7 +38,8 @@ function decodeEntityUpdate(value) {
         name,
         rank: String(change.value || '').trim(),
         parent: String(change.target || '').trim(),
-        description: String(change.sourcePerspective || '').trim(),
+        // The sheet's pass has no perspective slot, so a new skill's meaning comes in targetRole there.
+        description: String(change.sourcePerspective || change.targetRole || '').trim(),
         support,
         evidence,
       });
@@ -54,6 +55,9 @@ function decodeEntityUpdate(value) {
         targetRole: String(change.targetRole || '').trim(),
         sourcePerspective: String(change.sourcePerspective || '').trim(),
         score: Number(change.score),
+        direction: String(change.direction || ''),
+        cause: String(change.cause || ''),
+        impact: String(change.impact || ''),
         method: String(change.method || ''),
         accessibility: String(change.accessibility || ''),
         support,

@@ -29,7 +29,7 @@ const {
 const {
     selectRetrievedEntries
 } = require('./features/ai-engine/retrieval-selection');
-const { normalizeRelationshipLabel, resolveRelationshipUpdate, validateNarrativeChange } = require('./features/worldbuild/entity-review');
+const { normalizeRelationshipLabel, resolveRelationshipChange, validateNarrativeChange } = require('./features/worldbuild/entity-review');
 const {
     filterUpdateFields,
     filterUpdateRelations,
@@ -38,7 +38,9 @@ const {
     isWeakTextReplacement,
     comparableText,
 } = require('./features/worldbuild/entity-update-contract');
-const { buildEntityUpdateSchema, buildEntityLoreSchema } = require('./features/worldbuild/entity-update-schema');
+const { NARRATIVE_KINDS, buildEntityUpdateSchema, buildEntityLoreSchema, buildLoreCleanupSchema } = require('./features/worldbuild/entity-update-schema');
+const { buildCanonSystemPrompt, buildNarrativeSystemPrompt } = require('./features/worldbuild/entity-update-prompts');
+const { createMemoryIndex } = require('./features/worldbuild/entity-update-memories');
 const {
     ENRICH_ENUMS,
     ENRICH_FIELDS,
@@ -48,9 +50,10 @@ const {
 } = require('./features/worldbuild/entity-fields');
 const { decodeEntityUpdate, isEntityUpdateShape } = require('./features/worldbuild/entity-update-protocol');
 const { buildLorePrompt, buildLoreAppendPrompt, buildSpoilerRetryNote, validateEntityLore, validateEntityLoreAppend } = require('./features/worldbuild/entity-lore');
-const { precedingPassageText, memorySummaries, entitySkillContext } = require('./features/worldbuild/entity-update-context');
+const { precedingPassageText, entitySkillContext } = require('./features/worldbuild/entity-update-context');
 const { buildNarrativeOptionPalette } = require('./features/worldbuild/narrative-options');
 const { createEntityUpdateState } = require('./features/worldbuild/entity-update-state');
+const { createStoryCoverage } = require('./features/worldbuild/entity-update-coverage');
 const { shouldStopEntityUpdates } = require('./features/worldbuild/entity-update-resilience');
 const { NARRATIVE_TRIAGE_SCHEMA, NARRATIVE_MECHANICS_SCHEMA, NARRATIVE_STORY_SCHEMA } = require('../../dist-main/main/features/narrative/narrative-state-schema');
 const {
@@ -59,6 +62,7 @@ const {
 const { findByReference } = require('../../dist-main/main/features/narrative/rule-keys');
 const { missingSpoilers } = require('../../dist-main/shared/spoilers');
 const { RELATIONSHIP_SCALE_GUIDE } = require('../../dist-main/narrative/relationship-bands');
+const { DURABLE_RELATIONSHIP_CAUSES } = require('../../dist-main/narrative/narrative-taxonomy');
 const {
     EPISTEMIC_DOMAINS,
     MECHANICAL_DOMAINS,
@@ -2434,8 +2438,8 @@ const ENRICH_RELATION_GUIDANCE = {
     'Characters.race': 'Only an explicitly established ancestry, species, lineage, or people.',
     'Creatures.species': 'Only an explicitly established species or kind this specific being belongs to, never a resemblance or comparison.',
     'Characters.factions': 'Only explicit membership or formal allegiance, not cooperation, employment, sympathy, or proximity.',
-    'Characters.livesIn': 'Only where this character explicitly lives now: a home, lodging, or settlement of residence. Not where they were born, work, or are visiting in one scene.',
-    'Characters.worksAt': 'Only an explicit current job or service: the place or faction this character works at or for. Formal membership is a faction, not work.',
+    'Characters.livesIn': 'Where this character lives now, as specific as the passages allow: the house, inn, room or building rather than the city it stands in. Stated or shown again and again (they sleep there, keep their room there, come home there). Not where they were born, work, or visit in one scene, and not a home they left.',
+    'Characters.worksAt': 'Where or for whom this character works now, as specific as the passages allow: the workshop, inn or post rather than the city it stands in. A job, trade or service stated or shown again and again (they run, staff or serve that place or faction). Never a former employer, nor a group they left, deserted, were captured from or turned against. Formal membership is a faction, not work. A Works at link already on the record without a job is returned again with its job.',
     'Characters.locations': 'Only another persistent meaningful tie to a place that is neither home nor work, such as birthplace, a place they rule or guard, or an established haunt; not presence in one scene.',
     'Characters.relationships': 'Only an explicitly established directional personal relationship. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
     'Creatures.relationships': 'Only an explicitly established directional personal relationship involving a specific creature. targetRole states what TARGET is to SOURCE. value and sourcePerspective state how SOURCE feels about and relates to TARGET.',
@@ -2464,8 +2468,9 @@ const ENRICH_RELATION_DIRECTION = {
 
 const ENTITY_ENRICHMENT_SCHEMA_VERSION = 'semantic-v8-field-coverage';
 
-function entityEnrichmentSignature(chunk, fieldCoverageSignature) {
-    return `${ENTITY_ENRICHMENT_SCHEMA_VERSION}:${fieldCoverageSignature}:${chunk.isTagged ? 'tagged' : 'text'}:${chunk.contentHash}`;
+// A passage is read again only when its text or strength changes; empty fields have a pass of their own.
+function entityEnrichmentSignature(chunk) {
+    return `${ENTITY_ENRICHMENT_SCHEMA_VERSION}:${chunk.isTagged ? 'tagged' : 'text'}:${chunk.contentHash}`;
 }
 
 function enrichFieldsForEntity(entity) {
@@ -5581,6 +5586,32 @@ function logEntityUpdateFailure(entity, attempt, failure, result) {
     );
 }
 
+const PLACE_LINKS = new Set(['livesIn', 'worksAt']);
+
+// Where someone lives or works must be named by its own support; a city chosen over a place inside
+// it that the support also names moves to the inner place, the most specific one.
+function placeLinkTarget({ targetId, support, candidates }) {
+    const target = entitiesStore.getEntity(targetId);
+    if (!target || !textMentionsEntity(support, entityMentionNames(target))) return null;
+    if (target.type !== 'Locations') return target;
+    const parentOf = id => entitiesStore.getLinksFrom(id, 'inside')[0]?.entity?.id || null;
+    const depthInside = id => {
+        let depth = 0;
+        for (let at = parentOf(id); at && depth < 12; at = parentOf(at)) {
+            depth += 1;
+            if (at === targetId) return depth;
+        }
+        return 0;
+    };
+    let best = target, bestDepth = 0;
+    for (const candidate of candidates) {
+        if (candidate.type !== 'Locations' || candidate.id === targetId || !textMentionsEntity(support, entityMentionNames(candidate))) continue;
+        const depth = depthInside(candidate.id);
+        if (depth > bestDepth) { best = candidate; bestDepth = depth; }
+    }
+    return best;
+}
+
 // `from: 'target'` means the edge starts at the linked entity. Enrichment only links
 // existing entities; it never creates them.
 const ENRICH_RELATIONS = {
@@ -5588,7 +5619,7 @@ const ENRICH_RELATIONS = {
         { key: 'race',          label: 'Race',         relType: 'is_race',      targetType: 'Races',      from: 'self',   single: true },
         { key: 'factions',      label: 'Faction',      relType: 'member_of',    targetType: 'Factions',   from: 'self',   single: false },
         { key: 'livesIn',       label: 'Lives in',     relType: 'lives_in',     targetType: 'Locations',  from: 'self',   single: true },
-        { key: 'worksAt',       label: 'Works at',     relType: 'works_at',     targetTypes: ['Locations', 'Factions'], from: 'self', single: false },
+        { key: 'worksAt',       label: 'Works at',     relType: 'works_at',     targetTypes: ['Locations', 'Factions'], from: 'self', single: false, labeled: true, roleMeaning: 'the job SOURCE does there, in one to three words' },
         { key: 'locations',     label: 'Tied to',      relType: 'connected_to', targetType: 'Locations',  from: 'self',   single: false },
         { key: 'relationships', label: 'Relationship', relType: 'related_to', targetTypes: ['Characters', 'Creatures'], from: 'self', single: false, labeled: true, detailed: true },
     ],
@@ -5635,7 +5666,7 @@ function currentRelationship(ownerId, targetId) {
     return link ? { title: link.label || '', value: Number(link.metadata?.value || 0), description: String(link.metadata?.description || '') } : null;
 }
 
-function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEntities, evidenceEntries, interpreterId }) {
+async function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEntities, evidenceEntries, interpreterId, memoryIndex }) {
     if (!Array.isArray(changes) || !changes.length) return null;
     const entityByName = new Map();
     for (const candidate of allEntities) {
@@ -5646,19 +5677,8 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
     }
     const entityIds = new Set(allEntities.map(candidate => candidate.id));
     const resolveTarget = (id, name) => entityIds.has(id) ? id : entityByName.get(entitiesStore.normalizeName(name)) || null;
-    const recordedMemories = new Map();
-    const memoriesOf = ownerId => {
-        if (!recordedMemories.has(ownerId)) {
-            recordedMemories.set(ownerId, loadNarrativeRecords(workspaceId, ['memory'], [ownerId])
-                .map(({ payload }) => comparableText(payload.summary)).filter(Boolean));
-        }
-        return recordedMemories.get(ownerId);
-    };
-    // The same past event, told again with fewer or the same words, is not a new memory.
-    const isKnownMemory = (ownerId, summary) => {
-        const text = comparableText(summary);
-        return memoriesOf(ownerId).some(known => known === text || known.includes(text) || (text.length > 40 && text.includes(known)));
-    };
+    // The same scene, told again in any words, is not a new memory; held and pending memories both count.
+    const isKnownMemory = async (ownerId, summary) => (await memoryIndex.isDuplicate(ownerId, summary)).duplicate;
     const operationsByOwner = new Map();
     const memoryScenes = new Set();
     const evidenceText = new Map(evidenceEntries.map(entry => [entry.id, String(entry.chunk.text || '')]));
@@ -5693,8 +5713,8 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
             const targetId = resolveTarget(change.targetId, change.target);
             if (targetId && targetId !== ownerId) operations.push({ type: 'awareness', subjectId: ownerId, targetId, confidence });
         } else if (change.kind === 'memory' && change.value) {
-            if (isKnownMemory(ownerId, change.value) || !acceptsMemory(ownerId, change.evidence)) continue;
-            memoriesOf(ownerId).push(comparableText(change.value));
+            if (await isKnownMemory(ownerId, change.value) || !acceptsMemory(ownerId, change.evidence)) continue;
+            memoryIndex.remember(ownerId, change.value);
             const relatedId = resolveTarget(change.targetId, change.target);
             operations.push({ type: 'memory', subjectId: ownerId, summary: change.value, salience: 0.8, accessibility, relatedEntityIds: relatedId && relatedId !== ownerId ? [relatedId] : [] });
         } else if (change.kind === 'knowledge' || change.kind === 'belief') {
@@ -5703,8 +5723,8 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
             // What the subject did or lived through belongs to their memories, not to what they know
             // about the world: a character never learns their own deeds.
             if (change.kind === 'knowledge' && (aboutId === ownerId || method === 'participant')) {
-                if (isKnownMemory(ownerId, change.value) || !acceptsMemory(ownerId, change.evidence)) continue;
-                memoriesOf(ownerId).push(comparableText(change.value));
+                if (await isKnownMemory(ownerId, change.value) || !acceptsMemory(ownerId, change.evidence)) continue;
+                memoryIndex.remember(ownerId, change.value);
                 operations.push({ type: 'memory', subjectId: ownerId, summary: change.value, salience: 0.8, accessibility, relatedEntityIds: aboutId !== ownerId ? [aboutId] : [] });
                 if (operations.length) operationsByOwner.set(ownerId, operations);
                 continue;
@@ -5720,19 +5740,28 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
             const current = currentRelationship(ownerId, targetId);
             const title = normalizeRelationshipLabel(change.targetRole);
             if (!title && !current?.title) continue;
-            const update = resolveRelationshipUpdate(current, { title, value: change.score, description: change.sourcePerspective });
+            const update = resolveRelationshipChange(current, {
+                title,
+                score: change.score,
+                description: change.sourcePerspective,
+                direction: change.direction,
+                cause: change.cause,
+                impact: change.impact,
+            });
             if (!update) continue;
+            const { cause, ...relationship } = update;
             operations.push({
                 type: 'relationship',
                 sourceEntityId: ownerId,
                 targetEntityId: targetId,
-                dimension: change.key || 'overall',
-                ...update,
+                dimension: 'overall',
+                ...relationship,
             });
         }
         if (operations.length) operationsByOwner.set(ownerId, operations);
     }
     if (!operationsByOwner.size) return null;
+    const operationCount = [...operationsByOwner.values()].reduce((total, operations) => total + operations.length, 0);
     const evidenceIds = new Set(changes.flatMap(change => change.evidence || []));
     const excerpt = evidenceEntries
         .filter(entry => evidenceIds.has(entry.id))
@@ -5764,7 +5793,7 @@ function submitEntityNarrativeSuggestions({ workspaceId, entity, changes, allEnt
         });
         if (result.record) records.push(result.record);
     }
-    return records.length ? { record: records[0], records } : null;
+    return records.length ? { record: records[0], records, operationCount } : null;
 }
 
 // Creature targets are specific beings, unless the relation points at a species.
@@ -5886,7 +5915,7 @@ async function loadConstantMemoryChunks(workspaceId) {
     try {
         for (const block of JSON.parse(row.memoryBlocks || '[]')) {
             if (block.strategy !== 'constant' || block.enabled === false) continue;
-            sources.push({ key: `memory:${block.id}`, source: block.title || block.source || 'Constant Memory', text: block.summary || block.text || '', createdAt: block.createdAt || 0 });
+            sources.push({ key: `memory:${block.id}`, source: block.title || block.source || 'Constant Memory', text: block.summary || block.text || '', createdAt: block.createdAt || 0, isRecap: true });
         }
     } catch (error) { console.warn('[Enrich] Could not read constant memory blocks:', error.message); }
     try {
@@ -5901,7 +5930,7 @@ async function loadConstantMemoryChunks(workspaceId) {
     } catch (error) { console.warn('[Enrich] Could not read full-context memory files:', error.message); }
     return sources.flatMap(source => chunkText(String(source.text || ''), 800).map((text, index) => {
         const id = `virtual_memory_${crypto.createHash('sha256').update(`${workspaceId}:${source.key}:${index}`).digest('hex')}`;
-        return { id, text, source: source.source, createdAt: source.createdAt + index, contentHash: crypto.createHash('sha256').update(text).digest('hex'), evidenceSource: 'Memory', isTagged: false };
+        return { id, text, source: source.source, createdAt: source.createdAt + index, contentHash: crypto.createHash('sha256').update(text).digest('hex'), evidenceSource: 'Memory', isTagged: false, isRecap: Boolean(source.isRecap) };
     }));
 }
 
@@ -5910,7 +5939,7 @@ async function loadConstantMemoryChunks(workspaceId) {
 // What the last reading found, per workspace, so applying never needs the passages sent back.
 const sourceImportSessions = new Map();
 // Imported passages are deleted when the fill ends, so a sheet keeps reading until none is left.
-const MAX_EXTRA_ENTITY_PASSES = 8;
+const MAX_EXTRA_ENTITY_PASSES = 3;
 
 // Only names and types are read here; nothing is written until the list is applied.
 async function discoverImportSources(workspaceId, sources, { onProgress = null, shouldCancel = null } = {}) {
@@ -6106,6 +6135,467 @@ function discardImportSession(workspaceId) {
 
 // aiPolicy: 'open' applies directly, 'review' stages into data._enrichPending without
 // touching live values, 'locked' is skipped. One entity failing never aborts the run.
+// What to look for when a field is empty, as a search for the passages that would show it.
+const FIELD_GAP_CUES = {
+    gender: 'gender and the pronouns used for them',
+    age: 'age, how many years old',
+    appearance: 'appearance: face, hair, eyes, build, height, how they dress',
+    personality: 'personality, temperament and habits',
+    status: 'alive, dead or missing',
+    description: 'what it is like, description',
+    locationType: 'what kind of place it is',
+    size: 'how large the place is',
+    itemType: 'what kind of object it is',
+    abundance: 'how common or rare it is',
+    disposition: 'hostile, wary or friendly toward people',
+    nature: 'what kind of being it is',
+    threat: 'how dangerous it is',
+    abilities: 'abilities and powers',
+    kind: 'what kind of event it was',
+    'link.livesIn': 'where they live, their home or room, where they sleep',
+    'link.worksAt': 'where they work, their job or trade, who they work for',
+    'link.race': 'race, species or people they belong to',
+};
+const FIELD_GAP_LINKS = { Characters: ['livesIn', 'worksAt', 'race'] };
+const FIELD_GAP_PER_FIELD = 3;
+const FIELD_GAP_BUDGET = 3500;
+// One run fills at most this many sheets, the best documented first; the rest wait for the next run.
+const FIELD_GAP_MAX_SHEETS = 30;
+
+// Reads the passages that best show each empty field of the sheets given, whatever was read before,
+// and asks one answer per field: found or absent. An absent answer is remembered with the passages
+// it saw, so the field is asked again only when something new about it appears.
+async function fillEntityFieldGaps({ workspaceId, entityIds, candidatesByEntity, runId, updateState, passTokens, shouldCancel = null, progressCallback = null }) {
+    const outcome = { examined: 0, found: 0, absent: 0, sheets: 0, remaining: 0 };
+    if (!entityIds.length) return outcome;
+    const ordered = [...entityIds].sort((left, right) => (candidatesByEntity.get(right)?.length || 0) - (candidatesByEntity.get(left)?.length || 0));
+    const systemAi = getSystemAiConfiguration().systemAi;
+    if (!systemAi) return outcome;
+    const { apiProfileId, model } = systemAi;
+    const { buildFieldGapSystemPrompt } = require('./features/worldbuild/entity-update-prompts');
+    const { buildFieldGapSchema } = require('./features/worldbuild/entity-update-schema');
+    const systemPrompt = buildFieldGapSystemPrompt({ languageInstruction: getSystemLanguageInstruction(), sourceLanguageInstruction: getSourceLanguageInstruction() });
+    const localEmbeddings = (readAdvancedSettings().embeddingEngine || 'local') === 'local';
+    const all = entitiesStore.listEntities({ workspaceId });
+    const readChecks = db.prepare('SELECT field_key AS key, evidence_signature AS signature, result FROM entity_field_checks WHERE workspace_id = ? AND entity_id = ?');
+    const writeCheck = db.prepare(`
+        INSERT INTO entity_field_checks (workspace_id, entity_id, field_key, evidence_signature, result, checked_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id, entity_id, field_key) DO UPDATE SET
+          evidence_signature = excluded.evidence_signature, result = excluded.result, checked_at = excluded.checked_at
+    `);
+    const vectorOf = db.prepare('SELECT vector FROM knowledge_chunks WHERE id = ?');
+    const customDefinitions = db.prepare(`
+        SELECT field_key AS key, label, value_type AS valueType, options_json AS optionsJson,
+          constraints_json AS constraintsJson, ai_access AS aiAccess, ai_guidance AS aiGuidance
+        FROM worldbuild_field_definitions WHERE workspace_id = ? AND type_id = ? AND ai_access = 'read-write'
+        ORDER BY position, field_id
+    `);
+    const entityLabels = loadEntityLabels(workspaceId);
+    const cosine = (left, right) => left.reduce((sum, value, index) => sum + value * (right[index] || 0), 0);
+
+    for (let index = 0; index < ordered.length; index++) {
+        if (shouldCancel?.()) break;
+        if (outcome.sheets >= FIELD_GAP_MAX_SHEETS) {
+            outcome.remaining = ordered.length - index;
+            break;
+        }
+        const ent = entitiesStore.getEntity(ordered[index]);
+        if (!ent || ent.status === 'proposed' || (ent.data?.aiPolicy || 'review') === 'locked') continue;
+        const chunks = (candidatesByEntity.get(ent.id) || []).filter(chunk => chunk.text);
+        if (!chunks.length) continue;
+        if (progressCallback) progressCallback({ phase: 'filling-fields', done: index, total: ordered.length, name: ent.canonicalName, entityId: ent.id });
+
+        const allowed = enrichFieldsForEntity(ent);
+        const writableCustom = customDefinitions.all(workspaceId, ent.type).map(row => ({
+            ...row,
+            options: row.optionsJson ? JSON.parse(row.optionsJson) : [],
+            constraints: row.constraintsJson ? JSON.parse(row.constraintsJson) : {},
+        }));
+        const { emptyFields } = buildFieldCoverage(ent, allowed, writableCustom);
+        // A field already waiting in the review is not asked again.
+        const staged = ent.data?._enrichPending || {};
+        const stagedLinkKeys = new Set((staged.links || []).map(link => link.relKey));
+        const gaps = emptyFields.filter(key => !staged.data?.[key]).map(key => {
+            if (key.startsWith('customFields.')) {
+                const field = writableCustom.find(item => `customFields.${item.key}` === key);
+                return field ? { key, label: field.label, cue: `${field.label}${field.aiGuidance ? `: ${field.aiGuidance}` : ''}`, custom: field } : null;
+            }
+            return { key, label: key, cue: FIELD_GAP_CUES[key] || key };
+        }).filter(Boolean);
+        const relSpecs = enrichRelationsForEntity(ent);
+        for (const relKey of FIELD_GAP_LINKS[ent.type] || []) {
+            const spec = relSpecs.find(item => item.key === relKey);
+            if (!spec || stagedLinkKeys.has(relKey)) continue;
+            const existing = [...existingLinksByTarget(ent.id, spec).values()];
+            if (!existing.length) {
+                gaps.push({ key: `link.${relKey}`, label: spec.label, cue: FIELD_GAP_CUES[`link.${relKey}`] || spec.label, spec });
+                continue;
+            }
+            // A place already linked can still miss what the character does there.
+            if (!spec.labeled) continue;
+            for (const link of existing.filter(item => !item.label)) {
+                gaps.push({ key: `job.${relKey}.${link.entity.id}`, label: `Job at ${link.entity.canonicalName}`, cue: `their job or trade at ${link.entity.canonicalName}`, spec, link });
+            }
+        }
+        if (!gaps.length) continue;
+
+        // The passages that best answer each field, by meaning when the local model is in use.
+        const vectors = new Map();
+        if (localEmbeddings) {
+            for (const chunk of chunks) {
+                try {
+                    const vector = JSON.parse(vectorOf.get(chunk.id)?.vector || 'null');
+                    if (Array.isArray(vector) && vector.length) vectors.set(chunk.id, vector);
+                } catch { /* a passage without a vector is ranked by position */ }
+            }
+        }
+        const picks = new Map();
+        for (const gap of gaps) {
+            let chosen = [];
+            if (vectors.size) {
+                try {
+                    const query = await generateEmbeddingVector(`${ent.canonicalName}: ${gap.cue}`, true);
+                    chosen = chunks
+                        .filter(chunk => vectors.has(chunk.id))
+                        .map(chunk => ({ chunk, score: cosine(query, vectors.get(chunk.id)) }))
+                        .sort((left, right) => right.score - left.score)
+                        .slice(0, FIELD_GAP_PER_FIELD)
+                        .map(item => item.chunk);
+                } catch (error) {
+                    console.warn('[Field gaps] Search by meaning failed:', error.message);
+                }
+            }
+            if (!chosen.length) chosen = [...chunks.slice(0, 1), ...chunks.slice(-2)];
+            picks.set(gap.key, chosen);
+        }
+        const selected = [];
+        let budget = 0;
+        for (let rank = 0; rank < FIELD_GAP_PER_FIELD; rank++) {
+            for (const gap of gaps) {
+                const chunk = picks.get(gap.key)[rank];
+                if (!chunk || selected.includes(chunk)) continue;
+                const cost = estimateTokens(chunk.text);
+                if (budget + cost > FIELD_GAP_BUDGET && selected.length) continue;
+                selected.push(chunk);
+                budget += cost;
+            }
+        }
+        selected.sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
+        const signatureOf = gap => crypto.createHash('sha256')
+            .update(picks.get(gap.key).filter(chunk => selected.includes(chunk)).map(chunk => `${chunk.id}:${chunk.contentHash || ''}`).sort().join('|'))
+            .digest('hex').slice(0, 24);
+        const checks = new Map(readChecks.all(workspaceId, ent.id).map(row => [row.key, row]));
+        const asked = gaps.filter(gap => {
+            const check = checks.get(gap.key);
+            return !(check && check.result === 'absent' && check.signature === signatureOf(gap));
+        });
+        if (!asked.length) continue;
+
+        const prefix = crypto.randomBytes(2).toString('hex');
+        const entries = selected.map((chunk, position) => ({
+            id: `F_${prefix}_${position + 1}`,
+            chunk,
+            prompt: `[F_${prefix}_${position + 1} | ${chunk.evidenceSource || 'Story'}: ${chunk.source || 'Untitled'}]\n${chunk.text}`,
+        }));
+        const evidenceText = entries.map(entry => entry.prompt).join('\n\n');
+        const linkCandidates = new Map();
+        const fieldLines = asked.map(gap => {
+            if (gap.link) return `- ${gap.key} (${gap.label}): the job ${ent.canonicalName} does at ${gap.link.entity.canonicalName}, in one to three words. Only a job, trade or service shown there again and again.`;
+            if (gap.spec) {
+                const names = relationCandidates(all, ent, gap.spec)
+                    .filter(candidate => textMentionsEntity(evidenceText, entityMentionNames(candidate)))
+                    .map(candidate => candidate.canonicalName);
+                linkCandidates.set(gap.key, names);
+                const guidance = ENRICH_RELATION_GUIDANCE[`${ent.type}.${gap.spec.key}`] || '';
+                const shape = gap.spec.labeled ? 'a list of two: the candidate name and the job there in one to three words' : 'one candidate name';
+                return `- ${gap.key} (${gap.label}): ${shape}${names.length ? `, the candidate from [${names.join(', ')}]` : ' (no candidate appears: answer absent)'}. ${guidance}`;
+            }
+            if (gap.custom) return `- ${gap.key} (${gap.label}): ${customFieldPromptShape(gap.custom)}. ${gap.custom.aiGuidance || `Only the meaning expressed by “${gap.label}”.`}`;
+            const shape = ENRICH_ENUMS[gap.key] ? `one of [${ENRICH_ENUMS[gap.key].join(', ')}]` : 'a concise literal value';
+            return `- ${gap.key}: ${shape}. ${ENRICH_FIELD_GUIDANCE[gap.key] || ''}`;
+        });
+        const currentData = {};
+        for (const field of allowed) if (ent.data?.[field] != null && String(ent.data[field]).trim()) currentData[field] = ent.data[field];
+        const prompt = `RECORD: ${ent.canonicalName} (${ent.type.replace(/s$/, '')})\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
+            `ENTITY TYPE CONTRACT:\n${ENRICH_TYPE_GUIDANCE[ent.type] || 'A persistent canonical world entity.'}\n` +
+            (ent.lore ? `Lore (background): ${String(ent.lore).slice(0, 2400)}\n` : '') +
+            (Object.keys(currentData).length ? `Filled fields: ${JSON.stringify(currentData)}\n` : '') +
+            `\nEMPTY FIELDS (answer each one):\n${fieldLines.join('\n')}\n` +
+            `\nPASSAGES:\n${evidenceText}`;
+
+        let result;
+        try {
+            const systemText = entityLabels.encode(systemPrompt);
+            result = await sendApiRequest({
+                apiProfileId, model,
+                systemPrompt: systemText,
+                chatHistory: [],
+                newPrompt: entityLabels.encode(prompt),
+                temperature: 0.1,
+                maxTokens: Math.min(4000, 400 + asked.length * 300),
+                maxPayloadTokens: workspacePayloadTokens(workspaceId),
+                keepSpoilerMarkers: true,
+                jsonMode: true,
+                jsonSchema: buildFieldGapSchema(),
+                includeResponseMetadata: true,
+                promptCache: { policy: 'conversation', scopeId: `entity-update-fields:${workspaceId}`, ttl: '5m', stable: systemText, volatile: '' },
+            });
+        } catch (error) {
+            console.warn(`[Field gaps] ${ent.canonicalName} failed:`, cleanErrorMessage(error));
+            continue;
+        }
+        const tokens = passTokens.get(ent.id) || { input: 0, output: 0 };
+        tokens.input += result.inputTokens || estimateTokens(`${systemPrompt}\n${prompt}`);
+        tokens.output += result.outputTokens || estimateTokens(result.content);
+        passTokens.set(ent.id, tokens);
+        updateState.updateJob(runId, ent.id, { input_tokens: tokens.input, output_tokens: tokens.output });
+        const countFound = () => {
+            tokens.proposals = (tokens.proposals || 0) + Object.keys(proposedData).length + proposedLinks.length;
+            updateState.updateJob(runId, ent.id, { proposals_created: tokens.proposals });
+        };
+        const answer = parseEntityUpdateObject(entityLabels.decode(result.content)).value;
+        const answers = Array.isArray(answer?.fields) ? answer.fields : [];
+        outcome.sheets++;
+        const validIds = new Set(entries.map(entry => entry.id));
+        const proposedData = {};
+        const proposedLinks = [];
+        const now = Date.now();
+        for (const gap of asked) {
+            outcome.examined++;
+            const reply = answers.find(item => item && item.key === gap.key);
+            const evidence = (Array.isArray(reply?.evidence) ? reply.evidence : []).map(String).filter(id => validIds.has(id));
+            const support = String(reply?.support || '').trim();
+            let accepted = false;
+            if (reply?.status === 'found' && evidence.length && support) {
+                const raw = decodeEntityUpdate({ changes: [{ kind: 'field', key: gap.key, value: reply.value, support, evidence }] }).data[gap.key]?.value;
+                if (gap.link) {
+                    const job = normalizeRelationshipLabel(Array.isArray(raw) ? raw[0] : raw);
+                    if (job) {
+                        proposedLinks.push({ relKey: gap.spec.key, relLabel: gap.spec.label, relType: gap.spec.relType, from: gap.spec.from, single: !!gap.spec.single, label: job, metadata: undefined, existingLinkId: gap.link.linkId, targetId: gap.link.entity.id, targetName: gap.link.entity.canonicalName, evidence, support });
+                        accepted = true;
+                    }
+                } else if (gap.spec) {
+                    const [rawName, rawJob] = Array.isArray(raw) ? raw : [raw, ''];
+                    const name = String(rawName || '').trim();
+                    const allowedNames = linkCandidates.get(gap.key) || [];
+                    const chosen = allowedNames.some(candidate => foldText(candidate) === foldText(name)) ? resolveRelationTarget(name, gap.spec, workspaceId) : null;
+                    const place = chosen && chosen !== ent.id
+                        ? (PLACE_LINKS.has(gap.spec.key) ? placeLinkTarget({ targetId: chosen, support, candidates: relationCandidates(all, ent, gap.spec) }) : entitiesStore.getEntity(chosen))
+                        : null;
+                    if (place) {
+                        const label = gap.spec.labeled ? normalizeRelationshipLabel(rawJob) : null;
+                        proposedLinks.push({ relKey: gap.spec.key, relLabel: gap.spec.label, relType: gap.spec.relType, from: gap.spec.from, single: !!gap.spec.single, label, metadata: undefined, existingLinkId: undefined, targetId: place.id, targetName: place.canonicalName, evidence, support });
+                        accepted = true;
+                    }
+                } else if (gap.custom) {
+                    const isNumeric = gap.custom.valueType === 'number' || gap.custom.valueType === 'range';
+                    const value = isNumeric && isUnsupportedNumericDelta(raw, support) ? undefined : normalizeCustomProposalValue(raw, gap.custom, workspaceId);
+                    if (value !== undefined) {
+                        proposedData[gap.key] = { value, evidence, support, fieldLabel: gap.label };
+                        accepted = true;
+                    }
+                } else {
+                    let value = String(raw ?? '').trim();
+                    if (ENRICH_ENUMS[gap.key]) value = ENRICH_ENUMS[gap.key].find(option => option.toLowerCase() === value.toLowerCase()) || '';
+                    if (gap.key === 'age' && isUnsupportedNumericDelta(value, support)) value = '';
+                    if (value) {
+                        proposedData[gap.key] = { value, evidence, support };
+                        accepted = true;
+                    }
+                }
+            }
+            if (accepted) outcome.found++;
+            else outcome.absent++;
+            writeCheck.run(workspaceId, ent.id, gap.key, signatureOf(gap), accepted ? 'found' : 'absent', now);
+        }
+        if (!Object.keys(proposedData).length && !proposedLinks.length) continue;
+        const used = entries.filter(entry => [...Object.values(proposedData), ...proposedLinks].some(item => item.evidence.includes(entry.id)));
+        stageSheetProposals({ workspaceId, entity: ent, proposedData, proposedLinks, evidenceEntries: used, runId });
+        countFound();
+    }
+    return outcome;
+}
+
+// A lore's sentences, keeping a spoiler span whole even when it holds several sentences.
+function splitLoreSentences(lore) {
+    const paragraphs = String(lore || '').split(/\n\s*\n/).map(paragraph => paragraph.trim()).filter(Boolean);
+    const sentences = [];
+    paragraphs.forEach((paragraph, paragraphIndex) => {
+        let open = '';
+        for (const piece of paragraph.split(/(?<=[.!?…])\s+/)) {
+            open = open ? `${open} ${piece}` : piece;
+            if (((open.match(/\|\|/g) || []).length % 2) === 0) {
+                sentences.push({ paragraph: paragraphIndex, text: open });
+                open = '';
+            }
+        }
+        if (open) sentences.push({ paragraph: paragraphIndex, text: open });
+    });
+    return sentences;
+}
+
+// Sorts the sentences a lore update adds into background and story, and returns the new lore
+// without the story ones, or null when no background is left to add.
+async function keepBackgroundSentences({ entity, currentLore, nextLore, classify }) {
+    const { buildLoreCleanupSystemPrompt } = require('./features/worldbuild/entity-update-prompts');
+    const flat = text => String(text || '').replace(/\s+/g, ' ').trim();
+    const held = flat(currentLore);
+    const sentences = splitLoreSentences(nextLore);
+    const added = sentences.filter(sentence => !held.includes(flat(sentence.text)));
+    if (!added.length) return null;
+    const prompt = `RECORD: ${entity.canonicalName} (${entity.type.replace(/s$/, '')})\n` +
+        `LORE SENTENCES:\n${added.map((sentence, position) => `${position + 1}. ${sentence.text}`).join('\n')}`;
+    let answer = null;
+    try {
+        const result = await classify(buildLoreCleanupSystemPrompt({ languageInstruction: getSystemLanguageInstruction() }), prompt, 300 + added.length * 12);
+        answer = parseEntityUpdateObject(result.content).value;
+    } catch (error) {
+        console.warn(`[Entity Update] The new lore of ${entity.canonicalName} could not be sorted:`, cleanErrorMessage(error));
+    }
+    const keep = new Set((Array.isArray(answer?.keep) ? answer.keep : []).map(Number));
+    // Unsorted additions are not trusted: the lore stays as it is.
+    const dropped = new Set(added.filter((_, position) => !keep.has(position + 1)));
+    if (dropped.size === added.length) return null;
+    const out = [];
+    for (const sentence of sentences) {
+        if (dropped.has(sentence)) continue;
+        const last = out[out.length - 1];
+        if (last && last.paragraph === sentence.paragraph) last.text += ` ${sentence.text}`;
+        else out.push({ ...sentence });
+    }
+    return out.map(item => item.text).join('\n\n');
+}
+
+// Moves what happens in the story out of each lore, keeping the background word for word. Nothing is
+// written to the sheets: each cleaned lore waits in its review, with the sentences it would drop and
+// whether the story record already holds them.
+async function cleanLoreToBackground(workspaceId, { entityIds = null, progressCallback = null, shouldCancel = null } = {}) {
+    const systemAi = getSystemAiConfiguration().systemAi;
+    if (!systemAi) throw new Error(getSystemAiConfiguration().error);
+    const { apiProfileId, model } = systemAi;
+    const { buildLoreCleanupSystemPrompt } = require('./features/worldbuild/entity-update-prompts');
+    const { buildLoreCleanupSchema } = require('./features/worldbuild/entity-update-schema');
+    const search = require('../../dist-main/main/features/narrative/umwelt/story-search');
+    const systemPrompt = buildLoreCleanupSystemPrompt({ languageInstruction: getSystemLanguageInstruction() });
+    const only = Array.isArray(entityIds) && entityIds.length ? new Set(entityIds) : null;
+    const targets = entitiesStore.listEntities({ workspaceId }).filter(entity => entity.status !== 'proposed'
+        && entity.type !== 'System'
+        && String(entity.lore || '').trim()
+        && (entity.data?.aiPolicy || 'review') !== 'locked'
+        && entity.data?._enrichPending?.lore == null
+        && (!only || only.has(entity.id)));
+    const outcome = { lore: { examined: 0, proposed: 0, alreadyBackground: 0, allStory: [], failed: 0 } };
+    const entityLabels = loadEntityLabels(workspaceId);
+    let inputTokens = 0, outputTokens = 0;
+    for (let index = 0; index < targets.length; index++) {
+        if (shouldCancel?.()) { outcome.cancelled = true; break; }
+        const ent = targets[index];
+        if (progressCallback) progressCallback({ phase: 'cleaning-lore', done: index, total: targets.length, name: ent.canonicalName, entityId: ent.id });
+        const sentences = splitLoreSentences(ent.lore);
+        if (!sentences.length) continue;
+        outcome.lore.examined++;
+        const prompt = `RECORD: ${ent.canonicalName} (${ent.type.replace(/s$/, '')})\n` +
+            `LORE SENTENCES:\n${sentences.map((sentence, position) => `${position + 1}. ${sentence.text}`).join('\n')}`;
+        let answer = null;
+        try {
+            const systemText = entityLabels.encode(systemPrompt);
+            const result = await sendApiRequest({
+                apiProfileId, model,
+                systemPrompt: systemText,
+                chatHistory: [],
+                newPrompt: entityLabels.encode(prompt),
+                temperature: 0,
+                maxTokens: 400 + sentences.length * 12,
+                maxPayloadTokens: workspacePayloadTokens(workspaceId),
+                keepSpoilerMarkers: true,
+                jsonMode: true,
+                jsonSchema: buildLoreCleanupSchema(),
+                includeResponseMetadata: true,
+                promptCache: { policy: 'conversation', scopeId: `entity-update-lore:${workspaceId}`, ttl: '5m', stable: systemText, volatile: '' },
+            });
+            inputTokens += result.inputTokens || estimateTokens(`${systemPrompt}\n${prompt}`);
+            outputTokens += result.outputTokens || estimateTokens(result.content);
+            answer = parseEntityUpdateObject(result.content).value;
+        } catch (error) {
+            console.warn(`[Lore cleanup] ${ent.canonicalName} failed:`, cleanErrorMessage(error));
+        }
+        const keep = new Set((Array.isArray(answer?.keep) ? answer.keep : []).map(Number));
+        const story = new Set((Array.isArray(answer?.story) ? answer.story : []).map(Number));
+        // Every sentence must be sorted once; an answer that skips or doubles one is not trusted.
+        const sorted = sentences.every((_, position) => keep.has(position + 1) !== story.has(position + 1));
+        if (!answer || !sorted) { outcome.lore.failed++; continue; }
+        if (!story.size) { outcome.lore.alreadyBackground++; continue; }
+        if (!keep.size) { outcome.lore.allStory.push(ent.canonicalName); continue; }
+        const kept = [];
+        sentences.forEach((sentence, position) => {
+            if (!keep.has(position + 1)) return;
+            const last = kept[kept.length - 1];
+            if (last && last.paragraph === sentence.paragraph) last.text += ` ${sentence.text}`;
+            else kept.push({ ...sentence });
+        });
+        const removed = sentences.filter((_, position) => story.has(position + 1)).map(sentence => sentence.text);
+        const missing = [];
+        for (const text of removed) {
+            let held = false;
+            try {
+                const vector = await storyQueryVector(workspaceId, text);
+                // Two shared words are chance; only a match by meaning says the record tells the same thing.
+                const meant = hits => hits.some(hit => hit.match !== 'text');
+                held = Boolean(vector) && (meant(search.searchStory(db, workspaceId, { text, vector, docType: 'event', limit: 3 }))
+                    || meant(search.searchStory(db, workspaceId, { text, vector, docType: 'record', subject: ent.id, limit: 3 })));
+            } catch { /* without the story record the sentence is listed as not found */ }
+            if (!held) missing.push(text);
+        }
+        const quote = text => `«${text.length > 220 ? `${text.slice(0, 217)}…` : text}»`;
+        const support = `Keeps the background and moves out ${removed.length} ${removed.length === 1 ? 'sentence' : 'sentences'} about the story itself: ${removed.map(quote).join(' ')}` +
+            (missing.length
+                ? ` Not found in the story record, so worth keeping somewhere before accepting: ${missing.map(quote).join(' ')}`
+                : ' The story record already holds each of them.');
+        const fresh = entitiesStore.getEntity(ent.id);
+        if (!fresh || fresh.data?._enrichPending?.lore != null) continue;
+        const pending = { ...(fresh.data?._enrichPending || {}), lore: { value: kept.map(item => item.text).join('\n\n'), evidence: [], support }, at: Date.now() };
+        entitiesStore.updateEntity(fresh.id, { data: { ...(fresh.data || {}), _enrichPending: pending } });
+        outcome.lore.proposed++;
+    }
+    if (progressCallback) progressCallback({ phase: 'cleaning-lore', done: targets.length, total: targets.length });
+    return { ...outcome, entities: targets.length, processedEntities: outcome.lore.examined, updated: 0, staged: outcome.lore.proposed, tokenUsage: { inputTokens, outputTokens } };
+}
+
+// A sheet set to open takes the change at once; any other waits in its review with what it cites.
+function stageSheetProposals({ workspaceId, entity, proposedData, proposedLinks, evidenceEntries, runId }) {
+    const fresh = entitiesStore.getEntity(entity.id) || entity;
+    if ((fresh.data?.aiPolicy || 'review') === 'open') {
+        const nextData = { ...(fresh.data || {}) };
+        for (const [field, proposal] of Object.entries(proposedData)) {
+            if (field.startsWith('customFields.')) {
+                nextData.customFields = { ...(nextData.customFields || {}), [field.slice('customFields.'.length)]: proposal.value };
+            } else nextData[field] = proposal.value;
+        }
+        const origin = { appliedBy: 'automatic', runId, evidence: evidenceEntries.map(entry => entry.chunk.id), relatedIds: proposedLinks.map(link => link.targetId) };
+        entitiesStore.withUpdateOrigin(fresh.id, origin, () => {
+            entitiesStore.updateEntity(fresh.id, { data: nextData });
+            for (const link of proposedLinks) applyProposedLink(fresh.id, link, workspaceId);
+        });
+        return 'applied';
+    }
+    const previous = (fresh.data?._enrichPending && typeof fresh.data._enrichPending === 'object') ? fresh.data._enrichPending : {};
+    const pending = { ...previous };
+    pending.evidence = {
+        ...(previous.evidence || {}),
+        ...Object.fromEntries(evidenceEntries.map(entry => [entry.id, { chunkId: entry.chunk.id, excerpt: entityEvidenceExcerpt(entry.chunk.text, fresh.canonicalName) }])),
+    };
+    if (Object.keys(proposedData).length) pending.data = { ...(previous.data || {}), ...proposedData };
+    if (proposedLinks.length) {
+        const links = new Map((Array.isArray(previous.links) ? previous.links : []).map(link => [`${link.relKey}:${link.targetId}:${link.label || ''}`, link]));
+        for (const link of proposedLinks) links.set(`${link.relKey}:${link.targetId}:${link.label || ''}`, link);
+        pending.links = [...links.values()];
+    }
+    pending.at = Date.now();
+    entitiesStore.updateEntity(fresh.id, { data: { ...(fresh.data || {}), _enrichPending: pending } });
+    return 'staged';
+}
+
 async function enrichEntities(workspaceId, progressCallback = null, { entityIds = null, shouldCancel = null } = {}) {
     if (!workspaceId) throw new Error('workspaceId is required');
     // Precise extraction: System AI only, never a writing profile.
@@ -6133,7 +6623,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         ORDER BY kc.createdAt ASC
     `);
     const memoryChunks = db.prepare(`
-        SELECT id, text, source, ownerId, ownerType, ordinal, createdAt, COALESCE(content_hash, '') AS contentHash
+        SELECT id, text, source, ownerId, ownerType, ordinal, createdAt, memoryBlockId, COALESCE(content_hash, '') AS contentHash
         FROM knowledge_chunks
         WHERE ownerId = ? AND ownerType IN ('chat_kb', 'chat_memory') AND enabled = 1
         ORDER BY createdAt ASC
@@ -6158,11 +6648,43 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             ORDER BY createdAt DESC LIMIT 1
         `),
     };
-    // The newest memories first, in the row shape memorySummaries reads.
-    const existingMemories = {
-        all: (ws, entityId) => loadNarrativeRecords(ws, ['memory'], [entityId]).reverse().slice(0, 40)
-            .map(({ row }) => ({ payload_json: row.payload_json }))
-    };
+    // Memories waiting for review count as held: a second run must not propose the same scene again.
+    const pendingMemoryRows = db.prepare(`
+        SELECT operations_json FROM narrative_events
+        WHERE workspace_id = ? AND status = 'proposed' AND operations_json LIKE '%record-memory%'
+    `).all(workspaceId);
+    const pendingMemories = new Map();
+    for (const row of pendingMemoryRows) {
+        for (const operation of safeParseArray(row.operations_json)) {
+            const memory = operation?.type === 'record-memory' ? operation.memory : null;
+            if (!memory?.subjectId || !memory.summary) continue;
+            if (!pendingMemories.has(memory.subjectId)) pendingMemories.set(memory.subjectId, []);
+            pendingMemories.get(memory.subjectId).push(memory.summary);
+        }
+    }
+    const localEmbeddings = (readAdvancedSettings().embeddingEngine || 'local') === 'local';
+    const memoryIndex = createMemoryIndex({
+        load: ownerId => [
+            ...loadNarrativeRecords(workspaceId, ['memory'], [ownerId]).map(({ payload }) => payload?.summary),
+            ...(pendingMemories.get(ownerId) || []),
+        ],
+        embed: localEmbeddings ? texts => generateEmbeddingVectors(texts) : null,
+        comparable: comparableText,
+    });
+    const storyCoverage = createStoryCoverage(db, workspaceId, { stripReasoning });
+    const canonSystemPrompt = buildCanonSystemPrompt({
+        languageInstruction: getSystemLanguageInstruction(),
+        sourceLanguageInstruction: getSourceLanguageInstruction(),
+    });
+    const narrativeSystemPrompt = buildNarrativeSystemPrompt({
+        languageInstruction: getSystemLanguageInstruction(),
+        sourceLanguageInstruction: getSourceLanguageInstruction(),
+        scaleGuide: RELATIONSHIP_SCALE_GUIDE,
+        causes: [...DURABLE_RELATIONSHIP_CAUSES],
+    });
+    // Sheets with an empty field get the field pass after the run, whether or not they had new passages.
+    const gapTargets = new Set();
+    const candidatesByEntity = new Map();
     const { RoleplaySkills } = require('../../dist-main/main/features/narrative/roleplay-skills');
     const skillSystem = new RoleplaySkills(db);
     const playerEntityId = skillSystem.getSettings(workspaceId).playerEntityId;
@@ -6271,6 +6793,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 isTagged: true
             });
         }
+        if (candidates.size) candidatesByEntity.set(ent.id, [...candidates.values()]);
         if (!candidates.size) {
             noEvidence++;
             updateState.updateJob(runId, ent.id, { status: 'skipped' });
@@ -6284,11 +6807,11 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         }));
         const visibleCustomFields = customDefinitions.filter(field => field.aiAccess !== 'hidden');
         const writableCustomFields = visibleCustomFields.filter(field => field.aiAccess === 'read-write');
-        const { emptyFields: emptyWritableFields, signature: fieldCoverageSignature } =
-            buildFieldCoverage(ent, allowed, writableCustomFields);
+        const { emptyFields: emptyWritableFields } = buildFieldCoverage(ent, allowed, writableCustomFields);
+        if (emptyWritableFields.length) gapTargets.add(ent.id);
         const discoveredEntries = [...candidates.values()].map(chunk => ({
             chunk,
-            signature: entityEnrichmentSignature(chunk, fieldCoverageSignature),
+            signature: entityEnrichmentSignature(chunk),
         }));
         const evidenceStates = updateState.discover(workspaceId, ent.id, discoveredEntries);
         const terminalStates = new Set(['evaluated', 'actionable', 'non-actionable']);
@@ -6322,7 +6845,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         const relSpecs = enrichRelationsForEntity(ent);
         const fence = buildItemsFence();
         // A later pass of this run builds on what the earlier ones staged, or it would replace a
-        // field, the lore or a relationship it never saw. Only the prompt sees them; live data stays.
+        // field, the lore or a link it never saw. Only the prompt sees them; live data stays.
         const carried = extraPasses.has(ent.id) && ent.data?._enrichPending && typeof ent.data._enrichPending === 'object'
             ? ent.data._enrichPending : null;
         if (carried?.lore?.value) ent.lore = carried.lore.value;
@@ -6343,7 +6866,6 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         }
 
         const evidencePrefix = crypto.randomBytes(2).toString('hex');
-        const evidenceExample = `E_${evidencePrefix}_1`;
         const runChunkIds = new Set(chunks.map(chunk => chunk.id));
         const evidenceEntries = chunks.map((chunk, index) => {
             const lead = precedingPassageText(precedingChunk, chunk, runChunkIds);
@@ -6351,6 +6873,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 id: `E_${evidencePrefix}_${index + 1}`,
                 order: index,
                 chunk,
+                // A played turn the story pass already read, or a recap of the story, feeds the sheet only.
+                coverage: storyCoverage.classify(chunk),
                 prompt: `[E_${evidencePrefix}_${index + 1} | ${chunk.evidenceSource}: ${chunk.source || 'Untitled'} | ${chunk.isTagged ? 'indexed entity match' : 'name or alias match'} | chunk ${chunk.id}]\n` +
                     (lead ? `(Preceding passage of the same source, context only and never evidence: ${lead})\n` : '') +
                     chunk.text
@@ -6372,6 +6896,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
 
         const relBlocks = [];
         const currentLinks = [];
+        const relationshipBlock = { names: [], line: '' };
+        const currentRelationships = [];
         for (const spec of relSpecs) {
             const existing = existingLinksByTarget(ent.id, spec);
             const candidates = relationCandidates(all, ent, spec).filter(candidate =>
@@ -6380,13 +6906,25 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 || textMentionsEntity(evidenceWindow, entityMentionNames(candidate))
             );
             const names = candidates.map(candidate => candidate.canonicalName);
-            if (!names.length) continue;
-            const operation = spec.detailed
-                ? `kind "relationship", key "overall", target one candidate, targetRole what TARGET is to SOURCE, score -100 to 100, sourcePerspective how SOURCE sees TARGET`
-                : `kind "link", key "${spec.key}", target one candidate${spec.labeled ? ', targetRole what TARGET is to SOURCE' : ''}`;
             const guidance = ENRICH_RELATION_GUIDANCE[`${ent.type}.${spec.key}`] || 'Only when the exact relation is explicitly established.';
             // Stated with this record's name, since a generic rule about direction is the one models skip.
             const direction = ENRICH_RELATION_DIRECTION[`${ent.type}.${spec.key}`]?.(ent.canonicalName);
+            if (spec.detailed) {
+                // Bonds are the story's: they belong to the pass that reads what the story record has not.
+                for (const link of existing.values()) {
+                    currentRelationships.push({
+                        target: link.entity.canonicalName,
+                        targetRole: link.label || '',
+                        value: Number(link.metadata?.value || 0),
+                        sourcePerspective: String(link.metadata?.description || ''),
+                    });
+                }
+                if (names.length) relationshipBlock.names = names;
+                relationshipBlock.line = `${direction ? `${direction} ` : ''}${guidance}`;
+                continue;
+            }
+            if (!names.length) continue;
+            const operation = `kind "link", key "${spec.key}", target one candidate${spec.labeled ? `, targetRole ${spec.roleMeaning || 'what TARGET is to SOURCE'}` : ''}`;
             relBlocks.push({ spec, names, line: `- ${spec.label}: ${operation}.${direction ? ` ${direction}` : ''} ${guidance} Candidates: ${names.join(', ')}` });
             for (const link of existing.values()) {
                 currentLinks.push({
@@ -6394,14 +6932,13 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     source: ent.canonicalName,
                     target: link.entity.canonicalName,
                     ...(link.label ? { targetRole: link.label } : {}),
-                    ...(spec.detailed ? { value: Number(link.metadata?.value || 0), sourcePerspective: String(link.metadata?.description || '') } : {})
                 });
             }
         }
         for (const link of Array.isArray(carried?.links) ? carried.links : []) {
             if (link?.targetName) currentLinks.push({ field: link.relKey, source: ent.canonicalName, target: link.targetName, ...(link.label ? { targetRole: link.label } : {}) });
         }
-        for (const relationship of (runRelationships.get(ent.id) || new Map()).values()) currentLinks.push(relationship);
+        for (const relationship of (runRelationships.get(ent.id) || new Map()).values()) currentRelationships.push(relationship);
         let relevantSystems = [];
         if (chunkIds.length) {
             const normalizedEvidence = entitiesStore.normalizeName(evidenceWindow);
@@ -6421,32 +6958,6 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 .join('\n');
             return content ? `### ${system.canonicalName}${aliases}\n${content.slice(0, 2400)}` : '';
         }).filter(Boolean).join('\n\n');
-        const narrativeEntities = all
-            .filter(candidate => candidate.status !== 'proposed' && (
-                candidate.id === ent.id
-                || relatedIds.has(candidate.id)
-                || textMentionsEntity(evidenceWindow, entityMentionNames(candidate))
-            ))
-            .slice(0, 60);
-        const narrativeEntityContext = narrativeEntities
-            .map(candidate => `- ${candidate.canonicalName}: ${candidate.id}`)
-            .join('\n');
-        // Others' relationships with people in these passages, so an update edits them instead of starting over.
-        const narrativeIds = new Set(narrativeEntities.map(candidate => candidate.id));
-        // How others see this entity comes first; then a few bonds per person, so one cast list cannot fill it.
-        const otherRelationships = narrativeEntities
-            .filter(candidate => candidate.id !== ent.id && ['Characters', 'Creatures'].includes(candidate.type))
-            .flatMap(candidate => entitiesStore.getLinksFrom(candidate.id, 'related_to')
-                .filter(link => narrativeIds.has(link.entity?.id))
-                .sort((a, b) => Number(b.entity.id === ent.id) - Number(a.entity.id === ent.id) || Number(relatedIds.has(b.entity.id)) - Number(relatedIds.has(a.entity.id)))
-                .slice(0, 3)
-                .map(link => ({
-                    aboutThis: link.entity.id === ent.id,
-                    line: `- ${candidate.canonicalName} → ${link.entity.canonicalName}: "${link.label || ''}", score ${Number(link.metadata?.value || 0)}${link.metadata?.description ? `; ${String(link.metadata.description).slice(0, 80)}` : ''}`,
-                })))
-            .sort((a, b) => Number(b.aboutThis) - Number(a.aboutThis))
-            .slice(0, 12)
-            .map(entry => entry.line);
 
         const allowLore = ent.type !== 'System';
         const skillContext = entitySkillContext(skillSystem, workspaceId, ent, evidenceWindow);
@@ -6459,92 +6970,94 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             ? `SKILLS (the world's Rules). Ranks from lowest to highest: ${skillContext.config.ranks.join(', ')}.\n` +
                 `Held: ${skillContext.held.length ? skillContext.held.map(skill => `${skill.name} (${skill.rankName})`).join(', ') : '(none)'}\n` +
                 (skillContext.related.length ? `Catalog skills these passages may concern:\n${skillContext.related.map(skill => `- ${skillContext.describe(skill)}`).join('\n')}\n` : '') +
-                `kind "skill": key is the exact skill name, value the rank name the evidence shows, target the parent skill name for a new sub-skill or "", sourcePerspective a one-sentence meaning only for a new skill. You may ${skillOperations.join('; ')}. ` +
-                `Never lower a rank. Use the closest catalog skill before creating one.` +
+                `You may ${skillOperations.join('; ')}.` +
                 (skillContext.config.guidance?.trim() ? `\nWorld rule for skills: ${skillContext.config.guidance.trim()}` : '') + '\n'
             : '';
-        const knownMemories = ['Characters', 'Creatures'].includes(ent.type) ? memorySummaries(existingMemories, workspaceId, ent.id).slice(0, 10) : [];
-        const responseShape = `{"changes":[{"kind":"field","key":"<allowed field key>","value":"<JSON encoded value>","subjectId":"","targetId":"","perspectiveOwnerId":"","target":"","targetRole":"","sourcePerspective":"","score":0,"method":"","accessibility":"","support":"<direct support>","evidence":["${evidenceExample}"]}]}`;
-        const kinds = ['field', 'link', ...(allowLore ? ['history'] : []), ...(skillContext ? ['skill'] : []), 'fact', 'awareness', 'knowledge', 'belief', 'memory', 'relationship'];
-        const systemPrompt =
-            getSystemLanguageInstruction() + "\n" +
-            getSourceLanguageInstruction() + "\n" +
-            `You maintain a story's world bible. Update the record for one ${ent.type.replace(/s$/, '')} named "${ent.canonicalName}" ` +
-            `using the CURRENT RECORD plus ONLY the NEW STORY EVIDENCE provided. Extract supported changes and narrative findings; lore is composed in a separate step from your history findings.\n` +
-            `Return one valid JSON object and nothing else. Use {"changes":[]} when nothing should change. Every change uses this fixed shape:\n${responseShape}\n` +
-            `All keys are required. Use an empty string or 0 for fields that do not apply. Encode field values as JSON inside value: plain text remains plain text, numbers use "12", booleans use "true", and lists use "[\\"one\\",\\"two\\"]". ` +
-            `Kinds: ${kinds.join(', ')}. Never output angle-bracket placeholders.\n` +
+        const playerLine = playerEntity
+            ? `The player character is ${playerEntity.canonicalName} (id ${playerEntity.id})${playerEntity.id === ent.id ? ', this record' : ''}.\n`
+            : '';
+        const canonKinds = ['field', 'link', ...(allowLore ? ['history'] : []), ...(skillContext ? ['skill'] : [])];
+        const canonPrompt = evidence =>
+            `RECORD TYPE: ${ent.type.replace(/s$/, '')}\n` +
             `ENTITY TYPE CONTRACT:\n${ENRICH_TYPE_GUIDANCE[ent.type] || 'A persistent canonical world entity.'}\n` +
+            `Kinds allowed for this record: ${canonKinds.join(', ')}.\n` +
             (fieldLines ? `Allowed data fields:\n${fieldLines}\n` : '') +
-            (allowLore ? `kind "history": value is one durable statement for the lore (origin, role, title, trajectory, or an event that changed this entity), written as a full sentence. Never appearance, temperament${skillContext ? ', abilities' : ''}, a passing scene detail, or a general trait of its race, people, or culture.\n` : '') +
-            skillLines +
             (relBlocks.length ? `Allowed links (use the exact candidate names, never invent a name):\n${relBlocks.map(b => b.line).join('\n')}\n` : '') +
-            `STRICT RULES:\n` +
-            `- Return a change ONLY when the passages state it explicitly and unambiguously. Inference, implication, symbolism, genre convention, probability, and interpretation are not explicit: omit them. Returning few or no changes is correct and expected.\n` +
-            `- Never return a change to say that something is absent, unknown, or not established; omit it instead.\n` +
-            `- Every change must cite one or more supplied evidence IDs that support that exact change. support restates what the evidence says; never speculate about why a current value differs.\n` +
-            `- A preceding passage shown before an evidence block only tells whose section or scene the block belongs to. Use it to decide who a line is about; never cite it.\n` +
-            (includedEvidence.some(entry => entry.chunk.ownerType === 'import_source')
-                ? `- An Imported source block belongs to the subject named first in its label (before the first ·), and the rest of the label names its section. When that subject is not ${ent.canonicalName}, the block is someone else's profile: take from it only what it states about ${ent.canonicalName} itself. That subject's affiliation, workplace, home or origin never makes them the leader, owner or creator of ${ent.canonicalName}, and never places ${ent.canonicalName} inside or outside another place.\n`
-                : '') +
-            (playerEntity && playerEntity.id !== ent.id ? `- In roleplay logs, "you" and "your" refer to the player character ${playerEntity.canonicalName} (id ${playerEntity.id}).\n` : '') +
-            (playerEntity && playerEntity.id === ent.id ? `- In roleplay logs, "you" and "your" refer to ${ent.canonicalName}, the player character.\n` : '') +
-            `- Do not return unchanged fields or unchanged links. An empty changes array is correct when the new evidence changes nothing.\n` +
-            `- Existing values are canonical context, not protected blanks. When new explicit evidence changes an existing value, return the full replacement: keep every part of the current value that is still true and change only what the evidence changes. Never replace a value merely to rephrase it, and never shorten it to one scene.\n` +
-            `- EMPTY fields: fill one only when the evidence describes a durable trait for it. A single reaction, gesture, or action in one scene does not fill appearance or personality.\n` +
-            `- Never infer, estimate, or compute a value. Numeric fields require the explicit resulting absolute value. A delta such as "+1", "-2", "gained 1", or "increased by 2" is not a field value unless the evidence also states the resulting total. Never replace a newer canonical number with an older progression value.\n` +
-            `- Persistent fields contain durable canonical characteristics. Do not place a temporary pose, scene location, passing emotion, current lighting, momentary clothing, or short-lived injury into appearance, personality, disposition, description, or another lasting field.\n` +
-            `- Only link two entities when the text directly establishes that exact relation. A name, title, accent, or appearance in a scene does not establish origin, residence, or membership. Only nest a location inside another when the passages explicitly say one place is physically within the other.\n` +
-            `- RELATIONSHIP DIRECTION: SOURCE is always the current record (${ent.canonicalName}); TARGET is the named related entity. targetRole must state what TARGET is to SOURCE (Dorian to Tess: targetRole "Daughter"; Tess to Dorian: targetRole "Father"). value and sourcePerspective describe only how SOURCE feels about and relates to TARGET. Never return TARGET's feelings toward SOURCE. The reciprocal direction belongs exclusively to TARGET's own record.\n` +
-            `- Return a relationship only when the evidence shows SOURCE's own attitude, bond, or role toward TARGET. Fighting, meeting, or sharing a scene once is not a relationship. targetRole is a complete short role of one to four words, never a sentence.\n` +
-            `- PERSPECTIVE: a feeling belongs to whoever the text says feels it. A passage labelled "Profile of X", and any passage told from X's point of view, describes X's feelings toward others. When ${ent.canonicalName} is not X, such a passage supports a relationship of ${ent.canonicalName} only where it states ${ent.canonicalName}'s own feeling toward X (as in "${ent.canonicalName} adores X"). An act alone (${ent.canonicalName} helped, saved, trained or fought beside X) is a fact or a memory, never a relationship value, unless the passage also states how ${ent.canonicalName} feels; X's gratitude, love, admiration or fear toward ${ent.canonicalName} is X's relationship, never ${ent.canonicalName}'s, and gives no value or sourcePerspective for ${ent.canonicalName}. Likewise, how X sees a third character is never how ${ent.canonicalName} sees them. When the passage is ${ent.canonicalName}'s own profile or told from ${ent.canonicalName}'s side, it is the main evidence for ${ent.canonicalName}'s bonds: return every relationship of ${ent.canonicalName} it states, including devotion, gratitude, loyalty and protectiveness toward others. In every relationship, sourcePerspective says how ${ent.canonicalName} sees TARGET; never write TARGET's feelings toward ${ent.canonicalName} in it, and set value from ${ent.canonicalName}'s side alone.\n` +
-            `- An existing relationship (in Current links and relationships or EXISTING RELATIONSHIPS OF OTHERS) is edited, not rewritten: return its targetRole exactly as it is unless the bond itself changed in kind, such as an ally becoming an enemy; write sourcePerspective as the current perspective carried forward with only what the evidence changes; move score from its current value by what the evidence shows.\n` +
-            `- ${RELATIONSHIP_SCALE_GUIDE.replace(/\n/g, '\n  ')}\n` +
-            `- Every narrative change must state ownership explicitly. subjectId is the entity whose mind, memory, knowledge, belief, fact, or perspective owns the change. perspectiveOwnerId must equal subjectId for relationships. targetId is the existing entity the statement or relationship is about. Use the IDs from the candidate context, never infer ownership from the current record.\n` +
-            `- Awareness requires evidence that the perspective owner knows the target exists. Documentary extraction alone never grants it.\n` +
-            `- For knowledge, belief, and memory, put the statement or summary in value. For knowledge and belief, target must be the exact existing entity the proposition is primarily about, not a location, group, or concept merely mentioned in the sentence.\n` +
-            `- MEMORY is what subjectId did, lived through, decided, or took part in, told as a past event with who was involved (targetId: the main other entity involved, or ""). Anything the subject did or experienced is a memory, never knowledge. Do not record a memory that only restates a current trait or one already listed under EXISTING MEMORIES.\n` +
-            `- A memory belongs only to someone present in the scene, or who perceived it directly. Never give a memory of a conversation or event to someone who was absent, even when it is about them.\n` +
-            `- A memory is a moment that matters to its owner: a bond formed or broken, a decision, a revelation, a victory, a loss, a turning point. Never record logistics or routine: walking somewhere, leaving, checking for danger, handing over paperwork, waiting.\n` +
-            `- At most one memory per scene for each owner: tell what mattered in that scene in a single memory instead of splitting it into steps.\n` +
-            `- KNOWLEDGE is a fact about someone or something else that subjectId learned inside the story by witnessing it or being told (method "witness" or "reported"). The update model inferring something while reading a document is never character Knowledge. Biography, public canon, self-description, predictions, private information unavailable to the subject, and documentary analysis are not new Knowledge. Never use method "inferred" for Knowledge.\n` +
-            `- BELIEF is something subjectId explicitly holds true in the story. It is never your own reading of their motives or psychology.\n` +
-            (ent.type === 'Characters'
-                ? `- Never return fact for a Character update. Global canonical Facts belong to the workspace Fact registry, not to a character sheet.\n`
-                : `- Use fact for an explicit canonical proposition. Put a concise predicate in key, the proposition in value, and its existing subject name in target.\n`) +
-            `- CANONICAL SYSTEM / CONCEPT CONTEXT defines setting-specific terms. Use it to interpret evidence, but do not copy a concept's facts into this entity unless the evidence explicitly connects them. The same holds for a passage about a race, people, or culture in general: it describes the group, not this entity.\n` +
-            `- Text between || and || in the current record is a spoiler: true, but hidden from the person reading the sheet. A new value for a field that holds one must keep each span exactly, markers included, and must never restate it outside them. Write a new fact that would spoil a surprise inside new || markers on a single line.\n` +
-            `Do not invent facts, names, or fields absent from the passages.`;
-        const userPromptPrefix =
-            `${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
+            skillLines +
+            playerLine +
+            `\n${allowLore ? 'CURRENT RECORD' : 'CURRENT CONCEPT'}:\nName: ${ent.canonicalName}\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
             (ent.type === 'Items' ? `Item nature: ${(ent.data?.itemNature || 'type') === 'unique' ? 'unique item (one persistent object; may have one owner or current location)' : 'item type (repeatable category; may have abundance and availability locations, never one fixed owner or current location)'}\n` : '') +
-            (allowLore ? `Lore: ${ent.lore ? ent.lore : '(no lore yet)'}\n` : '') +
+            (allowLore ? `Lore (background): ${ent.lore ? ent.lore : '(no lore yet)'}\n` : '') +
             (Object.keys(currentData).length ? `Current fields: ${JSON.stringify(currentData)}\n` : '') +
             (Object.keys(currentCustomFields).length ? `Current custom fields (read-only fields are context and must never be proposed): ${JSON.stringify(currentCustomFields)}\n` : '') +
-            (currentLinks.length ? `Current links and relationships: ${JSON.stringify(currentLinks)}\n` : '') +
-            (otherRelationships.length ? `EXISTING RELATIONSHIPS OF OTHERS (how each one already sees the other):\n${otherRelationships.join('\n')}\n` : '') +
-            (knownMemories.length ? `EXISTING MEMORIES (already recorded, never repeat): ${knownMemories.map(summary => `«${summary.slice(0, 110)}»`).join(' ')}\n` : '') +
-            (narrativeEntityContext ? `\nENTITY IDS FOR NARRATIVE FINDINGS:\n${narrativeEntityContext}\n` : '') +
-            (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '');
-        const buildUserPrompt = evidence => `${userPromptPrefix}\nNEW STORY EVIDENCE (chronological):\n${evidence}`;
+            (currentLinks.length ? `Current links: ${JSON.stringify(currentLinks)}\n` : '') +
+            (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '') +
+            `\nNEW STORY EVIDENCE (chronological):\n${evidence}`;
+
+        // Only passages the story record never read can hold memories, knowledge or bonds to record.
+        const narrativeCapable = ['Characters', 'Creatures', 'Factions', 'Items', 'Locations', 'Events'].includes(ent.type);
+        const narrativeEntries = narrativeCapable ? includedEvidence.filter(entry => entry.coverage === 'open') : [];
+        const openEvidenceIds = new Set(narrativeEntries.map(entry => entry.id));
+        let narrativePrompt = null;
+        if (narrativeEntries.length) {
+            const narrativeWindow = narrativeEntries.map(entry => entry.prompt).join('\n\n');
+            const narrativeEntities = all
+                .filter(candidate => candidate.status !== 'proposed' && (
+                    candidate.id === ent.id
+                    || relatedIds.has(candidate.id)
+                    || textMentionsEntity(narrativeWindow, entityMentionNames(candidate))
+                ))
+                .slice(0, 60);
+            const narrativeIds = new Set(narrativeEntities.map(candidate => candidate.id));
+            // How others see this entity comes first; then a few bonds per person, so one cast list cannot fill it.
+            const otherRelationships = narrativeEntities
+                .filter(candidate => candidate.id !== ent.id && ['Characters', 'Creatures'].includes(candidate.type))
+                .flatMap(candidate => entitiesStore.getLinksFrom(candidate.id, 'related_to')
+                    .filter(link => narrativeIds.has(link.entity?.id))
+                    .sort((a, b) => Number(b.entity.id === ent.id) - Number(a.entity.id === ent.id) || Number(relatedIds.has(b.entity.id)) - Number(relatedIds.has(a.entity.id)))
+                    .slice(0, 3)
+                    .map(link => ({
+                        aboutThis: link.entity.id === ent.id,
+                        line: `- ${candidate.canonicalName} → ${link.entity.canonicalName}: "${link.label || ''}", score ${Number(link.metadata?.value || 0)}${link.metadata?.description ? `; ${String(link.metadata.description).slice(0, 80)}` : ''}`,
+                    })))
+                .sort((a, b) => Number(b.aboutThis) - Number(a.aboutThis))
+                .slice(0, 12)
+                .map(entry => entry.line);
+            const knownMemories = ['Characters', 'Creatures'].includes(ent.type)
+                ? await memoryIndex.nearest(ent.id, narrativeEntries.map(entry => String(entry.chunk.text || '').slice(0, 1500)))
+                : [];
+            narrativePrompt = evidence =>
+                `RECORD: ${ent.canonicalName} (${ent.type.replace(/s$/, '')}, id ${ent.id})\n` +
+                playerLine +
+                `\nENTITY IDS FOR FINDINGS:\n${narrativeEntities.map(candidate => `- ${candidate.canonicalName}: ${candidate.id}`).join('\n')}\n` +
+                (relationshipBlock.line ? `\nRELATIONSHIPS of ${ent.canonicalName}: SOURCE is ${ent.canonicalName}. ${relationshipBlock.line}${relationshipBlock.names.length ? ` Candidates: ${relationshipBlock.names.join(', ')}` : ''}\n` : '') +
+                (currentRelationships.length ? `CURRENT RELATIONSHIPS of ${ent.canonicalName}: ${JSON.stringify(currentRelationships)}\n` : '') +
+                (otherRelationships.length ? `EXISTING RELATIONSHIPS OF OTHERS (how each one already sees the other):\n${otherRelationships.join('\n')}\n` : '') +
+                (knownMemories.length ? `EXISTING MEMORIES of ${ent.canonicalName} (already recorded, never tell these scenes again):\n${knownMemories.map(summary => `- ${summary}`).join('\n')}\n` : '') +
+                (systemContext ? `\nCANONICAL SYSTEM / CONCEPT CONTEXT:\n${systemContext}\n` : '') +
+                `\nNEW STORY EVIDENCE (chronological):\n${evidence}`;
+        }
 
         try {
             const maxTokens = entityEnrichmentMaxTokens(ent, estimateTokens(evidenceWindow));
-            const jsonSchema = buildEntityUpdateSchema();
             // A sheet's job row holds every pass of this run, not only the last one.
             let inputTokenEstimate = passTokens.get(ent.id)?.input || 0;
             let outputTokenEstimate = passTokens.get(ent.id)?.output || 0;
             let retryCount = 0;
             const entityLabels = loadEntityLabels(workspaceId);
-            const sendJsonRequest = async (requestParams, schema = jsonSchema) => {
+            const sendJsonRequest = async (requestParams, schema) => {
                 // Worldbuild text is rewritten here, so its spoiler markers must reach the model and come back.
+                const systemText = entityLabels.encode(requestParams.systemPrompt);
                 const params = {
                     maxPayloadTokens: workspacePayloadTokens(workspaceId),
                     keepSpoilerMarkers: true,
                     ...requestParams,
-                    systemPrompt: entityLabels.encode(requestParams.systemPrompt),
-                    newPrompt: entityLabels.encode(requestParams.newPrompt)
+                    systemPrompt: systemText,
+                    newPrompt: entityLabels.encode(requestParams.newPrompt),
+                    // The rules of a pass are the same for every sheet of the run, so later sheets read them from cache.
+                    ...(requestParams.cacheScope ? { promptCache: { policy: 'conversation', scopeId: `${requestParams.cacheScope}:${workspaceId}`, ttl: '5m', stable: systemText, volatile: '' } } : {}),
                 };
+                delete params.cacheScope;
                 const estimatedInput = estimateTokens(`${params.systemPrompt || ''}\n${params.newPrompt || ''}\n${JSON.stringify(schema || {})}`);
                 try {
                     const result = await sendApiRequest({ ...params, jsonMode: true, jsonSchema: schema, includeResponseMetadata: true });
@@ -6561,81 +7074,117 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     return { ...result, content: entityLabels.decode(result.content) };
                 }
             };
-            const requestUpdate = (prompt, tokenBudget = maxTokens) => sendJsonRequest({
-                apiProfileId,
-                model,
-                systemPrompt,
-                chatHistory: [],
-                newPrompt: prompt,
-                temperature: 0.1,
-                maxTokens: tokenBudget,
-                manualMode,
-                manualJson
-            });
-            const repairUpdate = (invalidResponse, tokenBudget = maxTokens) => sendJsonRequest({
-                apiProfileId,
-                model,
-                systemPrompt: `${systemPrompt}\nREPAIR TASK: Correct only the JSON syntax and required shape of the supplied response. Preserve its proposed values, evidence IDs, SOURCE, and TARGET direction. Return only the corrected JSON object.`,
-                chatHistory: [],
-                newPrompt: `INVALID RESPONSE TO REPAIR:\n${String(invalidResponse || '').slice(0, 12000)}`,
-                temperature: 0,
-                maxTokens: tokenBudget,
-                manualMode,
-                manualJson
-            });
+            // One pass of the sheet: a reply cut short is asked again with less evidence and more room,
+            // anything else malformed goes to a repair; what a smaller request leaves out stays pending.
+            const runPass = async ({ scope, systemPrompt, schema, entries, buildPrompt }) => {
+                let used = entries;
+                const ask = (prompt, tokenBudget) => sendJsonRequest({
+                    apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: prompt,
+                    temperature: 0.1, maxTokens: tokenBudget, manualMode, manualJson, cacheScope: scope,
+                }, schema);
+                let result = await ask(buildPrompt(used.map(entry => entry.prompt).join('\n\n')), maxTokens);
+                let response = result.content;
+                let parsedPass = parseEntityUpdateObject(response).value;
+                if (isEntityUpdateShape(parsedPass)) return { parsed: parsedPass, used, dropped: [] };
+                const firstFailure = describeEntityUpdateFailure(result, parsedPass, fence);
+                logEntityUpdateFailure(ent, `${scope} first attempt`, firstFailure, result);
+                const retryTokens = entityUpdateRetryTokens(firstFailure.cause, maxTokens);
+                retryCount++;
+                let dropped = [];
+                if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
+                    const reduced = selectEntityEvidence(used, Math.max(1200, Math.floor(estimateTokens(used.map(entry => entry.prompt).join('\n\n')) / 2)));
+                    const reducedIds = new Set(reduced.map(entry => entry.id));
+                    dropped = used.filter(entry => !reducedIds.has(entry.id));
+                    if (reduced.length && dropped.length) used = reduced;
+                    else dropped = [];
+                    result = await ask(buildPrompt(used.map(entry => entry.prompt).join('\n\n')), retryTokens);
+                } else {
+                    result = await sendJsonRequest({
+                        apiProfileId, model,
+                        systemPrompt: `${systemPrompt}\nREPAIR TASK: Correct only the JSON syntax and required shape of the supplied response. Preserve its proposed values, evidence IDs, SOURCE, and TARGET direction. Return only the corrected JSON object.`,
+                        chatHistory: [],
+                        newPrompt: `INVALID RESPONSE TO REPAIR:\n${String(response || '').slice(0, 12000)}`,
+                        temperature: 0, maxTokens: retryTokens, manualMode, manualJson,
+                    }, schema);
+                }
+                response = result.content;
+                parsedPass = parseEntityUpdateObject(response).value;
+                if (isEntityUpdateShape(parsedPass)) return { parsed: parsedPass, used, dropped };
+                const retryFailure = describeEntityUpdateFailure(result, parsedPass, fence);
+                logEntityUpdateFailure(ent, `${scope} retry`, retryFailure, result);
+                const finish = result.finishReason ? ` Finish reason: ${result.finishReason}.` : '';
+                return {
+                    failure: `${retryFailure.message} Automatic retry also failed.${finish} Response length: ${String(response || '').length}. First response: ${firstFailure.message}`,
+                    failureMessage: retryFailure.message,
+                    used,
+                    dropped,
+                };
+            };
             updateState.transition(workspaceId, ent.id, includedEvidence, 'queued', runId);
             const deferredEvidence = evidenceEntries.filter(entry => !includedIds.has(entry.id));
             updateState.transition(workspaceId, ent.id, deferredEvidence, 'deferred', runId, 'token-budget');
-            let responseResult = await requestUpdate(buildUserPrompt(evidenceWindow));
-            let response = responseResult.content;
-            let head = splitHeadAndBody(response, fence);
-            let parsed = parseEntityUpdateObject(head.body).value || parseEntityUpdateObject(response).value;
-            if (!isEntityUpdateShape(parsed)) {
-                const firstFailure = describeEntityUpdateFailure(responseResult, parsed, fence);
-                logEntityUpdateFailure(ent, 'first attempt', firstFailure, responseResult);
-                const retryTokens = entityUpdateRetryTokens(firstFailure.cause, maxTokens);
-                retryCount++;
-                // Both mean no room was left to write: less evidence and a larger allowance is the only
-                // retry that helps. Anything else is a formatting fault for the repair pass.
-                if (firstFailure.cause === 'budget' || firstFailure.cause === 'empty') {
-                    // What the smaller request leaves out was never read, so it stays pending for the next pass.
-                    const reduced = selectEntityEvidence(includedEvidence, Math.max(1200, Math.floor(estimateTokens(evidenceWindow) / 2)));
-                    const reducedIds = new Set(reduced.map(entry => entry.id));
-                    const dropped = includedEvidence.filter(entry => !reducedIds.has(entry.id));
-                    if (reduced.length && dropped.length) {
-                        updateState.transition(workspaceId, ent.id, dropped, 'deferred', runId, 'token-budget');
-                        deferredEvidence.push(...dropped);
-                        pendingTaggedEvidence.push(...dropped.filter(entry => entry.chunk.isTagged));
-                        includedEvidence = reduced;
-                    }
-                    responseResult = await requestUpdate(buildUserPrompt(includedEvidence.map(entry => entry.prompt).join('\n\n')), retryTokens);
-                } else {
-                    responseResult = await repairUpdate(response, retryTokens);
-                }
-                response = responseResult.content;
-                head = splitHeadAndBody(response, fence);
-                parsed = parseEntityUpdateObject(head.body).value || parseEntityUpdateObject(response).value;
-                if (!isEntityUpdateShape(parsed)) {
-                    failed++;
-                    consecutiveStructuredFailures++;
-                    const retryFailure = describeEntityUpdateFailure(responseResult, parsed, fence);
-                    logEntityUpdateFailure(ent, 'retry', retryFailure, responseResult);
-                    const finish = responseResult.finishReason ? ` Finish reason: ${responseResult.finishReason}.` : '';
-                    rememberFailure(ent, `${retryFailure.message} Automatic retry also failed.${finish} Response length: ${String(response || '').length}. First response: ${firstFailure.message}`);
-                    updateState.transition(workspaceId, ent.id, includedEvidence, 'deferred', runId, 'invalid-structured-output');
-                    updateState.updateJob(runId, ent.id, {
-                        status: 'failed',
-                        input_tokens: inputTokenEstimate,
-                        output_tokens: outputTokenEstimate,
-                        retry_count: retryCount,
-                        evidence_used: includedEvidence.length,
-                        error: retryFailure.message,
+
+            const canonPass = await runPass({
+                scope: 'entity-update-sheet',
+                systemPrompt: canonSystemPrompt,
+                schema: buildEntityUpdateSchema({ pass: 'canon', kinds: canonKinds }),
+                entries: includedEvidence,
+                buildPrompt: canonPrompt,
+            });
+            const leaveForLater = dropped => {
+                if (!dropped.length) return;
+                updateState.transition(workspaceId, ent.id, dropped, 'deferred', runId, 'token-budget');
+                deferredEvidence.push(...dropped);
+                pendingTaggedEvidence.push(...dropped.filter(entry => entry.chunk.isTagged));
+            };
+            if (canonPass.failure) {
+                failed++;
+                consecutiveStructuredFailures++;
+                rememberFailure(ent, canonPass.failure);
+                updateState.transition(workspaceId, ent.id, includedEvidence, 'deferred', runId, 'invalid-structured-output');
+                updateState.updateJob(runId, ent.id, {
+                    status: 'failed',
+                    input_tokens: inputTokenEstimate,
+                    output_tokens: outputTokenEstimate,
+                    retry_count: retryCount,
+                    evidence_used: includedEvidence.length,
+                    error: canonPass.failureMessage,
+                });
+                continue;
+            }
+            leaveForLater(canonPass.dropped);
+            includedEvidence = canonPass.used;
+            const changes = [...canonPass.parsed.changes];
+            let narrativeFailure = null;
+            if (narrativePrompt) {
+                const narrativeCandidates = narrativeEntries.filter(entry => includedEvidence.includes(entry));
+                if (narrativeCandidates.length) {
+                    const narrativePass = await runPass({
+                        scope: 'entity-update-story',
+                        systemPrompt: narrativeSystemPrompt,
+                        schema: buildEntityUpdateSchema({ pass: 'narrative', causes: [...DURABLE_RELATIONSHIP_CAUSES] }),
+                        entries: narrativeCandidates,
+                        buildPrompt: narrativePrompt,
                     });
-                    continue;
+                    if (narrativePass.failure) {
+                        narrativeFailure = narrativePass.failure;
+                        // The sheet's findings stand; the passages the story pass needs are read again next run.
+                        updateState.transition(workspaceId, ent.id, narrativeCandidates, 'deferred', runId, 'invalid-structured-output');
+                        const failedIds = new Set(narrativeCandidates.map(entry => entry.id));
+                        includedEvidence = includedEvidence.filter(entry => !failedIds.has(entry.id));
+                    } else {
+                        const droppedIds = new Set(narrativePass.dropped.map(entry => entry.id));
+                        if (droppedIds.size) {
+                            updateState.transition(workspaceId, ent.id, narrativePass.dropped, 'deferred', runId, 'token-budget');
+                            includedEvidence = includedEvidence.filter(entry => !droppedIds.has(entry.id));
+                        }
+                        changes.push(...narrativePass.parsed.changes.filter(change => NARRATIVE_KINDS.includes(change.kind)));
+                    }
                 }
             }
+            if (narrativeFailure) rememberFailure(ent, narrativeFailure);
             consecutiveStructuredFailures = 0;
-            parsed = decodeEntityUpdate(parsed);
+            let parsed = decodeEntityUpdate({ changes: changes.filter(change => change && typeof change === 'object') });
 
             const policy = ent.data?.aiPolicy || 'review';
             const incoming = (parsed.data && typeof parsed.data === 'object') ? parsed.data : {};
@@ -6762,6 +7311,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 !(ent.type === 'Characters' && change.kind === 'fact')
                 && change.support
                 && change.evidence.some(id => validEvidenceIds.has(id))
+                // A played turn the story pass read already has its memories, knowledge and bonds.
+                && change.evidence.some(id => openEvidenceIds.has(id))
                 && !isEmptyRelationship(change)
                 && (change.kind !== 'relationship' || isAllowedBond(change))
                 // A relationship already proposed in this run, by this sheet or another, is not proposed twice.
@@ -6798,12 +7349,24 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                     if (!name) continue;
                     const rawTargetRole = item.targetRole ?? item.label;
                     const label = spec.labeled && rawTargetRole != null ? normalizeRelationshipLabel(rawTargetRole) : null;
-                    const targetId = resolveRelationTarget(name, spec, workspaceId);
+                    let targetId = resolveRelationTarget(name, spec, workspaceId);
                     if (!targetId || targetId === ent.id) continue;
                     // A name shared by a specific being and a species must land on the shape asked for.
                     if (spec.targetScope && !relationCandidates(all, ent, spec).some(candidate => candidate.id === targetId)) continue;
+                    if (PLACE_LINKS.has(spec.key)) {
+                        const place = placeLinkTarget({ targetId, support, candidates: relationCandidates(all, ent, spec) });
+                        if (!place) continue;
+                        targetId = place.id;
+                    }
                     const existingLink = existing.get(targetId);
-                    if (existingLink) continue;
+                    // A link already on the sheet only takes the job it was missing.
+                    if (existingLink) {
+                        if (spec.labeled && label && !existingLink.label && !seen.has(`${targetId}:job`)) {
+                            seen.add(`${targetId}:job`);
+                            proposedLinks.push({ relKey: spec.key, relLabel: spec.label, relType: spec.relType, from: spec.from, single: !!spec.single, label, metadata: undefined, existingLinkId: existingLink.linkId, targetId, targetName: existingLink.entity.canonicalName, evidence, support });
+                        }
+                        continue;
+                    }
                     const dedupe = `${targetId}:${label || ''}`;
                     if (seen.has(dedupe)) continue;
                     seen.add(dedupe);
@@ -6812,16 +7375,14 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 }
             }
 
-            const historyFindings = (parsed.history || []).filter(finding => finding.support && finding.evidence.some(id => validEvidenceIds.has(id)));
+            // Lore is background: only a statement about the past before the story, or the origin of
+            // something born in it, reaches it.
+            const historyFindings = (parsed.history || []).filter(finding => ['before-story', 'origin'].includes(finding.era)
+                && finding.support && finding.evidence.some(id => validEvidenceIds.has(id)));
             let loreProposal = null;
             let loreFailure = null;
-            // Lore is moved by history. A new link alone only starts a lore that does not exist yet.
-            if (allowLore && (historyFindings.length || (!String(ent.lore || '').trim() && proposedLinks.length))) {
-                const canonicalFindings = [
-                    ...historyFindings,
-                    ...proposedLinks.map(link => ({ kind: 'link', key: link.relKey, target: link.targetName, ...(link.label ? { targetRole: link.label } : {}), support: link.support, evidence: link.evidence })),
-                    ...narrativeChanges.filter(change => change.kind === 'fact'),
-                ];
+            if (allowLore && historyFindings.length) {
+                const canonicalFindings = historyFindings;
                 if (canonicalFindings.length) {
                     try {
                         const citedIds = new Set(canonicalFindings.flatMap(finding => finding.evidence || []));
@@ -6880,6 +7441,20 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                                 : `The Lore update for ${ent.canonicalName} could not be read and was not applied.`;
                             console.warn(`[Entity Update] ${loreFailure} finishReason=${loreResult.finishReason ?? 'unknown'}`);
                         }
+                        // The reading labels the era of what it found and gets it wrong for scenes of the
+                        // story; each new sentence is sorted again on its own, and story ones are dropped.
+                        if (loreProposal) {
+                            const kept = await keepBackgroundSentences({
+                                entity: ent,
+                                currentLore: ent.lore,
+                                nextLore: loreProposal.value,
+                                classify: (systemPrompt, prompt, tokens) => sendJsonRequest({
+                                    apiProfileId, model, systemPrompt, chatHistory: [], newPrompt: prompt,
+                                    temperature: 0, maxTokens: tokens, manualMode, manualJson, cacheScope: 'entity-update-lore',
+                                }, buildLoreCleanupSchema()),
+                            });
+                            loreProposal = kept ? { ...loreProposal, value: kept } : null;
+                        }
                     } catch (error) {
                         loreFailure = `The Lore update for ${ent.canonicalName} failed: ${cleanErrorMessage(error)}`;
                         console.warn(`[Entity Update] ${loreFailure}`);
@@ -6928,13 +7503,14 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
                 }
             }
 
-            const narrativeSuggestion = submitEntityNarrativeSuggestions({
+            const narrativeSuggestion = await submitEntityNarrativeSuggestions({
                 workspaceId,
                 entity: ent,
                 changes: narrativeChanges,
                 allEntities: all,
                 evidenceEntries: includedEvidence,
                 interpreterId: `${apiProfileId}:${model}`,
+                memoryIndex,
             });
             const hasCanonicalChange = Object.keys(proposedData).length || loreChanged || proposedLinks.length;
             const hasChange = hasCanonicalChange || narrativeSuggestion?.record || skillChanges.length;
@@ -6952,8 +7528,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             const canonicalProposalCount = Object.keys(proposedData).length
                 + proposedLinks.length
                 + (loreChanged ? 1 : 0);
-            const narrativeProposalCount = (narrativeSuggestion?.records || [])
-                .reduce((total, record) => total + (record?.proposal?.changeSet?.operations?.length || 0), 0);
+            const narrativeProposalCount = narrativeSuggestion?.operationCount || 0;
             const proposalCount = canonicalProposalCount + narrativeProposalCount + skillChanges.length;
             canonicalSuggestionCount += canonicalProposalCount;
             narrativeSuggestionCount += narrativeProposalCount;
@@ -6965,15 +7540,23 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             if (deferredEvidence.length) emptyFieldsAwaitingEvidence += emptyFieldsStillOpen;
             else emptyFieldsWithoutSupport += emptyFieldsStillOpen;
             const finishEntity = (actionable) => {
-                passTokens.set(ent.id, { input: inputTokenEstimate, output: outputTokenEstimate });
+                // A sheet read in several passes reports what all of them read and proposed.
+                const earlier = passTokens.get(ent.id) || {};
+                const totals = {
+                    input: inputTokenEstimate,
+                    output: outputTokenEstimate,
+                    evidence: (earlier.evidence || 0) + includedEvidence.length,
+                    proposals: (earlier.proposals || 0) + proposalCount,
+                };
+                passTokens.set(ent.id, totals);
                 updateState.transition(workspaceId, ent.id, includedEvidence, actionable ? 'actionable' : 'non-actionable', runId, actionable ? 'proposals-created' : 'no-supported-change');
                 updateState.updateJob(runId, ent.id, {
                     status: 'completed',
-                    input_tokens: inputTokenEstimate,
-                    output_tokens: outputTokenEstimate,
+                    input_tokens: totals.input,
+                    output_tokens: totals.output,
                     retry_count: retryCount,
-                    evidence_used: includedEvidence.length,
-                    proposals_created: proposalCount,
+                    evidence_used: totals.evidence,
+                    proposals_created: totals.proposals,
                     error: null,
                 });
             };
@@ -7066,6 +7649,14 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         }
     }
     if (progressCallback) progressCallback({ phase: 'enriching', done: processedEntities, total: targets.length });
+    let fieldGaps = { examined: 0, found: 0, absent: 0, sheets: 0, remaining: 0 };
+    if (!stoppedEarly && !cancelled && gapTargets.size) {
+        try {
+            fieldGaps = await fillEntityFieldGaps({ workspaceId, entityIds: [...gapTargets], candidatesByEntity, runId, updateState, passTokens, shouldCancel, progressCallback });
+        } catch (error) {
+            console.warn('[Field gaps] The field pass stopped:', cleanErrorMessage(error));
+        }
+    }
     const runStatus = stoppedEarly || cancelled || failed ? (processedEntities > failed ? 'partial' : 'failed') : 'completed';
     const tokenUsage = updateState.finishRun(runId, runStatus);
     try { clearImportSources(workspaceId); }
@@ -7077,7 +7668,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         failed, failures, evidenceUsed, taggedEvidenceRemaining, textMatchesDeferred,
         canonicalSuggestionCount, narrativeSuggestionCount, skillSuggestionCount, emptyFieldsExamined,
         emptyFieldSuggestions, emptyFieldsWithoutSupport, emptyFieldsAwaitingEvidence,
-        stoppedEarly, cancelled, remaining: targets.length - processedEntities, tokenUsage
+        stoppedEarly, cancelled, remaining: targets.length - processedEntities, tokenUsage, fieldGaps
     };
 }
 
@@ -8500,6 +9091,7 @@ module.exports = {
     vectorizeDocument,
     retagDocumentChunks,
     enrichEntities,
+    cleanLoreToBackground,
     discoverImportSources,
     estimateImportFill,
     applyImportSources,

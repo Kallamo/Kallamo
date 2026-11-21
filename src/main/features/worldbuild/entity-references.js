@@ -11,6 +11,8 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'entity_enrichment_chunks', column: 'entityId', merge: 'repoint', delete: 'remove' },
   { table: 'entity_enrichment_errors', column: 'entityId', merge: 'remove', delete: 'remove' },
   { table: 'entity_update_evidence', column: 'entity_id', merge: 'repoint', delete: 'remove' },
+  // A merged sheet has other fields filled, so what was checked on either side is asked again.
+  { table: 'entity_field_checks', column: 'entity_id', merge: 'remove', delete: 'remove' },
   { table: 'entity_update_jobs', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
   { table: 'entity_update_origins', column: 'entity_id', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_origins', column: 'previous_json', merge: 'repoint', delete: 'remove' },
@@ -160,6 +162,7 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
   moveUnique('entity_enrichment_chunks', 'entityId');
   if (has('entity_enrichment_errors')) db.prepare('DELETE FROM entity_enrichment_errors WHERE entityId = ?').run(sourceId);
   moveUnique('entity_update_evidence', 'entity_id');
+  if (has('entity_field_checks')) db.prepare('DELETE FROM entity_field_checks WHERE workspace_id = ? AND entity_id IN (?, ?)').run(workspaceId, sourceId, targetId);
   moveUnique('entity_update_jobs', 'entity_id');
   if (has('entity_update_origins')) {
     db.prepare('UPDATE entity_update_origins SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
@@ -403,6 +406,7 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   if (has('entity_enrichment_chunks')) db.prepare('DELETE FROM entity_enrichment_chunks WHERE entityId = ?').run(entityId);
   if (has('entity_enrichment_errors')) db.prepare('DELETE FROM entity_enrichment_errors WHERE entityId = ?').run(entityId);
   if (has('entity_update_evidence')) db.prepare('DELETE FROM entity_update_evidence WHERE entity_id = ?').run(entityId);
+  if (has('entity_field_checks')) db.prepare('DELETE FROM entity_field_checks WHERE entity_id = ?').run(entityId);
   // A change to a deleted entity, or to a link that went with it, has nothing left to undo.
   if (has('entity_update_origins')) {
     db.prepare(`

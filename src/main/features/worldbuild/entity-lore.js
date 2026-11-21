@@ -18,7 +18,22 @@ function validateEntityLore(value, currentLore, validEvidenceIds) {
   // A first lore may be short; a high floor makes the model pad it with the sheet's other sections.
   const minimumLength = current ? Math.max(400, Math.floor(current.length * 0.8)) : 200;
   if (lore.length < minimumLength || lore === current) return null;
+  if (!keepsEveryLoreSentence(current, lore)) return null;
   return { value: lore, support, evidence };
+}
+
+function loreSentences(text) {
+  return String(text || '')
+    .split(/(?<=[.!?…])\s+|\n+/)
+    .map(sentence => sentence.replace(/\s+/g, ' ').trim())
+    .filter(sentence => sentence.length >= 20);
+}
+
+// New background is placed among what is there; a lore that drops or rewords a sentence is a
+// rewrite, and rewriting is the person's call, never an update's.
+function keepsEveryLoreSentence(current, next) {
+  const flat = String(next || '').replace(/\s+/g, ' ');
+  return loreSentences(current).every(sentence => flat.includes(sentence));
 }
 
 // Long entries are extended, not rewritten: a full rewrite stops fitting the output limit.
@@ -43,7 +58,8 @@ const OTHER_SECTIONS = {
 function loreScope(entityType, skillsInUse) {
   const elsewhere = [OTHER_SECTIONS[entityType], entityType === 'Characters' && skillsInUse ? 'skills, techniques, magic and fighting style' : '']
     .filter(Boolean).join(', ');
-  return `Lore tells who ${entityType === 'Characters' ? 'they are and what they have lived' : 'it is and what happened to it'}: identity, origin, role and titles, trajectory, important relationships, the events that changed it, and its current situation. ` +
+  return `Lore is ${entityType === 'Characters' ? 'this character\'s background: who they were and what they lived' : 'this entity\'s background: what it was and what happened to it'} before the story began, or, for something that first appears during the story, only how it came to be. ` +
+    'Never what happens in the story\'s present (scenes, meetings, decisions, plans, the current situation), and never a current role, title, membership, home or workplace: the story record and the sheet\'s fields and links keep those. ' +
     (elsewhere ? `Its sheet keeps ${elsewhere} in their own sections: never write a description of them; mention one only where it is part of an event. ` : '') +
     'Write only what is true of this one entity: never describe it through the general traits of its race, species, people or culture, and never explain a setting concept or custom. ' +
     'Write as the world bible, in the third person and in the story\'s own terms. Never mention documents, records, sheets, evidence, sources, or what is unknown or not yet established. Do not guess with words such as "suggests" or "seems". ';
@@ -73,8 +89,8 @@ function buildLorePrompt({ entityName, entityType, currentLore, findings, eviden
   return `CURRENT LORE:\n${String(currentLore || '').trim() || '(none)'}\n\n` +
     `VALIDATED NEW FINDINGS:\n${JSON.stringify(findings)}\n\n` +
     `SUPPORTING EVIDENCE:\n${evidence}\n\n` +
-    `Write a cumulative world-bible lore entry for ${entityName} (${entityType}). ${loreScope(entityType, skillsInUse)}` +
-    `Preserve established information and integrate only the supported new findings. ${SPOILER_RULE}` +
+    `Write the world-bible lore entry for ${entityName} (${entityType}). ${loreScope(entityType, skillsInUse)}` +
+    `Keep every sentence of the current lore word for word, in its order; only add the new background findings, each where it belongs in time. ${SPOILER_RULE}` +
     `Do not reduce the entity to one event or cultural detail. Do not add headings merely to fill space. Do not invent motives, causation, or conclusions. ` +
     `Return only {"lore":{"value":"...","support":"...","evidence":["E_ID"]}}.`;
 }
@@ -90,6 +106,8 @@ function buildLoreAppendPrompt({ entityName, entityType, currentLore, findings, 
 }
 
 module.exports = {
+  keepsEveryLoreSentence,
+  loreSentences,
   buildLorePrompt,
   buildLoreAppendPrompt,
   buildSpoilerRetryNote,

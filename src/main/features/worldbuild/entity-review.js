@@ -1,5 +1,9 @@
 const { comparableText, isWeakTextReplacement } = require('./entity-update-contract');
-const { limitToNextBand } = require('../../../../dist-main/narrative/relationship-bands');
+const { limitToNextBand, limitRelationshipChange } = require('../../../../dist-main/narrative/relationship-bands');
+const { DURABLE_RELATIONSHIP_CAUSES } = require('../../../../dist-main/narrative/narrative-taxonomy');
+
+const DURABLE_CAUSES = new Set(DURABLE_RELATIONSHIP_CAUSES);
+const IMPACTS = new Set(['meaningful', 'significant', 'drastic']);
 
 function discardEnrichPending(currentData) {
   const pending = currentData?._enrichPending;
@@ -61,6 +65,35 @@ function resolveRelationshipUpdate(current, proposed) {
   return unchanged ? null : { title: nextTitle, value, description: nextDescription };
 }
 
+// A reading names which way a bond moved, why and how hard; the value is the story pass's own
+// arithmetic, so the same event moves a bond the same distance from a document and from play.
+// A new bond starts from the score the reading gives, inside the first-reading limits.
+function resolveRelationshipChange(current, proposed) {
+  const title = String(proposed.title || '').trim();
+  const description = String(proposed.description || '').trim();
+  const cause = String(proposed.cause || '').trim();
+  const impact = IMPACTS.has(proposed.impact) ? proposed.impact : 'meaningful';
+  if (!DURABLE_CAUSES.has(cause)) return null;
+  if (!current) {
+    const requested = Math.max(-100, Math.min(100, Math.round(Number(proposed.score) || 0)));
+    if (!title || (!requested && !description)) return null;
+    const start = limitRelationshipChange({ current: null, requested, impact, cause });
+    return { title, value: start.value ?? requested, description, cause };
+  }
+  const direction = proposed.direction === 'closer' ? 1 : proposed.direction === 'further' ? -1 : 0;
+  if (!direction) return null;
+  const currentValue = Math.round(Number(current.value) || 0);
+  const moved = limitRelationshipChange({ current: currentValue, requested: direction * 100, impact, cause });
+  if (moved.value == null) return null;
+  const reversed = Math.sign(moved.value) !== Math.sign(currentValue) && moved.value !== 0 && currentValue !== 0;
+  const currentTitle = String(current.title || '').trim();
+  const currentDescription = String(current.description || '').trim();
+  const nextDescription = !description || (currentDescription && isWeakTextReplacement(currentDescription, description, { floor: 40 }))
+    ? currentDescription
+    : description;
+  return { title: reversed && title ? title : currentTitle || title, value: moved.value, description: nextDescription, cause };
+}
+
 function validateNarrativeChange(change, currentEntityId, entityIds) {
   if (!change || typeof change !== 'object') return { valid: false, reason: 'invalid-change' };
   if (change.kind === 'observation') return { valid: false, reason: 'document-observation' };
@@ -91,6 +124,7 @@ module.exports = {
   discardEnrichPending,
   normalizeDirectionalRelationship,
   normalizeRelationshipLabel,
+  resolveRelationshipChange,
   resolveRelationshipUpdate,
   validateNarrativeChange,
 };

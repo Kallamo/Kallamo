@@ -1682,6 +1682,32 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, record_id, origin_id)
       );
     `)
+  },
+  {
+    // An empty field the field pass looked at, and what it read: the same passages are not asked again.
+    id: 'entity_field_checks_v1',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS entity_field_checks (
+          workspace_id TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          field_key TEXT NOT NULL,
+          evidence_signature TEXT NOT NULL,
+          result TEXT NOT NULL CHECK (result IN ('found', 'absent')),
+          checked_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, entity_id, field_key)
+        );
+      `);
+      if (hasTable(db, 'entities')) {
+        db.exec(`
+          CREATE TRIGGER IF NOT EXISTS trg_entity_field_checks_entity_gc
+          AFTER DELETE ON entities
+          FOR EACH ROW BEGIN
+            DELETE FROM entity_field_checks WHERE entity_id = OLD.id;
+          END;
+        `);
+      }
+    }
   }
 ];
 
