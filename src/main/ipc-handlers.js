@@ -4038,6 +4038,11 @@ function getRoleplaySkills() {
   return new RoleplaySkills(db);
 }
 
+function getRoleplayConditions() {
+  const { RoleplayConditions } = require('../../dist-main/main/features/narrative/roleplay-conditions');
+  return new RoleplayConditions(db);
+}
+
 function getRulesPackager() {
   const { RoleplayRulesPackager } = require('../../dist-main/main/features/narrative/roleplay-rules-package');
   return new RoleplayRulesPackager(db);
@@ -4071,6 +4076,12 @@ ipcMain.handle('get-roleplay-configuration', async (event, { workspaceId } = {})
       progressChanges: progression.listChanges(workspaceId),
       skills: { ...skills.getSettings(workspaceId), learningIds: skills.learningIds(workspaceId), catalog: skills.listSkills(workspaceId) },
       skillChanges: skills.listChanges(workspaceId),
+      conditions: {
+        ...getRoleplayConditions().getSettings(workspaceId),
+        catalog: getRoleplayConditions().listDefinitions(workspaceId),
+        active: getRoleplayConditions().listActive(workspaceId)
+      },
+      conditionChanges: getRoleplayConditions().listChanges(workspaceId),
       calendar: calendarService.getCalendar(db, workspaceId),
       clock: calendarService.getRoleplayClock(db, workspaceId),
       timeMatrix: calendarService.getTimeMatrix(db, workspaceId),
@@ -4435,6 +4446,56 @@ ipcMain.handle('set-roleplay-entity-skill', async (event, { workspaceId, entityI
 ipcMain.handle('resolve-roleplay-skill-change', async (event, { workspaceId, changeId, decision } = {}) => {
   try { return { success: true, change: getRoleplaySkills().resolveChange(workspaceId, changeId, decision) }; }
   catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-condition-settings', async (event, { workspaceId, ...patch } = {}) => {
+  try { return { success: true, settings: getRoleplayConditions().saveSettings(workspaceId, patch) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('save-roleplay-condition', async (event, { workspaceId, condition } = {}) => {
+  try { return { success: true, condition: getRoleplayConditions().saveDefinition(workspaceId, condition || {}) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('delete-roleplay-condition', async (event, { workspaceId, conditionId } = {}) => {
+  try { getRoleplayConditions().deleteDefinition(workspaceId, conditionId); return { success: true }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('list-roleplay-entity-conditions', async (event, { workspaceId, entityId } = {}) => {
+  try {
+    const conditions = getRoleplayConditions();
+    return {
+      success: true,
+      enabled: conditions.getSettings(workspaceId).enabled,
+      catalog: conditions.listDefinitions(workspaceId).filter(condition => condition.status === 'confirmed'),
+      active: conditions.listActive(workspaceId, [entityId])
+    };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('set-roleplay-entity-condition', async (event, { workspaceId, entityId, conditionId, active } = {}) => {
+  try {
+    const { roleplayClockLabel } = require('./workflow-runner');
+    const conditions = getRoleplayConditions().setActive(workspaceId, entityId, conditionId, Boolean(active), roleplayClockLabel(workspaceId));
+    event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'condition', entityId }] });
+    return { success: true, active: conditions };
+  } catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('resolve-roleplay-condition-change', async (event, { workspaceId, changeId, decision } = {}) => {
+  try { return { success: true, change: getRoleplayConditions().resolveChange(workspaceId, changeId, decision) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+
+ipcMain.handle('close-roleplay-scene', async (event, { workspaceId } = {}) => {
+  try {
+    const { closeRoleplayScene } = require('./workflow-runner');
+    const result = await closeRoleplayScene(workspaceId);
+    if (result.success && result.proposals) event.sender.send('roleplay-resource-changes', { workspaceId, changes: [{ kind: 'progress' }] });
+    return result;
+  } catch (error) { return { success: false, error: error.message }; }
 });
 
 ipcMain.handle('get-roleplay-entity-history', async (event, { workspaceId, entityId, limit } = {}) => {

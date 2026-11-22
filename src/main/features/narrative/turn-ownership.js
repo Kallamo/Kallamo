@@ -23,6 +23,9 @@ const TURN_OWNED_COLUMNS = [
   { table: 'roleplay_inventory_changes', column: 'provenance_id' },
   { table: 'roleplay_resource_changes', column: 'provenance_id' },
   { table: 'roleplay_progress_changes', column: 'provenance_id' },
+  // A condition the turn proposed waits as proposed in the Rules, like a created skill.
+  { table: 'roleplay_condition_changes', column: 'provenance_id' },
+  { table: 'roleplay_scene_growth', column: 'origin_id' },
   // A skill the turn created waits as proposed in the Rules, so the row that created it stays.
   { table: 'roleplay_skill_changes', column: 'provenance_id', keep: "kind = 'create'" },
   // An entity the turn created waits as proposed to be taken back by the same arrival later.
@@ -41,6 +44,7 @@ const TURN_OWNED_THROUGH_EVENTS = [
 const NOT_TURN_TABLES = [
   { table: 'narrative_origin_lifecycle', reason: 'The tombstone: a late analysis of a dead turn must find it dead.' },
   { table: 'narrative_scenes', reason: 'The live scene, restored from the turn snapshot, not owned by a turn.' },
+  { table: 'roleplay_conditions', reason: 'Who has a condition now, restored from the turn snapshot; started_by only names where it began.' },
   { table: 'narrative_turn_replacements', reason: 'Open restore points; settled when the replacement completes or is cancelled.' }
 ];
 

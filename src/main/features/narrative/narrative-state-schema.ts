@@ -73,7 +73,7 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
       type: 'array',
       items: {
         type: 'string',
-        enum: ['entity', 'scene', 'resource', 'inventory', 'awareness', 'knowledge', 'belief', 'memory', 'relationship', 'fact'],
+        enum: ['entity', 'scene', 'resource', 'condition', 'inventory', 'awareness', 'knowledge', 'belief', 'memory', 'relationship', 'fact'],
       },
     },
     entityIds: { type: 'array', items: { type: 'string' } },
@@ -89,7 +89,7 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
         {
           type: 'object',
           additionalProperties: false,
-          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence', 'statedSpan', 'movementOnly'],
+          required: ['actionType', 'basis', 'duration', 'targetPosition', 'confidence', 'evidence', 'statedSpan', 'movementOnly', 'rest'],
           properties: {
             actionType: { type: 'string' },
             movementOnly: { type: 'boolean' },
@@ -142,6 +142,16 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
                 },
               ],
             },
+            rest: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['sleepMinutes', 'restMinutes', 'restingIds'],
+              properties: {
+                sleepMinutes: { type: 'integer', minimum: 0 },
+                restMinutes: { type: 'integer', minimum: 0 },
+                restingIds: { type: 'array', items: { type: 'string' } },
+              },
+            },
           },
         },
       ],
@@ -178,11 +188,12 @@ export const NARRATIVE_TRIAGE_SCHEMA = {
 export const NARRATIVE_MECHANICS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['newEntities', 'identityUpdates', 'resourceChanges', 'scenePatch', 'inventoryChanges'],
+  required: ['newEntities', 'identityUpdates', 'resourceChanges', 'conditionChanges', 'scenePatch', 'inventoryChanges'],
   properties: {
     newEntities: { type: 'array', items: { type: 'object', additionalProperties: true } },
     identityUpdates: { type: 'array', items: { type: 'object', additionalProperties: true } },
     resourceChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    conditionChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
     scenePatch: { type: 'object', additionalProperties: true },
     inventoryChanges: { type: 'array', items: { type: 'object', additionalProperties: true } },
   },
@@ -214,6 +225,35 @@ export const NARRATIVE_STORY_SCHEMA = {
           worldDate: { type: 'object', additionalProperties: true },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
           operations: { type: 'array', items: NARRATIVE_OPERATION_SCHEMA },
+        },
+      },
+    },
+  },
+};
+
+/** Growth weighed at the end of a scene: experience, attributes and skills, each citing the scene. */
+export const NARRATIVE_GROWTH_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['changes'],
+  properties: {
+    changes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+        required: ['entityId', 'reason'],
+        properties: {
+          entityId: { type: 'string' },
+          progress: { type: 'string', enum: ['xp', 'attribute'] },
+          skill: { type: 'string', enum: ['assign', 'rank', 'create'] },
+          attribute: { type: 'string' },
+          name: { type: 'string' },
+          rank: { type: 'string' },
+          parent: { type: 'string' },
+          description: { type: 'string' },
+          change: { type: 'number' },
+          reason: { type: 'string' },
         },
       },
     },

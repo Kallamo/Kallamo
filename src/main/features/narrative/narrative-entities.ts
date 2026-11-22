@@ -88,7 +88,7 @@ interface EntityRow {
 
 const AUTO_TYPES = new Set<NarrativeEntityType>(['Characters', 'Creatures']);
 const SCENE_LOCATION_SIZES = new Set(['spot', 'place']);
-const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
+const OPEN_CHANGE_TABLES = ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_condition_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes', 'roleplay_entity_changes'];
 
 type TurnSnapshot = Record<string, Array<Record<string, unknown>> | undefined>;
 
@@ -108,6 +108,7 @@ export const SNAPSHOT_ENTITY_COLUMNS: Record<string, { table: string; required?:
   resources: { table: 'roleplay_resource_values', required: ['target_id'] },
   progress: { table: 'roleplay_progress_values', required: ['target_id'] },
   skills: { table: 'roleplay_skill_values', required: ['entity_id'] },
+  conditions: { table: 'roleplay_conditions', required: ['entity_id'] },
   links: { table: 'entity_links', required: ['fromId', 'toId'] }
 };
 
@@ -312,7 +313,7 @@ export class NarrativeEntitySystem {
     `).run(entityStatus, Date.now(), workspaceId, workspaceId, originId, entityStatus, entityStatus, workspaceId, originId);
     this.syncCreatedSkills(workspaceId, originId, status === 'active');
     if (status !== 'active') {
-      for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
+      for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_condition_changes', 'roleplay_scene_changes', 'roleplay_inventory_changes']) {
         if (!this.hasTable(table)) continue;
         this.db.prepare(`UPDATE ${table} SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND provenance_id = ? AND status = 'pending'`)
           .run(Date.now(), workspaceId, originId);
@@ -508,6 +509,7 @@ export class NarrativeEntitySystem {
       resources: this.rows('roleplay_resource_values', workspaceId),
       progress: this.hasTable('roleplay_progress_values') ? this.rows('roleplay_progress_values', workspaceId) : [],
       skills: this.hasTable('roleplay_skill_values') ? this.rows('roleplay_skill_values', workspaceId) : [],
+      conditions: this.hasTable('roleplay_conditions') ? this.rows('roleplay_conditions', workspaceId) : [],
       timeState: this.hasTable('roleplay_time_state') ? this.rows('roleplay_time_state', workspaceId) : [],
       timeAdvances: this.hasTable('roleplay_time_advances') ? this.rows('roleplay_time_advances', workspaceId) : [],
       links: (this.db.prepare(`
@@ -589,6 +591,7 @@ export class NarrativeEntitySystem {
       this.replaceRows('roleplay_resource_values', workspaceId, snapshot.resources ?? []);
       if (snapshot.progress && this.hasTable('roleplay_progress_values')) this.replaceRows('roleplay_progress_values', workspaceId, snapshot.progress);
       if (snapshot.skills && this.hasTable('roleplay_skill_values')) this.replaceRows('roleplay_skill_values', workspaceId, snapshot.skills);
+      if (snapshot.conditions && this.hasTable('roleplay_conditions')) this.replaceRows('roleplay_conditions', workspaceId, snapshot.conditions);
       if (this.hasTable('roleplay_time_state')) {
         this.replaceRows('roleplay_time_state', workspaceId, snapshot.timeState ?? []);
       }
@@ -770,7 +773,8 @@ export class NarrativeEntitySystem {
     if (this.hasTable('roleplay_equipment')) this.db.prepare('DELETE FROM roleplay_equipment WHERE workspace_id = ? AND (entity_id = ? OR item_id = ?)').run(workspaceId, entityId, entityId);
     if (this.hasTable('roleplay_location_inventory')) this.db.prepare('DELETE FROM roleplay_location_inventory WHERE workspace_id = ? AND (location_id = ? OR item_id = ?)').run(workspaceId, entityId, entityId);
     if (this.hasTable('roleplay_resource_values')) this.db.prepare('DELETE FROM roleplay_resource_values WHERE workspace_id = ? AND target_id = ?').run(workspaceId, entityId);
-    for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes']) {
+    if (this.hasTable('roleplay_conditions')) this.db.prepare('DELETE FROM roleplay_conditions WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
+    for (const table of ['roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes', 'roleplay_condition_changes']) {
       if (this.hasTable(table)) this.db.prepare(`UPDATE ${table} SET status = 'rejected', resolved_at = ? WHERE workspace_id = ? AND entity_id = ? AND status = 'pending'`).run(now, workspaceId, entityId);
     }
     this.db.prepare('DELETE FROM entity_links WHERE workspaceId = ? AND (fromId = ? OR toId = ?)').run(workspaceId, entityId, entityId);

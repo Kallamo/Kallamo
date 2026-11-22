@@ -7,6 +7,7 @@ export const CHANGE_KINDS = {
   resource: { label: 'State', group: 'Resources', chip: 'bg-status-warning/14 text-status-warning', dot: 'bg-status-warning', bullet: 'text-status-warning' },
   progress: { label: 'Progress', group: 'Progression', chip: 'bg-entity-creature/14 text-entity-creature', dot: 'bg-entity-creature', bullet: 'text-entity-creature' },
   skill: { label: 'Skill', group: 'Skills', chip: 'bg-entity-creature/14 text-entity-creature', dot: 'bg-entity-creature', bullet: 'text-entity-creature' },
+  condition: { label: 'Condition', group: 'Conditions', chip: 'bg-status-danger/12 text-status-danger', dot: 'bg-status-danger', bullet: 'text-status-danger' },
   entity: { label: 'Entity', group: 'New in the world', chip: 'bg-entity-concept/12 text-entity-concept', dot: 'bg-entity-concept', bullet: 'text-entity-concept' },
   time: { label: 'Time', group: 'Time', chip: 'bg-status-info/14 text-status-info', dot: 'bg-status-info', bullet: 'text-status-info' }
 };
@@ -21,6 +22,21 @@ export function skillChangeItems(configuration) {
   return (configuration?.skillChanges || []).map(change => ({
     ...change, kind: 'skill', skillKind: change.kind, skillName: names.get(change.skillId) || 'A skill', ranks
   }));
+}
+
+/** Condition changes from the roleplay configuration, named and ready for the change lists. */
+export function conditionChangeItems(configuration) {
+  const names = new Map((configuration?.conditions?.catalog || []).map(condition => [condition.id, condition.name]));
+  return (configuration?.conditionChanges || []).map(change => ({
+    ...change, kind: 'condition', conditionKind: change.kind, conditionName: names.get(change.conditionId) || 'A condition'
+  }));
+}
+
+/** One line for a condition change: who, which condition, and what happened to it. */
+export function describeConditionChange(change, who) {
+  if (change.conditionKind === 'end') return `${who} no longer has ${change.conditionName}`;
+  if (change.conditionKind === 'extend') return `${who}: ${change.conditionName} got worse`;
+  return `${who} has ${change.conditionName}`;
 }
 
 /**

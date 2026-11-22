@@ -4,6 +4,7 @@ import type { ContextCandidate, ContextEpistemicMetadata, ContextSourceType } fr
 import { RoleplaySystem } from './roleplay-system';
 import { RoleplayProgression } from './roleplay-progression';
 import { RoleplaySkills } from './roleplay-skills';
+import { RoleplayConditions, describeConditionEnd, type ActiveCondition } from './roleplay-conditions';
 import { createWorldbuildKnowledgeService, type WorldbuildKnowledgeService } from '../worldbuild/knowledge-service';
 import { sharedKnowledgeCards } from '../worldbuild/knowledge-groups';
 import { derivedAge } from '../../../shared/world-age';
@@ -138,21 +139,37 @@ export class NarrativeChatContext {
     if (settings.playerEntityId) ids.add(settings.playerEntityId);
     const usedDefinitions = new Map<string, ReturnType<RoleplaySystem['listEntityResources']>[number]>();
     const names = this.getEntityNames(workspaceId, [...ids]);
+    const conditions = this.activeConditions(workspaceId, [...ids]);
+    const usedConditions = new Map<string, ActiveCondition>();
     // One line per person, under their name: values without an owner are read as anyone's.
     const values = [...ids].flatMap(entityId => {
       if (!names.has(entityId)) return [];
       const resources = this.roleplay.listEntityResources(workspaceId, entityId);
-      if (!resources.length) return [];
+      const held = conditions.filter(condition => condition.entityId === entityId);
+      if (!resources.length && !held.length) return [];
       resources.forEach(resource => usedDefinitions.set(resource.definitionId, resource));
+      held.forEach(condition => usedConditions.set(condition.conditionId, condition));
+      const parts = [
+        resources.length ? resources.map(resource => `${resource.name} ${resource.current} / ${resource.maximum}${resource.unit ? ` ${resource.unit}` : ''}`).join(', ') : '',
+        held.length ? `${held.length === 1 ? 'condition' : 'conditions'}: ${held.map(describeHeldCondition).join('; ')}` : ''
+      ].filter(Boolean);
       return [this.candidate({
         id: `roleplay-state:${entityId}`,
         workspaceId, sourceType: 'state', sourceId: entityId,
-        content: `${names.get(entityId)}: ${resources.map(resource => `${resource.name} ${resource.current} / ${resource.maximum}${resource.unit ? ` ${resource.unit}` : ''}`).join(', ')}.`,
+        content: `${names.get(entityId)}: ${parts.join('. ')}.`,
         relevance: 1,
         epistemic: { kind: 'knowledge', subjectId: entityId, accessibility: 'available' },
-        provenanceIds: [entityId, ...resources.map(resource => resource.definitionId)]
+        provenanceIds: [entityId, ...resources.map(resource => resource.definitionId), ...held.map(condition => condition.conditionId)]
       })];
     });
+    const conditionRules = [...usedConditions.values()].flatMap(condition => condition.description ? [this.candidate({
+      id: `roleplay-condition-rule:${condition.conditionId}`,
+      workspaceId, sourceType: 'state', sourceId: condition.conditionId,
+      content: `${condition.name}: ${condition.description}`,
+      relevance: 1,
+      epistemic: { kind: 'canon', access: 'public' },
+      provenanceIds: [condition.conditionId]
+    })] : []);
     // What a resource means travels once, beside the values, so the narrator plays it as written.
     const rules = [...usedDefinitions.values()].flatMap(resource => {
       const lines = [
@@ -168,7 +185,17 @@ export class NarrativeChatContext {
         provenanceIds: [resource.definitionId]
       })] : [];
     });
-    return [...values, ...rules, ...this.loadProgressionCandidates(workspaceId, ids), ...this.loadSkillCandidates(workspaceId, ids)];
+    return [...values, ...rules, ...conditionRules, ...this.loadProgressionCandidates(workspaceId, ids), ...this.loadSkillCandidates(workspaceId, ids)];
+  }
+
+  // Conditions on and off with the world's switch; a database without them yet has none.
+  private activeConditions(workspaceId: string, entityIds: string[]): ActiveCondition[] {
+    try {
+      const system = new RoleplayConditions(this.db);
+      return system.getSettings(workspaceId).enabled ? system.listActive(workspaceId, entityIds) : [];
+    } catch {
+      return [];
+    }
   }
 
   // Only who progresses carries a level and attributes; everyone else is a fixed NPC.
@@ -740,4 +767,11 @@ export function createNarrativeChatContext(
   estimateTokens: (text: string) => number
 ): NarrativeChatContext {
   return new NarrativeChatContext(db, estimateTokens);
+}
+
+/** One held condition as the narrator reads it: since when, and what ends it. */
+function describeHeldCondition(condition: ActiveCondition): string {
+  const end = describeConditionEnd({ durationMinutes: null, sleepMinutes: null, restMinutes: null, endsWhen: condition.endsWhen, timeLeftMinutes: condition.timeLeftMinutes, sleepLeftMinutes: condition.sleepLeftMinutes, restLeftMinutes: condition.restLeftMinutes });
+  const details = [condition.startedLabel ? `since ${condition.startedLabel}` : '', end].filter(Boolean).join('; ');
+  return details ? `${condition.name} (${details})` : condition.name;
 }

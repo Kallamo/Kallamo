@@ -1708,6 +1708,97 @@ const MIGRATIONS = [
         `);
       }
     }
+  },
+  {
+    // How much a resource gives back for each hour someone sleeps or rests, applied by the clock.
+    id: 'roleplay_resource_rest_v1',
+    up: (db) => {
+      if (!hasTable(db, 'roleplay_resource_definitions')) return;
+      const columns = db.prepare('PRAGMA table_info(roleplay_resource_definitions)').all().map(column => column.name);
+      if (!columns.includes('sleep_rate')) db.exec('ALTER TABLE roleplay_resource_definitions ADD COLUMN sleep_rate REAL NOT NULL DEFAULT 0');
+      if (!columns.includes('rest_rate')) db.exec('ALTER TABLE roleplay_resource_definitions ADD COLUMN rest_rate REAL NOT NULL DEFAULT 0');
+    }
+  },
+  {
+    // Each scene whose growth was weighed, by the reply that closed it: where the next scene starts.
+    id: 'roleplay_scene_growth_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_scene_growth (
+        workspace_id TEXT NOT NULL,
+        origin_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        turn_count INTEGER NOT NULL DEFAULT 0,
+        proposal_count INTEGER NOT NULL DEFAULT 0,
+        settled_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, origin_id)
+      );
+    `)
+  },
+  {
+    // Conditions: a world's catalog, who has one now, and every change the story or a person made.
+    id: 'roleplay_conditions_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS roleplay_condition_settings (
+        workspace_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        update_policy TEXT NOT NULL DEFAULT 'review' CHECK (update_policy IN ('manual', 'review', 'automatic')),
+        ai_creates INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS roleplay_condition_definitions (
+        workspace_id TEXT NOT NULL,
+        condition_id TEXT NOT NULL,
+        condition_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '#a855f7',
+        status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'proposed')),
+        duration_minutes INTEGER,
+        sleep_minutes INTEGER,
+        rest_minutes INTEGER,
+        ends_when TEXT NOT NULL DEFAULT '',
+        trigger_definition_id TEXT,
+        trigger_below_percent REAL,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, condition_id),
+        UNIQUE (workspace_id, condition_key)
+      );
+      CREATE TABLE IF NOT EXISTS roleplay_conditions (
+        workspace_id TEXT NOT NULL,
+        condition_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        started_label TEXT NOT NULL DEFAULT '',
+        time_left_minutes INTEGER,
+        sleep_left_minutes INTEGER,
+        rest_left_minutes INTEGER,
+        cause TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL CHECK (source IN ('ai', 'manual', 'threshold')),
+        started_by TEXT,
+        time_origin_id TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, condition_id, entity_id)
+      );
+      CREATE TABLE IF NOT EXISTS roleplay_condition_changes (
+        workspace_id TEXT NOT NULL,
+        change_id TEXT NOT NULL,
+        condition_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('start', 'extend', 'end')),
+        duration_minutes INTEGER,
+        detail_json TEXT,
+        reason TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+        source TEXT NOT NULL CHECK (source IN ('ai', 'manual', 'threshold', 'time')),
+        provenance_id TEXT,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        PRIMARY KEY (workspace_id, change_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roleplay_condition_changes_entity
+        ON roleplay_condition_changes (workspace_id, entity_id, created_at);
+    `)
   }
 ];
 

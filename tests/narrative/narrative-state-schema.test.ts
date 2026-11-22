@@ -28,7 +28,8 @@ describe('Narrative State structured output schemas', () => {
         confidence: 1,
         evidence: 'The clock reads 13:15.',
         statedSpan: null,
-        movementOnly: false
+        movementOnly: false,
+        rest: { sleepMinutes: 0, restMinutes: 0, restingIds: [] }
       },
       sceneMemory: [{
         entityId: 'corwin',
@@ -55,7 +56,7 @@ describe('Narrative State structured output schemas', () => {
   test('the scene pass carries no events, and the story pass only events', () => {
     const mechanics = new Ajv().compile(NARRATIVE_MECHANICS_SCHEMA);
     const story = new Ajv().compile(NARRATIVE_STORY_SCHEMA);
-    const scene = { newEntities: [], identityUpdates: [], resourceChanges: [], scenePatch: {}, inventoryChanges: [] };
+    const scene = { newEntities: [], identityUpdates: [], resourceChanges: [], conditionChanges: [], scenePatch: {}, inventoryChanges: [] };
     const event = {
       type: 'revelation',
       description: 'Tess explains the Aether Weave to Corwin at the forge.',

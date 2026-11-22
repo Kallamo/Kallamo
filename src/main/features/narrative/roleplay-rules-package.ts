@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3';
-import { RoleplaySystem, type RoleplayResourceDefinition } from './roleplay-system';
+import { RoleplaySystem, type RoleplayResourceDefinition, type RoleplayUpdatePolicy } from './roleplay-system';
 import { RoleplayProgression, type MemberTarget, type ProgressionConfig, type ProgressionMember, type ProgressionMode, type TraitDefinition } from './roleplay-progression';
 import { RoleplaySkills, normalizeSkillConfig, type SkillConfig } from './roleplay-skills';
+import { RoleplayConditions } from './roleplay-conditions';
 
 /**
  * A world's roleplay rules as they travel in a Worldbuild package. Resources and traits are
@@ -22,6 +23,17 @@ export interface RoleplayRulesPackage {
     catalog: Array<{ key: string; name: string; description: string; parentKey: string | null; position: number }>;
     values: Array<{ targetRef: string; skillKey: string; rank: number }>;
   };
+  /** Absent in packages made before conditions existed. Who has one now is play, and stays. */
+  conditions?: {
+    enabled: boolean;
+    updatePolicy: RoleplayUpdatePolicy;
+    aiCreates: boolean;
+    catalog: Array<{
+      key: string; name: string; description: string; color: string;
+      durationMinutes: number | null; sleepMinutes: number | null; restMinutes: number | null;
+      endsWhen: string; triggerResourceKey: string | null; triggerBelowPercent: number | null; position: number;
+    }>;
+  };
   timeMatrix?: unknown;
   currentValues: boolean;
 }
@@ -34,6 +46,7 @@ export interface RulesDifference {
   resources: { same: string[]; changed: string[]; added: string[] };
   progression: 'same' | 'different' | 'added' | 'none';
   skills: 'same' | 'different' | 'added' | 'none';
+  conditions: 'same' | 'different' | 'added' | 'none';
   localSkills: number;
   packageSkills: number;
   timeCosts: 'same' | 'different' | 'none';
@@ -49,8 +62,11 @@ const LEVEL = '__level';
 const XP = '__xp';
 const RESOURCE_FIELDS = [
   'name', 'description', 'color', 'minimum', 'maximum', 'startsFull', 'growthPerLevel', 'refillOnLevelUp', 'aiChangesMaximum',
-  'maximumRule', 'unit', 'appliesTo', 'updatePolicy', 'scope', 'lowestEffect', 'timeRate', 'timeDirection', 'timePeriod', 'decimals'
+  'maximumRule', 'unit', 'appliesTo', 'updatePolicy', 'scope', 'lowestEffect', 'timeRate', 'timeDirection', 'timePeriod', 'decimals',
+  'sleepRate', 'restRate'
 ] as const;
+
+const ZERO_DEFAULT_FIELDS = new Set<string>(['decimals', 'sleepRate', 'restRate']);
 
 const MEMBER_TARGETS: MemberTarget[] = ['everyone', 'entity', 'race', 'species', 'type'];
 
@@ -58,18 +74,25 @@ export class RoleplayRulesPackager {
   private readonly roleplay: RoleplaySystem;
   private readonly progression: RoleplayProgression;
   private readonly skills: RoleplaySkills;
+  private readonly conditions: RoleplayConditions;
 
   constructor(private readonly db: Database.Database) {
     this.roleplay = new RoleplaySystem(db);
     this.progression = new RoleplayProgression(db);
     this.skills = new RoleplaySkills(db);
+    this.conditions = new RoleplayConditions(db);
   }
 
   hasRules(workspaceId: string): boolean {
     return this.roleplay.listDefinitions(workspaceId).length > 0
       || this.progression.getSettings(workspaceId).mode !== 'off'
       || this.progression.listTraits(workspaceId).length > 0
-      || this.hasSkills(workspaceId);
+      || this.hasSkills(workspaceId)
+      || this.confirmedConditions(workspaceId).length > 0;
+  }
+
+  private confirmedConditions(workspaceId: string) {
+    return this.conditions.listDefinitions(workspaceId).filter(condition => condition.status === 'confirmed');
   }
 
   summary(workspaceId: string) {
@@ -134,6 +157,7 @@ export class RoleplayRulesPackager {
       traits: traits.map(({ id: _id, workspaceId: _workspace, ...trait }) => trait),
       progressValues,
       skills: this.exportSkills(workspaceId, entityIds),
+      conditions: this.exportConditions(workspaceId),
       timeMatrix,
       currentValues
     };
@@ -163,14 +187,31 @@ export class RoleplayRulesPackager {
     };
   }
 
+  private exportConditions(workspaceId: string): NonNullable<RoleplayRulesPackage['conditions']> {
+    const settings = this.conditions.getSettings(workspaceId);
+    const resourceKeyById = new Map(this.roleplay.listDefinitions(workspaceId).map(definition => [definition.id, definition.key]));
+    return {
+      enabled: settings.enabled,
+      updatePolicy: settings.updatePolicy,
+      aiCreates: settings.aiCreates,
+      catalog: this.confirmedConditions(workspaceId).map(condition => ({
+        key: condition.key, name: condition.name, description: condition.description, color: condition.color,
+        durationMinutes: condition.durationMinutes, sleepMinutes: condition.sleepMinutes, restMinutes: condition.restMinutes,
+        endsWhen: condition.endsWhen,
+        triggerResourceKey: condition.triggerDefinitionId ? resourceKeyById.get(condition.triggerDefinitionId) ?? null : null,
+        triggerBelowPercent: condition.triggerBelowPercent, position: condition.position
+      }))
+    };
+  }
+
   difference(workspaceId: string, rules: RoleplayRulesPackage, localTimeMatrix?: unknown): RulesDifference {
     const local = new Map(this.roleplay.listDefinitions(workspaceId).map(definition => [definition.key, definition]));
     const resources = { same: [] as string[], changed: [] as string[], added: [] as string[] };
     for (const incoming of rules.resources || []) {
       const mine = local.get(incoming.key);
       if (!mine) resources.added.push(incoming.name);
-      // A package made before decimals existed meant whole numbers.
-      else if (RESOURCE_FIELDS.every(field => JSON.stringify(mine[field]) === JSON.stringify(field === 'decimals' ? incoming[field] ?? 0 : incoming[field]))) resources.same.push(incoming.name);
+      // A package made before decimals or rest rates existed meant whole numbers and no rest.
+      else if (RESOURCE_FIELDS.every(field => JSON.stringify(mine[field]) === JSON.stringify(ZERO_DEFAULT_FIELDS.has(field) ? incoming[field] ?? 0 : incoming[field]))) resources.same.push(incoming.name);
       else resources.changed.push(incoming.name);
     }
     const settings = this.progression.getSettings(workspaceId);
@@ -194,13 +235,19 @@ export class RoleplayRulesPackager {
       : !this.hasSkills(workspaceId)
         ? 'added'
         : localSkillSettings.enabled === incomingSkillsOn && localSkillKeys === incomingSkillKeys ? 'same' : 'different';
+    const localConditionKeys = this.confirmedConditions(workspaceId).map(condition => condition.key).sort().join('|');
+    const incomingConditionKeys = (rules.conditions?.catalog || []).map(condition => condition.key).sort().join('|');
+    const conditions = !incomingConditionKeys
+      ? 'none'
+      : !localConditionKeys ? 'added' : localConditionKeys === incomingConditionKeys ? 'same' : 'different';
     const localRules = this.hasRules(workspaceId);
     return {
       localRules,
-      differs: localRules && (resources.changed.length > 0 || resources.added.length > 0 || progression === 'different' || skills === 'different' || timeCosts === 'different'),
+      differs: localRules && (resources.changed.length > 0 || resources.added.length > 0 || progression === 'different' || skills === 'different' || conditions === 'different' || timeCosts === 'different'),
       resources,
       progression,
       skills,
+      conditions,
       localSkills: localSkillSettings.enabled ? this.confirmedSkills(workspaceId).length : 0,
       packageSkills: incomingSkillsOn ? (rules.skills?.catalog || []).length : 0,
       timeCosts,
@@ -289,8 +336,34 @@ export class RoleplayRulesPackager {
         insertProgress.run(workspaceId, value.targetType, targetId, traitId, Number(value.value), Date.now());
       }
       if (rules.skills) this.importSkills(workspaceId, rules.skills, replace, idMap);
+      if (rules.conditions) this.importConditions(workspaceId, rules.conditions, replace);
     })();
     return { timeMatrix: replace && rules.timeMatrix !== undefined };
+  }
+
+  // Like skills: a world without conditions of its own takes the package's even on merge.
+  private importConditions(workspaceId: string, incoming: NonNullable<RoleplayRulesPackage['conditions']>, replace: boolean): void {
+    const local = this.conditions.listDefinitions(workspaceId);
+    if (!replace && this.confirmedConditions(workspaceId).length) return;
+    const resourceByKey = new Map(this.roleplay.listDefinitions(workspaceId).map(definition => [definition.key, definition.id]));
+    const incomingKeys = new Set((incoming.catalog || []).map(condition => condition.key));
+    for (const condition of incoming.catalog || []) {
+      if (!condition?.key || !condition.name) continue;
+      const mine = local.find(item => item.key === condition.key);
+      this.conditions.saveDefinition(workspaceId, {
+        id: mine?.id, key: condition.key, name: condition.name, description: condition.description || '',
+        color: condition.color, durationMinutes: condition.durationMinutes, sleepMinutes: condition.sleepMinutes,
+        restMinutes: condition.restMinutes, endsWhen: condition.endsWhen || '',
+        triggerDefinitionId: condition.triggerResourceKey ? resourceByKey.get(condition.triggerResourceKey) ?? null : null,
+        triggerBelowPercent: condition.triggerBelowPercent, position: Number(condition.position) || 0, status: 'confirmed'
+      });
+    }
+    if (replace) for (const condition of local) if (!incomingKeys.has(condition.key)) this.conditions.deleteDefinition(workspaceId, condition.id);
+    this.conditions.saveSettings(workspaceId, {
+      enabled: incoming.enabled !== false,
+      updatePolicy: incoming.updatePolicy,
+      aiCreates: incoming.aiCreates !== false
+    });
   }
 
   // Skills follow progression: a world without skills of its own takes the package's even on merge.

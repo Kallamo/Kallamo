@@ -47,6 +47,9 @@ export interface RoleplayResourceDefinition {
   timeRate: number;
   timeDirection: 'recovers' | 'drains';
   timePeriod: 'hour' | 'day';
+  /** Given back for each hour of sleep, and for each hour of rest awake; applied by the clock. */
+  sleepRate: number;
+  restRate: number;
   /** Decimal places a value keeps: 0 for whole numbers, 1 for tenths. */
   decimals: ResourceDecimals;
 }
@@ -192,6 +195,7 @@ interface DefinitionRow {
   position: number; enabled: number; scope?: string; lowest_effect?: string; time_rate?: number;
   time_direction?: string; time_period?: string; growth_per_level?: number; refill_on_level_up?: number;
   ai_changes_maximum?: number; maximum_rule?: string; decimals?: number;
+  sleep_rate?: number; rest_rate?: number;
 }
 
 interface ValueRow {
@@ -382,8 +386,9 @@ export class RoleplaySystem {
           workspace_id, definition_id, resource_key, name, description, color,
           minimum, maximum, starts_full, unit, applies_to_json, update_policy,
           position, enabled, scope, lowest_effect, time_rate, time_direction, time_period,
-          growth_per_level, refill_on_level_up, ai_changes_maximum, maximum_rule, decimals, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          growth_per_level, refill_on_level_up, ai_changes_maximum, maximum_rule, decimals,
+          sleep_rate, rest_rate, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(workspace_id, definition_id) DO UPDATE SET
           resource_key = excluded.resource_key, name = excluded.name,
           description = excluded.description, color = excluded.color,
@@ -395,14 +400,16 @@ export class RoleplaySystem {
           time_direction = excluded.time_direction, time_period = excluded.time_period,
           growth_per_level = excluded.growth_per_level, refill_on_level_up = excluded.refill_on_level_up,
           ai_changes_maximum = excluded.ai_changes_maximum, maximum_rule = excluded.maximum_rule,
-          decimals = excluded.decimals, updated_at = excluded.updated_at
+          decimals = excluded.decimals, sleep_rate = excluded.sleep_rate,
+          rest_rate = excluded.rest_rate, updated_at = excluded.updated_at
       `).run(workspaceId, id, key, input.name.trim(), input.description?.trim() || '', input.color,
         input.minimum, input.maximum, input.startsFull === false ? 0 : 1, input.unit?.trim() || '', JSON.stringify(appliesTo),
         input.updatePolicy, input.position ?? 0, input.enabled === false ? 0 : 1, scope,
         input.lowestEffect?.trim() || '', Math.max(0, Number(input.timeRate) || 0),
         input.timeDirection === 'drains' ? 'drains' : 'recovers', input.timePeriod === 'day' ? 'day' : 'hour',
         Number(input.growthPerLevel) || 0, input.refillOnLevelUp ? 1 : 0,
-        input.aiChangesMaximum ? 1 : 0, input.maximumRule?.trim() || '', normalizeDecimals(input.decimals), Date.now());
+        input.aiChangesMaximum ? 1 : 0, input.maximumRule?.trim() || '', normalizeDecimals(input.decimals),
+        Math.max(0, Number(input.sleepRate) || 0), Math.max(0, Number(input.restRate) || 0), Date.now());
       // A lower base or growth leaves no one above their new maximum; fewer decimals round what is stored.
       this.roundStoredCurrents(workspaceId, id);
       this.clampStoredCurrents(workspaceId, id);
@@ -416,6 +423,14 @@ export class RoleplaySystem {
         .run(workspaceId, definitionId);
       this.db.prepare('DELETE FROM roleplay_resource_definitions WHERE workspace_id = ? AND definition_id = ?')
         .run(workspaceId, definitionId);
+      // A condition tied to this resource keeps its other ways to start and end.
+      const hasConditions = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roleplay_condition_definitions'").get();
+      if (hasConditions) {
+        this.db.prepare(`
+          UPDATE roleplay_condition_definitions SET trigger_definition_id = NULL, trigger_below_percent = NULL, updated_at = ?
+          WHERE workspace_id = ? AND trigger_definition_id = ?
+        `).run(Date.now(), workspaceId, definitionId);
+      }
     })();
   }
 
@@ -686,6 +701,43 @@ export class RoleplaySystem {
           }
           this.writeEntityValue(workspaceId, definition.id, entityId, { remainder, timeOriginId: provenanceId });
         })();
+      }
+    }
+    return changes;
+  }
+
+  /**
+   * Sleep and rest give back what each resource says per hour, only for who actually slept or rested.
+   * The amount is rounded down to what the resource shows; a turn analysed again adds nothing.
+   */
+  applyRest(workspaceId: string, provenanceId: string, rest: { sleepMinutes: number; restMinutes: number; entityIds: string[] }): RoleplayResourceChange[] {
+    const sleepMinutes = Math.max(0, Number(rest.sleepMinutes) || 0);
+    const restMinutes = Math.max(0, Number(rest.restMinutes) || 0);
+    if (!(sleepMinutes + restMinutes > 0) || !rest.entityIds.length) return [];
+    const definitions = this.listDefinitions(workspaceId)
+      .filter(item => item.enabled && (item.sleepRate > 0 || item.restRate > 0));
+    if (!definitions.length) return [];
+    const hoursPerDay = this.hoursPerDay(workspaceId);
+    const reason = describeRest(sleepMinutes, restMinutes, hoursPerDay);
+    const changes: RoleplayResourceChange[] = [];
+    for (const definition of definitions) {
+      const amount = (definition.sleepRate * sleepMinutes + definition.restRate * restMinutes) / 60;
+      const step = 10 ** -definition.decimals;
+      const visible = roundToDecimals(Math.trunc(roundToDecimals(amount / step, 6)) * step, definition.decimals);
+      if (!visible) continue;
+      for (const entityId of new Set(rest.entityIds.filter(Boolean))) {
+        let state: EntityResourceState | undefined;
+        try {
+          state = this.listEntityResources(workspaceId, entityId).find(item => item.definitionId === definition.id);
+        } catch {
+          continue;
+        }
+        if (!state || state.current >= state.maximum) continue;
+        changes.push(this.proposeChange({
+          id: `${provenanceId}:rest:${definition.id}:${entityId}`,
+          workspaceId, definitionId: definition.id, entityId, delta: visible,
+          reason, source: 'time', provenanceId
+        }));
       }
     }
     return changes;
@@ -1252,6 +1304,8 @@ function hydrateDefinition(row: DefinitionRow): RoleplayResourceDefinition {
     timeRate: Number(row.time_rate ?? 0),
     timeDirection: row.time_direction === 'drains' ? 'drains' : 'recovers',
     timePeriod: row.time_period === 'day' ? 'day' : 'hour',
+    sleepRate: Number(row.sleep_rate ?? 0),
+    restRate: Number(row.rest_rate ?? 0),
     decimals: normalizeDecimals(row.decimals)
   };
 }
@@ -1408,6 +1462,14 @@ function describeElapsedMinutes(minutes: number, hoursPerDay: number): string {
     !days && rest ? `${rest} ${rest === 1 ? 'minute' : 'minutes'}` : ''
   ].filter(Boolean);
   return `${parts.join(' ') || 'Time'} passed`;
+}
+
+function describeRest(sleepMinutes: number, restMinutes: number, hoursPerDay: number): string {
+  const span = (minutes: number) => describeElapsedMinutes(minutes, hoursPerDay).replace(/ passed$/, '');
+  return [
+    sleepMinutes ? `${span(sleepMinutes)} of sleep` : '',
+    restMinutes ? `${span(restMinutes)} of rest` : ''
+  ].filter(Boolean).join(' and ');
 }
 
 function unique(values: string[]): string[] {

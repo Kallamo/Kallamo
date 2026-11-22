@@ -16,6 +16,8 @@ export function describeRange(definition, levels = false) {
   const parts = [`${definition.startsFull === false ? 'Starts empty' : 'Starts full'}, ${formatNumber(definition.minimum)} to ${formatNumber(definition.maximum)}${unit}`];
   if (levels && definition.growthPerLevel) parts.push(`${formatSigned(definition.growthPerLevel)} per level${definition.refillOnLevelUp ? ', refills' : ''}`);
   if (definition.timeRate > 0) parts.push(`${definition.timeDirection === 'drains' ? 'drains' : 'recovers'} ${formatNumber(definition.timeRate)} per ${definition.timePeriod === 'day' ? 'day' : 'hour'}`);
+  if (definition.sleepRate > 0) parts.push(`+${formatNumber(definition.sleepRate)} per hour of sleep`);
+  if (definition.restRate > 0) parts.push(`+${formatNumber(definition.restRate)} per hour of rest`);
   return parts.join(' · ');
 }
 

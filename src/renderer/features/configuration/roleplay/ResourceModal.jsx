@@ -17,7 +17,7 @@ import ResizableTextarea from '../../../components/ui/ResizableTextarea';
 export const EMPTY_RESOURCE = {
   name: '', key: '', description: '', color: '#dc2626', minimum: 0, maximum: 100, startsFull: true, unit: '',
   updatePolicy: 'review', enabled: true, scope: 'everyone', lowestEffect: '',
-  timeRate: 0, timeDirection: 'recovers', timePeriod: 'hour', decimals: 0,
+  timeRate: 0, timeDirection: 'recovers', timePeriod: 'hour', decimals: 0, sleepRate: 0, restRate: 0,
   growthPerLevel: 0, refillOnLevelUp: false, aiChangesMaximum: false, maximumRule: ''
 };
 
@@ -29,6 +29,16 @@ const POLICY_OPTIONS = [
 
 const PREVIEW_LEVELS = [1, 5, 10, 20];
 const subLabel = 'text-xs text-text-muted';
+
+const restExample = (draft, name) => {
+  const sleep = Math.max(0, Number(draft.sleepRate) || 0);
+  const rest = Math.max(0, Number(draft.restRate) || 0);
+  if (!sleep && !rest) return '';
+  return [
+    sleep ? `A night of eight hours gives back ${formatAmount(sleep * 8)} ${name}.` : '',
+    rest ? `An hour sitting down gives back ${formatAmount(rest)}.` : ''
+  ].filter(Boolean).join(' ') + ' ';
+};
 
 const blankToNull = value => (value === '' || value === null || value === undefined ? null : Number(value));
 
@@ -80,6 +90,8 @@ export default function ResourceModal({ initial, levels = false, workspaceId, ap
       await onSave({
         ...draft,
         timeRate: timeOn ? rate : 0,
+        sleepRate: Math.max(0, Number(draft.sleepRate) || 0),
+        restRate: Math.max(0, Number(draft.restRate) || 0),
         growthPerLevel: growth,
         aiChangesMaximum: draft.aiChangesMaximum && !manual
       }, changedHolders(holders));
@@ -193,6 +205,22 @@ export default function ResourceModal({ initial, levels = false, workspaceId, ap
                     </>
                   )}
                 </div>
+              </Block>
+
+              <Block title="Sleep and rest">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
+                  <label className="flex items-center gap-2 text-[0.8125rem] text-text-secondary">
+                    Gives back
+                    <NumberInput aria-label="Given back per hour of sleep" className="field-input h-10 w-20 px-3 text-right text-sm tabular-nums" value={draft.sleepRate} min={0} integer={false} onChange={sleepRate => set({ sleepRate })} />
+                    per hour of sleep
+                  </label>
+                  <label className="flex items-center gap-2 text-[0.8125rem] text-text-secondary">
+                    and
+                    <NumberInput aria-label="Given back per hour of rest" className="field-input h-10 w-20 px-3 text-right text-sm tabular-nums" value={draft.restRate} min={0} integer={false} onChange={restRate => set({ restRate })} />
+                    per hour of rest awake
+                  </label>
+                </div>
+                <Help>{restExample(draft, name)}Only who sleeps or rests in the story gets it back. Leave both at 0 when rest does nothing.</Help>
               </Block>
 
               <Block title="For the AI" aside="Sent to the narrator and to Narrative State">

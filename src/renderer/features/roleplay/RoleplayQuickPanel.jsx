@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Backpack, Check, ChevronRight, Clock3, PanelRightClose, Plus, Settings2, X } from 'lucide-react';
+import { Backpack, Check, ChevronRight, Clock3, Flag, PanelRightClose, Plus, Settings2, X } from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
@@ -11,7 +11,8 @@ import { PortraitContext, usePortraits } from '../worldbuild/portraits';
 import {
   CastGroup, CastRow, InventoryTab, LocationHero, PanelClock, PanelTabs, PlayerCard, RoleplayRail, RoleplayStatus, SectionHead
 } from './RoleplayPanelParts';
-import { describeSkillChange, describeTimeResourceChanges, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
+import { conditionChangeItems, describeConditionChange, describeSkillChange, describeTimeResourceChanges, kindOf, skillChangeItems, startingProfileText } from './changeKinds';
+import ConditionChips from './ConditionChips';
 import { describeSpanCheck } from '../chat/frame-format';
 import SEEDED_BY from '../../../shared/seed-provenance.json';
 
@@ -60,6 +61,8 @@ function RoleplayQuickPanel({
   const [expandedTurnId, setExpandedTurnId] = useState(null);
   const [resolvingChangeId, setResolvingChangeId] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [conditions, setConditions] = useState({ enabled: false, catalog: [], active: [] });
+  const [closingScene, setClosingScene] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const backgroundInputRef = useRef(null);
   const refreshFrameRef = useRef(null);
@@ -118,9 +121,11 @@ function RoleplayQuickPanel({
       ...(configuration.changes || []),
       ...(configuration.progressChanges || []),
       ...(configuration.skillChanges || []),
+      ...(configuration.conditionChanges || []),
       ...(configuration.entityChanges || []),
       ...(configuration.narrativeEvents || [])
     ].filter(change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting').length);
+    setConditions(configuration.conditions || { enabled: false, catalog: [], active: [] });
     setInventory(inventoryResult?.success ? inventoryResult.inventory || [] : []);
     setVitals(vitalsResult || EMPTY_VITALS);
     const nextBackground = backgroundResult?.success ? backgroundResult.background : null;
@@ -332,6 +337,7 @@ function RoleplayQuickPanel({
       resource: api.resolveRoleplayResourceChange,
       progress: api.resolveRoleplayProgressChange,
       skill: api.resolveRoleplaySkillChange,
+      condition: api.resolveRoleplayConditionChange,
       scene: api.resolveRoleplaySceneChange,
       inventory: api.resolveRoleplayInventoryChange,
       entity: api.resolveRoleplayEntityChange,
@@ -346,6 +352,38 @@ function RoleplayQuickPanel({
     setRefreshKey(value => value + 1);
     window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
   };
+
+  const setCondition = async (entityId, conditionId, active) => {
+    const result = await api.setRoleplayEntityCondition(workspaceId, entityId, conditionId, active);
+    if (!result?.success) return showToast(result?.error || 'Could not change the condition.', 'error');
+    setRefreshKey(value => value + 1);
+    window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
+  };
+
+  // Ends the scene at the latest reply: its people's growth is weighed, as when the story moves on.
+  const closeScene = async () => {
+    setClosingScene(true);
+    const result = await api.closeRoleplayScene(workspaceId);
+    setClosingScene(false);
+    if (!result?.success) return showToast(result?.error || 'Could not end the scene.', 'error');
+    showToast(result.alreadyClosed
+      ? 'This scene already ended.'
+      : result.proposals
+        ? `Scene ended. ${result.proposals} ${result.proposals === 1 ? 'growth change' : 'growth changes'} from ${result.turns} ${result.turns === 1 ? 'turn' : 'turns'}.`
+        : `Scene ended. Nothing in its ${result.turns} ${result.turns === 1 ? 'turn' : 'turns'} earned growth.`, 'success');
+    setRefreshKey(value => value + 1);
+    window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
+  };
+
+  const conditionsOf = entityId => (conditions.active || []).filter(condition => condition.entityId === entityId);
+  const conditionChips = entityId => conditions.enabled ? (
+    <ConditionChips
+      held={conditionsOf(entityId)}
+      catalog={(conditions.catalog || []).filter(condition => condition.status === 'confirmed')}
+      onAdd={conditionId => setCondition(entityId, conditionId, true)}
+      onRemove={conditionId => setCondition(entityId, conditionId, false)}
+    />
+  ) : null;
 
   const openConfiguration = () => {
     onOpenConfiguration();
@@ -386,16 +424,18 @@ function RoleplayQuickPanel({
   const participants = otherCharacters.filter(entity => presenceOf(entity.id, scene) === 'participating');
   const nearby = otherCharacters.filter(entity => presenceOf(entity.id, scene) === 'nearby');
   const castRow = entity => (
-    <CastRow
-      key={entity.id}
-      entity={entity}
-      typeLabel={typeLabels.get(entity.type)}
-      presence={presenceOf(entity.id, scene)}
-      resources={vitals.resources.get(entity.id) || []}
-      onPlay={() => setPlayer(entity.id)}
-      onPresence={presence => changePresence(entity.id, presence)}
-      onRemove={() => removeCharacter(entity.id)}
-    />
+    <div key={entity.id}>
+      <CastRow
+        entity={entity}
+        typeLabel={typeLabels.get(entity.type)}
+        presence={presenceOf(entity.id, scene)}
+        resources={vitals.resources.get(entity.id) || []}
+        onPlay={() => setPlayer(entity.id)}
+        onPresence={presence => changePresence(entity.id, presence)}
+        onRemove={() => removeCharacter(entity.id)}
+      />
+      {conditionsOf(entity.id).length > 0 && <div className="pb-1.5 pl-12 pr-2">{conditionChips(entity.id)}</div>}
+    </div>
   );
   const visibleTurns = showAllTurns ? recentTurns : recentTurns.slice(0, RECENT_TURN_LIMIT);
 
@@ -450,7 +490,10 @@ function RoleplayQuickPanel({
 
             <section>
               <SectionHead title="In scene">
-                <Button variant="subtle" size="sm" icon={Plus} aria-expanded={addingCharacter} onClick={() => setAddingCharacter(value => !value)}>Add</Button>
+                <span className="flex items-center gap-1">
+                  <Button variant="subtle" size="sm" icon={Flag} loading={closingScene} onClick={closeScene} data-tooltip="End the scene here and weigh what it earned: experience, attributes and skills.">End scene</Button>
+                  <Button variant="subtle" size="sm" icon={Plus} aria-expanded={addingCharacter} onClick={() => setAddingCharacter(value => !value)}>Add</Button>
+                </span>
               </SectionHead>
               {addingCharacter && (
                 <div className="mb-2 animate-rise-in">
@@ -470,7 +513,12 @@ function RoleplayQuickPanel({
                 </div>
               )}
               {player
-                ? <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} resources={vitals.resources.get(player.id) || []} progress={vitals.progress?.entityId === player.id ? vitals.progress : null} />
+                ? (
+                  <>
+                    <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} resources={vitals.resources.get(player.id) || []} progress={vitals.progress?.entityId === player.id ? vitals.progress : null} />
+                    {conditions.enabled && <div className="px-1 pb-1 pt-2">{conditionChips(player.id)}</div>}
+                  </>
+                )
                 : <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">Choose who you play in Roleplay settings.</p>}
               {participants.length > 0 && <CastGroup presence="participating" count={participants.length}>{participants.map(castRow)}</CastGroup>}
               {nearby.length > 0 && <CastGroup presence="nearby" count={nearby.length}>{nearby.map(castRow)}</CastGroup>}
@@ -656,6 +704,7 @@ function manualTarget(change) {
   if (change.kind === 'inventory') return `inventory:${change.patch?.itemId}`;
   if (change.kind === 'resource') return `resource:${change.definitionId}:${change.entityId}`;
   if (change.kind === 'skill') return `skill:${change.skillId}:${change.entityId}`;
+  if (change.kind === 'condition') return `condition:${change.conditionId}:${change.entityId}`;
   return `${change.kind}:${change.id}`;
 }
 
@@ -691,6 +740,7 @@ function groupRecentTurns(configuration) {
   const traitNames = new Map((configuration.traits || []).map(trait => [trait.id, trait.name]));
   (configuration.progressChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'progress', progressKind: change.kind, traitName: traitNames.get(change.traitId) }));
   skillChangeItems(configuration).forEach(change => add(change.provenanceId, change));
+  conditionChangeItems(configuration).forEach(change => add(change.provenanceId, change));
   (configuration.entityChanges || []).forEach(change => add(change.provenanceId, { ...change, kind: 'entity' }));
   (configuration.narrativeEvents || []).forEach(record => {
     const originId = record.proposal?.evidence?.[0]?.originId;
@@ -747,6 +797,7 @@ function describeRecentChange(change, names, definitions) {
     return [lead, ...(change.reason ? [change.reason] : [])];
   }
   if (change.kind === 'skill') return [describeSkillChange(change, names.get(change.entityId) || 'Someone'), ...(change.reason ? [change.reason] : [])];
+  if (change.kind === 'condition') return [describeConditionChange(change, names.get(change.entityId) || 'Someone'), ...(change.reason ? [change.reason] : [])];
   if (change.kind === 'entity') {
     if (change.identityUpdate) {
       const identity = change.identityUpdate;

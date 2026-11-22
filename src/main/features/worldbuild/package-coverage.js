@@ -33,6 +33,8 @@ const PACKAGED = [
   { table: 'roleplay_skill_settings', by: 'rules' },
   { table: 'roleplay_skill_members', by: 'rules' },
   { table: 'roleplay_skill_values', by: 'rules' },
+  { table: 'roleplay_condition_settings', by: 'rules' },
+  { table: 'roleplay_condition_definitions', by: 'rules' },
   { table: 'roleplay_time_matrices', by: 'rules' },
   { table: 'roleplay_equipment', by: 'what characters wear' },
   { table: 'roleplay_location_inventory', by: 'items lying in places' },
@@ -50,6 +52,7 @@ const STAYS = [
     'roleplay_time_state', 'roleplay_time_advances', 'roleplay_character_memory', 'roleplay_scene_changes',
     'roleplay_scene_nearby', 'roleplay_scene_objects', 'roleplay_entity_changes', 'roleplay_inventory_changes',
     'roleplay_resource_changes', 'roleplay_progress_changes', 'roleplay_skill_changes',
+    'roleplay_scene_growth', 'roleplay_conditions', 'roleplay_condition_changes',
   ].map(table => ({ table, reason: 'play' })),
   // Review work in progress on this workspace.
   ...[

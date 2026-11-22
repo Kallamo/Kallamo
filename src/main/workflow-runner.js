@@ -71,6 +71,7 @@ const {
     extractNarrativeSignals,
     groupKnowledgeCardRows,
     hasEpistemicDomain,
+    mentionedMechanics,
     resolveAnalysisHolders,
     resolveNarrativeRouting,
     selectPerspectiveRecords,
@@ -2798,14 +2799,25 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             try {
                 const minutes = calendarService.durationTotalMinutes(calendarService.getCalendar(db, workspaceId), frame.advance.duration);
                 const present = roleplay.getScene(workspaceId);
-                roleplay.applyElapsedTime(workspaceId, provenanceId, minutes, [
+                const inScene = [
                     roleplay.getSettings(workspaceId).playerEntityId,
-                    ...(present?.participantIds || [])
-                ].filter(Boolean));
+                    ...(present?.participantIds || []),
+                    ...(scene?.participantIds || [])
+                ].filter(Boolean);
+                roleplay.applyElapsedTime(workspaceId, provenanceId, minutes, inScene);
+                const rest = restWithin(timeAdvance?.rest, minutes, new Set(inScene));
+                if (rest) roleplay.applyRest(workspaceId, provenanceId, rest);
+                applyConditionTime(workspaceId, provenanceId, { minutes, rest });
             } catch (error) {
                 console.warn('[Roleplay Time] Could not apply resource changes over time:', error.message);
             }
         }
+        // What the turn and the clock did to resources may cross a condition's line either way.
+        applyConditionThresholds(workspaceId, provenanceId, [
+            roleplay.getSettings(workspaceId).playerEntityId,
+            ...(roleplay.getScene(workspaceId)?.participantIds || []),
+            ...(scene?.participantIds || [])
+        ].filter(Boolean));
         return frame;
     };
 
@@ -2853,10 +2865,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         .filter(definition => definition.enabled && definition.updatePolicy !== 'manual');
     const { RoleplayProgression } = require('../../dist-main/main/features/narrative/roleplay-progression');
     const progression = new RoleplayProgression(db);
-    let progressionContext = loadNarrativeProgressionContext(progression, workspaceId);
     const { RoleplaySkills } = require('../../dist-main/main/features/narrative/roleplay-skills');
     const skillSystem = new RoleplaySkills(db);
-    let skillsContext = loadNarrativeSkillsContext(skillSystem, workspaceId);
     const allEntities = db.prepare(`
         SELECT id, type, canonicalName, aliases, lore, data FROM entities
         WHERE workspaceId = ?
@@ -2889,15 +2899,6 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         entities: allEntities
     });
     const mentionedEntityIds = new Set(narrativeSignals.mentionedEntityIds);
-    // Only who is in the scene or named this turn can grow, so Everyone never sends the whole cast.
-    if (progressionContext) {
-        const ids = progressionContext.ids.filter(id => activeIds.has(id) || mentionedEntityIds.has(id));
-        progressionContext = ids.length ? { ...progressionContext, ids } : null;
-    }
-    if (skillsContext) {
-        const ids = skillsContext.ids.filter(id => activeIds.has(id) || mentionedEntityIds.has(id));
-        skillsContext = ids.length ? { ...skillsContext, ids } : null;
-    }
     const entities = allEntities.filter(entity => {
         if (activeIds.has(entity.id)) return true;
         return mentionedEntityIds.has(entity.id);
@@ -2949,6 +2950,10 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         ...(scene?.participantIds || []),
         ...(scene?.possibleObserverIds || [])
     ].filter(id => id !== roleplaySettings.playerEntityId));
+    const sceneMechanics = describeSceneMechanics({ workspaceId, roleplay, actorIds: [
+        roleplaySettings.playerEntityId,
+        ...(scene?.participantIds || [])
+    ].filter(id => id && actorIds.has(id)) });
     // What rarely changes comes first, so a provider that reuses a repeated prefix keeps more of it.
     const triagePayloadValue = entityLabels.encodeValue({
         calendar: {
@@ -2960,14 +2965,9 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         },
         timeMatrix,
         availableEntities: compactEntities,
-        progression: progressionContext ? {
-            characterIds: progressionContext.ids
-        } : undefined,
-        skills: skillsContext ? {
-            characterIds: skillsContext.ids
-        } : undefined,
         currentScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
         currentLocation: describeSceneLocationChain(workspaceId, scene?.locationId, inferLocationSizes(locationLinks, locationSizes)),
+        mechanics: sceneMechanics.entries.length ? sceneMechanics.entries : undefined,
         currentTime: startClock,
         candidateSignals: narrativeSignals,
         characterStances: characterStances.length ? characterStances : undefined,
@@ -3079,12 +3079,22 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         db.prepare('SELECT item_id FROM roleplay_location_inventory WHERE workspace_id = ? AND location_id = ?')
             .all(workspaceId, scene.locationId).forEach(row => reachableItemIds.add(row.item_id));
     }
-    const routing = resolveNarrativeRouting({ triage, signals: narrativeSignals, hasResourceDefinitions: definitions.length > 0, reachableItemIds });
+    const routing = resolveNarrativeRouting({
+        triage,
+        signals: narrativeSignals,
+        hasResourceDefinitions: definitions.length > 0,
+        reachableItemIds,
+        namedMechanics: mentionedMechanics({ userMessage, narrativeResponse, terms: sceneMechanics.terms })
+    });
     const forceDeepAnalysis = routing.forceDeepAnalysis;
     if (!triage?.consequential && !forceDeepAnalysis) {
         const timeFrame = recordTimeFrame(triage?.timeAdvance);
         const castChange = proposeCastChange();
         settleSceneMemory();
+        // A night slept or a day skipped still ends the scene, with nothing else to record.
+        const skippedSceneEnd = endedScene({ workspaceId, scene, finalScene: roleplay.getScene(workspaceId), timeFrame, calendarService })
+            || longSceneCheckpoint({ workspaceId, originId: provenanceId, scene });
+        if (skippedSceneEnd) narrativeState.queueStory(workspaceId, provenanceId, { maintenance: skippedSceneEnd, domains: [] });
         const triageInputTokens = estimateTokens(triageSystemPrompt) + estimateTokens(triagePayload);
         const triageOutputTokens = triagePrimaryOutputTokens;
         const elapsedMs = Date.now() - startedAt;
@@ -3102,7 +3112,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 timeFrame,
                 forceDeepAnalysis,
                 routing,
-                story: { status: 'not-needed', domains: [] },
+                story: skippedSceneEnd ? { status: 'queued', domains: [], sceneEnded: skippedSceneEnd.reason } : { status: 'not-needed', domains: [] },
                 contextUsage: measureNarrativeContextSections(triagePayloadValue, triageSystemPrompt),
                 repairs: {
                     triage: triageRepairCount,
@@ -3219,12 +3229,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             }))
             : undefined,
         newCharacterProfile: newCharacterProfile || undefined,
-        progression: shouldAnalyzeResources && progressionContext
-            ? describeNarrativeProgression(progression, workspaceId, progressionContext)
-            : undefined,
-        skills: shouldAnalyzeResources && skillsContext
-            ? describeNarrativeSkills(skillSystem, workspaceId, skillsContext)
-            : undefined,
+        ...(mechanicalDomains.includes('condition') ? describeConditionsForAnalysis(workspaceId, [...affectedIds, roleplaySettings.playerEntityId].filter(Boolean)) : {}),
         reachableLocationIds: shouldAnalyzeScene ? [...reachableLocationIds] : undefined,
         // A move outside the reachable set is rejected anyway, so links beyond it only cost tokens.
         locationLinks: shouldAnalyzeScene
@@ -3249,8 +3254,6 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const narrativeStateSystemPrompt = buildMechanicsSystemPrompt(
         mechanicalDomains,
         narrativeLanguageInstruction,
-        Boolean(shouldAnalyzeResources && progressionContext),
-        Boolean(shouldAnalyzeResources && skillsContext),
         Boolean(newCharacterProfile),
         Boolean(shouldAnalyzeResources && definitions.some(definition => definition.aiChangesMaximum))
     );
@@ -3372,51 +3375,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     }
     for (const [index, proposal] of (Array.isArray(resolved.resourceChanges) ? resolved.resourceChanges : []).entries()) {
         if (typeof proposal?.entityId !== 'string') continue;
-        if (proposal.skill) {
-            if (!skillsContext || !['assign', 'rank', 'create'].includes(proposal.skill)) continue;
-            try {
-                const change = skillSystem.proposeChange({
-                    id: `${provenanceId}:skill:${index}`,
-                    workspaceId,
-                    entityId: proposal.entityId,
-                    kind: proposal.skill,
-                    skillKey: typeof (proposal.name ?? proposal.key) === 'string' && proposal.skill !== 'create' ? (proposal.name ?? proposal.key) : undefined,
-                    rank: proposal.rank,
-                    direction: Number(proposal.change),
-                    name: typeof proposal.name === 'string' ? proposal.name : undefined,
-                    description: typeof proposal.description === 'string' ? proposal.description : undefined,
-                    parentKey: typeof (proposal.parent ?? proposal.parentKey) === 'string' ? (proposal.parent ?? proposal.parentKey) : undefined,
-                    reason: typeof proposal.reason === 'string' ? proposal.reason : '',
-                    source: 'ai',
-                    provenanceId
-                });
-                if (change) changes.push({ kind: 'skill', changeId: change.id, ...change });
-            } catch (error) {
-                console.warn('[Roleplay State] Ignored invalid skill change:', error.message);
-            }
-            continue;
-        }
-        if (proposal.progress) {
-            const trait = progressionContext ? findByReference(progressionContext.traits, proposal.attribute ?? proposal.key) : undefined;
-            if (proposal.progress !== 'xp' && (proposal.progress !== 'attribute' || !trait)) continue;
-            try {
-                const change = progression.proposeChange({
-                    id: `${provenanceId}:progress:${index}`,
-                    workspaceId,
-                    entityId: proposal.entityId,
-                    kind: proposal.progress === 'attribute' ? 'attribute' : 'xp',
-                    traitId: trait?.id ?? null,
-                    delta: Number(proposal.change),
-                    reason: typeof proposal.reason === 'string' ? proposal.reason : '',
-                    source: 'ai',
-                    provenanceId
-                });
-                if (change) changes.push({ kind: 'progress', changeId: change.id, ...change });
-            } catch (error) {
-                console.warn('[Roleplay State] Ignored invalid progression change:', error.message);
-            }
-            continue;
-        }
+        // Growth is weighed once, when the scene ends; a turn that still reports it is ignored.
+        if (proposal.skill || proposal.progress) continue;
         const definition = findByReference(definitions, proposal?.resource ?? proposal?.resourceKey);
         // A lasting change to the maximum is its own change, and always waits for review.
         if (definition?.aiChangesMaximum && Number.isFinite(proposal?.maximum) && Number(proposal.maximum) !== 0) {
@@ -3460,6 +3420,12 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             console.warn('[Roleplay State] Ignored invalid resource change:', error.message);
         }
     }
+    changes.push(...proposeConditionChanges({
+        workspaceId,
+        provenanceId,
+        proposals: Array.isArray(resolved.conditionChanges) ? resolved.conditionChanges : [],
+        allowedIds: new Set([...affectedIds, roleplaySettings.playerEntityId].filter(id => id && actorIds.has(id)))
+    }));
     if (Object.keys(scenePatch).length) {
         try {
             // A patch is one moment: cast and destination apply together or not at all, with the reason reported.
@@ -3566,7 +3532,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     if (timeFrame.advance) changes.push({ kind: 'time', frame: timeFrame });
     // What the story pass needs of this turn, settled now so it reads the scene as it was.
     const finalScene = roleplay.getScene(workspaceId);
-    const sceneEnd = endedScene({ workspaceId, scene, finalScene, timeFrame, calendarService });
+    const sceneEnd = endedScene({ workspaceId, scene, finalScene, timeFrame, calendarService })
+        || longSceneCheckpoint({ workspaceId, originId: provenanceId, scene: finalScene || scene });
     const storyNeeded = storyDomains.length > 0 || narrativeIntroductions.length > 0 || identityContactCandidates.length > 0;
     if (storyNeeded || sceneEnd) {
         narrativeState.queueStory(workspaceId, provenanceId, {
@@ -4150,7 +4117,26 @@ Never end or merge on a guess. When nothing needs tidying, answer {"operations":
  * What a scene's people left unused slips out of reach by rule, then one model call settles overtaken
  * intents and joins repeated memories. The player character is left as the user keeps them.
  */
+// The end of a scene: what its people carry is tidied, and what they went through is weighed for growth.
+// A long scene that never ended is only weighed, at its checkpoint.
 async function maintainEndedScene({ workspaceId, originId, maintenance, role, modelCalls = null }) {
+    const result = maintenance.growthOnly
+        ? { reason: maintenance.reason, faded: [], settled: 0, merged: 0, unresolved: 0, usage: { input: 0, output: 0 } }
+        : await tidyEndedScene({ workspaceId, originId, maintenance, role, modelCalls });
+    try {
+        const growth = await settleSceneGrowth({ workspaceId, originId, reason: maintenance.reason, holderIds: maintenance.holderIds || [], role, modelCalls });
+        if (growth) {
+            result.growth = { turns: growth.turns, proposals: growth.proposals };
+            result.usage.input += growth.usage.input;
+            result.usage.output += growth.usage.output;
+        }
+    } catch (error) {
+        console.warn('[Narrative State] Could not weigh the scene for growth:', error.message);
+    }
+    return result;
+}
+
+async function tidyEndedScene({ workspaceId, originId, maintenance, role, modelCalls = null }) {
     const result = { reason: maintenance.reason, faded: [], settled: 0, merged: 0, unresolved: 0, usage: { input: 0, output: 0 } };
     const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
     const settings = new RoleplaySystem(db).getSettings(workspaceId);
@@ -4240,6 +4226,220 @@ async function maintainEndedScene({ workspaceId, originId, maintenance, role, mo
         console.warn('[Narrative State] Could not record the scene maintenance:', error.message);
     }
     return result;
+}
+
+// Scene text the growth judge reads: the newest turns whole, older ones cut short past the budget.
+const GROWTH_SCENE_CHARS = 48000;
+const GROWTH_OLD_TURN_CHARS = 500;
+
+const NARRATIVE_GROWTH_PROMPT = `You are Kallamo's growth judge. A scene of a Roleplay has ended. Never write narrative prose. sceneTurns hold the scene, oldest first: what the player did (userMessage) and what happened (reply); older turns may be cut short. Weigh what each person in progression.characters and skills.characters went through in the scene as a whole. A project finished across many turns, a hard fight, a feat above their level, a discovery, or a real social or political advance counts by what the whole scene cost them, even when no single turn finished anything. spentInScene lists the resources each one spent during the scene, which shows the effort. alreadyGiven lists growth already recorded during this scene: never give it again. Return JSON only with {"changes":[]}. Each reason names what in the scene earned it, in a short phrase. A scene that taught nothing returns no changes, and that is a correct answer.`;
+
+/** Who may grow in a scene, and what the judge needs to know about them. */
+function loadGrowthContext(workspaceId, holderIds) {
+    const { RoleplayProgression } = require('../../dist-main/main/features/narrative/roleplay-progression');
+    const { RoleplaySkills } = require('../../dist-main/main/features/narrative/roleplay-skills');
+    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+    const progression = new RoleplayProgression(db);
+    const skillSystem = new RoleplaySkills(db);
+    const people = new Set([new RoleplaySystem(db).getSettings(workspaceId).playerEntityId, ...holderIds].filter(Boolean));
+    const narrow = context => {
+        if (!context) return null;
+        const ids = context.ids.filter(id => people.has(id));
+        return ids.length ? { ...context, ids } : null;
+    };
+    return {
+        progression,
+        skillSystem,
+        progressionContext: narrow(loadNarrativeProgressionContext(progression, workspaceId)),
+        skillsContext: narrow(loadNarrativeSkillsContext(skillSystem, workspaceId))
+    };
+}
+
+/**
+ * Experience, attributes and skills for a whole scene, once, by the reply that closed it. Each
+ * change goes through its system's policy, so a world on review sees every one before it counts.
+ */
+async function settleSceneGrowth({ workspaceId, originId, reason, holderIds = [], role, modelCalls = null }) {
+    const { SceneGrowthLedger } = require('../../dist-main/main/features/narrative/scene-growth');
+    const { NARRATIVE_GROWTH_SCHEMA } = require('../../dist-main/main/features/narrative/narrative-state-schema');
+    const ledger = new SceneGrowthLedger(db);
+    if (ledger.isSettled(workspaceId, originId)) return null;
+    const { progression, skillSystem, progressionContext, skillsContext } = loadGrowthContext(workspaceId, holderIds);
+    const turns = ledger.sceneTurns(workspaceId, originId);
+    if (!turns.length) return null;
+    if (!progressionContext && !skillsContext) {
+        ledger.record(workspaceId, originId, { reason, turnCount: turns.length, proposalCount: 0 });
+        return { turns: turns.length, proposals: 0, usage: { input: 0, output: 0 } };
+    }
+    const growingIds = [...new Set([...(progressionContext?.ids || []), ...(skillsContext?.ids || [])])];
+    const sceneStart = turns[0].createdAt;
+    const originIds = turns.map(turn => turn.originId);
+    const marks = originIds.map(() => '?').join(', ');
+    const idMarks = growingIds.map(() => '?').join(', ');
+    const spent = db.prepare(`
+        SELECT changes.entity_id AS entityId, definitions.name AS resource, SUM(changes.delta) AS total
+        FROM roleplay_resource_changes AS changes
+        JOIN roleplay_resource_definitions AS definitions
+          ON definitions.workspace_id = changes.workspace_id AND definitions.definition_id = changes.definition_id
+        WHERE changes.workspace_id = ? AND changes.source = 'ai' AND changes.status != 'rejected' AND changes.delta < 0
+          AND changes.provenance_id IN (${marks}) AND changes.entity_id IN (${idMarks})
+        GROUP BY changes.entity_id, definitions.name
+    `).all(workspaceId, ...originIds, ...growingIds).map(row => ({ entityId: row.entityId, resource: row.resource, spent: -Number(row.total) }));
+    const alreadyGiven = [
+        ...db.prepare(`
+            SELECT entity_id AS entityId, kind, delta, reason FROM roleplay_progress_changes
+            WHERE workspace_id = ? AND status != 'rejected' AND created_at >= ? AND entity_id IN (${idMarks})
+        `).all(workspaceId, sceneStart, ...growingIds),
+        ...db.prepare(`
+            SELECT changes.entity_id AS entityId, changes.kind AS kind, skills.name AS skill, changes.reason AS reason
+            FROM roleplay_skill_changes AS changes
+            LEFT JOIN roleplay_skills AS skills ON skills.workspace_id = changes.workspace_id AND skills.skill_id = changes.skill_id
+            WHERE changes.workspace_id = ? AND changes.status != 'rejected' AND changes.created_at >= ? AND changes.entity_id IN (${idMarks})
+        `).all(workspaceId, sceneStart, ...growingIds)
+    ];
+    let budget = GROWTH_SCENE_CHARS;
+    const sceneTurns = [...turns].reverse().map(turn => {
+        const entry = { userMessage: String(turn.userMessage || ''), reply: stripReasoning(turn.reply) };
+        const size = entry.userMessage.length + entry.reply.length;
+        if (size <= budget) {
+            budget -= size;
+            return entry;
+        }
+        return {
+            userMessage: entry.userMessage.slice(0, Math.floor(GROWTH_OLD_TURN_CHARS / 2)),
+            reply: entry.reply.slice(0, GROWTH_OLD_TURN_CHARS)
+        };
+    }).reverse();
+    const entityLabels = loadEntityLabels(workspaceId);
+    const payloadValue = entityLabels.encodeValue({
+        sceneEnded: reason,
+        progression: progressionContext ? describeNarrativeProgression(progression, workspaceId, progressionContext) : undefined,
+        skills: skillsContext ? describeNarrativeSkills(skillSystem, workspaceId, skillsContext) : undefined,
+        spentInScene: spent.length ? spent : undefined,
+        alreadyGiven: alreadyGiven.length ? alreadyGiven : undefined,
+        sceneTurns
+    });
+    const systemPrompt = [
+        getSystemLanguageInstruction(),
+        NARRATIVE_GROWTH_PROMPT,
+        progressionContext ? NARRATIVE_PROGRESSION_PROMPT : null,
+        skillsContext ? NARRATIVE_SKILLS_PROMPT : null
+    ].filter(Boolean).join('\n\n');
+    const payload = JSON.stringify(payloadValue);
+    const response = await sendNarrativeJson({
+        apiProfileId: role.executor.apiProfileId,
+        model: role.executor.model,
+        systemPrompt,
+        chatHistory: [],
+        newPrompt: payload,
+        temperature: 0,
+        maxTokens: 2048,
+        maxPayloadTokens: workspacePayloadTokens(workspaceId),
+        manualMode: false,
+        manualJson: null,
+        cacheScope: `${workspaceId}::scene-growth`
+    }, NARRATIVE_GROWTH_SCHEMA, 'Scene growth', { structuredFallbacks: 0, structuredFallbackStages: [], structuredFallbackReasons: [], structuredOutputMode: 'schema', cache: {}, calls: modelCalls, labels: entityLabels });
+    const parsed = safeParseObject(entityLabels.decode(response));
+    const proposals = (Array.isArray(parsed?.changes) ? parsed.changes : [])
+        .filter(proposal => growingIds.includes(proposal?.entityId));
+    const changes = proposeGrowthChanges({
+        workspaceId, provenanceId: originId, proposals, progression, skillSystem, progressionContext, skillsContext
+    });
+    ledger.record(workspaceId, originId, { reason, turnCount: turns.length, proposalCount: changes.length });
+    return {
+        turns: turns.length,
+        proposals: changes.length,
+        usage: { input: estimateTokens(systemPrompt) + estimateTokens(payload), output: estimateTokens(response) }
+    };
+}
+
+// Experience and attributes for who progresses, skills for who learns; anything else is dropped.
+function proposeGrowthChanges({ workspaceId, provenanceId, proposals, progression, skillSystem, progressionContext, skillsContext }) {
+    const changes = [];
+    for (const [index, proposal] of proposals.entries()) {
+        if (typeof proposal?.entityId !== 'string') continue;
+        if (proposal.skill) {
+            if (!skillsContext?.ids.includes(proposal.entityId) || !['assign', 'rank', 'create'].includes(proposal.skill)) continue;
+            try {
+                const change = skillSystem.proposeChange({
+                    id: `${provenanceId}:growth:skill:${index}`,
+                    workspaceId,
+                    entityId: proposal.entityId,
+                    kind: proposal.skill,
+                    skillKey: typeof (proposal.name ?? proposal.key) === 'string' && proposal.skill !== 'create' ? (proposal.name ?? proposal.key) : undefined,
+                    rank: proposal.rank,
+                    direction: Number(proposal.change),
+                    name: typeof proposal.name === 'string' ? proposal.name : undefined,
+                    description: typeof proposal.description === 'string' ? proposal.description : undefined,
+                    parentKey: typeof (proposal.parent ?? proposal.parentKey) === 'string' ? (proposal.parent ?? proposal.parentKey) : undefined,
+                    reason: typeof proposal.reason === 'string' ? proposal.reason : '',
+                    source: 'ai',
+                    provenanceId
+                });
+                if (change) changes.push({ kind: 'skill', changeId: change.id, ...change });
+            } catch (error) {
+                console.warn('[Scene growth] Ignored invalid skill change:', error.message);
+            }
+            continue;
+        }
+        if (!proposal.progress || !progressionContext?.ids.includes(proposal.entityId)) continue;
+        const trait = findByReference(progressionContext.traits, proposal.attribute ?? proposal.key);
+        if (proposal.progress !== 'xp' && (proposal.progress !== 'attribute' || !trait)) continue;
+        try {
+            const change = progression.proposeChange({
+                id: `${provenanceId}:growth:progress:${index}`,
+                workspaceId,
+                entityId: proposal.entityId,
+                kind: proposal.progress === 'attribute' ? 'attribute' : 'xp',
+                traitId: trait?.id ?? null,
+                delta: Number(proposal.change),
+                reason: typeof proposal.reason === 'string' ? proposal.reason : '',
+                source: 'ai',
+                provenanceId
+            });
+            if (change) changes.push({ kind: 'progress', changeId: change.id, ...change });
+        } catch (error) {
+            console.warn('[Scene growth] Ignored invalid progression change:', error.message);
+        }
+    }
+    return changes;
+}
+
+/**
+ * The user closes the scene: it ends at the latest reply, what its people carry is tidied and what
+ * they went through is weighed, as when the story moves on by itself.
+ */
+async function closeRoleplayScene(workspaceId) {
+    const { SceneGrowthLedger } = require('../../dist-main/main/features/narrative/scene-growth');
+    const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+    const ledger = new SceneGrowthLedger(db);
+    const originId = ledger.latestReplyId(workspaceId);
+    if (!originId) return { success: false, error: 'There is no reply to close the scene on.' };
+    if (ledger.isSettled(workspaceId, originId)) return { success: true, alreadyClosed: true };
+    const role = resolveAiEngineRole(ROLE_IDS.NARRATIVE_STORY);
+    if (!role.executor) return { success: false, error: role.error || 'No model records the story.' };
+    const scene = new RoleplaySystem(db).getScene(workspaceId);
+    const holderIds = [...new Set([...(scene?.participantIds || []), ...(scene?.possibleObserverIds || [])].filter(Boolean))];
+    const result = await maintainEndedScene({
+        workspaceId,
+        originId,
+        maintenance: { reason: 'closed-by-hand', minutes: 0, locationId: scene?.locationId || null, holderIds },
+        role
+    });
+    return { success: true, turns: result.growth?.turns ?? 0, proposals: result.growth?.proposals ?? 0 };
+}
+
+/** A scene that never moves nor skips time is still weighed once it runs this long. */
+function longSceneCheckpoint({ workspaceId, originId, scene }) {
+    try {
+        const { SceneGrowthLedger, LONG_SCENE_TURNS } = require('../../dist-main/main/features/narrative/scene-growth');
+        if (new SceneGrowthLedger(db).turnsSinceSettled(workspaceId, originId) < LONG_SCENE_TURNS) return null;
+        const holderIds = [...new Set([...(scene?.participantIds || []), ...(scene?.possibleObserverIds || [])].filter(Boolean))];
+        return { reason: 'long-scene', growthOnly: true, minutes: 0, locationId: scene?.locationId || null, holderIds };
+    } catch (error) {
+        console.warn('[Scene growth] Could not count the scene:', error.message);
+        return null;
+    }
 }
 
 function countOperations(events, matches) {
@@ -4456,6 +4656,161 @@ function recordCharacterSceneMemory({ sceneMemory, normalizeSceneMemoryUpdates, 
     return updates;
 }
 
+// The sleep and rest a turn's time held, never more than the time that passed, for people in the scene.
+function restWithin(rest, minutes, allowedIds) {
+    if (!rest || typeof rest !== 'object' || !(minutes > 0)) return null;
+    let sleepMinutes = Math.max(0, Math.round(Number(rest.sleepMinutes) || 0));
+    let restMinutes = Math.max(0, Math.round(Number(rest.restMinutes) || 0));
+    const entityIds = [...new Set((Array.isArray(rest.restingIds) ? rest.restingIds : []).filter(id => allowedIds.has(id)))];
+    if (!entityIds.length || !(sleepMinutes + restMinutes > 0)) return null;
+    const total = sleepMinutes + restMinutes;
+    if (total > minutes) {
+        sleepMinutes = Math.floor(sleepMinutes * minutes / total);
+        restMinutes = Math.floor(restMinutes * minutes / total);
+    }
+    return { sleepMinutes, restMinutes, entityIds };
+}
+
+function conditionSystem() {
+    const { RoleplayConditions } = require('../../dist-main/main/features/narrative/roleplay-conditions');
+    return new RoleplayConditions(db);
+}
+
+function loadActiveConditionNames(workspaceId, entityId) {
+    try {
+        const conditions = conditionSystem();
+        if (!conditions.getSettings(workspaceId).enabled) return [];
+        return conditions.listActive(workspaceId, [entityId]).map(condition => condition.name);
+    } catch (error) {
+        console.warn('[Conditions] Could not read who has what:', error.message);
+        return [];
+    }
+}
+
+// The story date and time now, as a condition records when it began.
+function roleplayClockLabel(workspaceId) {
+    try {
+        const calendarService = require('./features/worldbuild/calendar-service');
+        const formatted = calendarService.formatClock(calendarService.getCalendar(db, workspaceId), calendarService.getRoleplayClock(db, workspaceId));
+        return [formatted.date, formatted.time].filter(Boolean).join(', ');
+    } catch {
+        return '';
+    }
+}
+
+function applyConditionTime(workspaceId, provenanceId, { minutes, rest }) {
+    try {
+        conditionSystem().applyTime(workspaceId, provenanceId, {
+            minutes,
+            sleepMinutes: rest?.sleepMinutes || 0,
+            restMinutes: rest?.restMinutes || 0,
+            restingIds: rest?.entityIds || []
+        });
+    } catch (error) {
+        console.warn('[Conditions] Could not let time pass for conditions:', error.message);
+    }
+}
+
+function applyConditionThresholds(workspaceId, provenanceId, entityIds) {
+    try {
+        conditionSystem().applyThresholds(workspaceId, provenanceId, entityIds, roleplayClockLabel(workspaceId));
+    } catch (error) {
+        console.warn('[Conditions] Could not check resource lines:', error.message);
+    }
+}
+
+// The catalog and who has what now, for the scene pass when the turn may change a condition.
+function describeConditionsForAnalysis(workspaceId, entityIds) {
+    try {
+        const { describeConditionEnd } = require('../../dist-main/main/features/narrative/roleplay-conditions');
+        const conditions = conditionSystem();
+        const settings = conditions.getSettings(workspaceId);
+        if (!settings.enabled) return {};
+        const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+        const resourceNames = new Map(new RoleplaySystem(db).listDefinitions(workspaceId).map(definition => [definition.id, definition.name]));
+        const catalog = conditions.listDefinitions(workspaceId).filter(condition => condition.status === 'confirmed');
+        return {
+            conditionCatalog: {
+                createAllowed: settings.aiCreates || undefined,
+                conditions: catalog.map(condition => ({
+                    name: condition.name,
+                    ...(condition.description ? { meaning: condition.description } : {}),
+                    ...(describeConditionEnd(condition) ? { ends: describeConditionEnd(condition) } : {}),
+                    ...(condition.endsWhen ? { endsWhen: condition.endsWhen } : {}),
+                    ...(condition.triggerDefinitionId && resourceNames.has(condition.triggerDefinitionId)
+                        ? { startsBelow: `${resourceNames.get(condition.triggerDefinitionId)} below ${condition.triggerBelowPercent}%` }
+                        : {})
+                }))
+            },
+            currentConditions: conditions.listActive(workspaceId, entityIds).map(condition => ({
+                entityId: condition.entityId,
+                condition: condition.name,
+                ...(condition.cause ? { cause: condition.cause } : {})
+            }))
+        };
+    } catch (error) {
+        console.warn('[Conditions] Could not describe conditions:', error.message);
+        return {};
+    }
+}
+
+// Starts, extensions and ends the scene pass read, for people in the scene; the rest is dropped.
+function proposeConditionChanges({ workspaceId, provenanceId, proposals, allowedIds }) {
+    if (!proposals.length) return [];
+    const conditions = conditionSystem();
+    const startedLabel = roleplayClockLabel(workspaceId);
+    const changes = [];
+    for (const [index, proposal] of proposals.entries()) {
+        if (typeof proposal?.entityId !== 'string' || !allowedIds.has(proposal.entityId)) continue;
+        const kind = ['start', 'extend', 'end'].includes(proposal.action) ? proposal.action : null;
+        if (!kind || typeof proposal.condition !== 'string') continue;
+        try {
+            const change = conditions.proposeChange({
+                id: `${provenanceId}:condition:${index}`,
+                workspaceId,
+                entityId: proposal.entityId,
+                condition: proposal.condition,
+                kind,
+                durationMinutes: Number.isFinite(Number(proposal.durationMinutes)) ? Number(proposal.durationMinutes) : null,
+                reason: typeof proposal.reason === 'string' ? proposal.reason : '',
+                source: 'ai',
+                provenanceId,
+                startedLabel,
+                create: kind === 'start' && typeof proposal.description === 'string' ? { description: proposal.description } : undefined
+            });
+            if (change) changes.push({ kind: 'condition', changeId: change.id, ...change });
+        } catch (error) {
+            console.warn('[Roleplay State] Ignored invalid condition change:', error.message);
+        }
+    }
+    return changes;
+}
+
+// What the triage needs to route mechanics: each person's tracked resources and active conditions,
+// and the names a turn may use for them.
+function describeSceneMechanics({ workspaceId, roleplay, actorIds }) {
+    const entries = [];
+    const terms = new Map();
+    for (const entityId of [...new Set(actorIds)]) {
+        let resources = [];
+        try {
+            resources = roleplay.listEntityResources(workspaceId, entityId).filter(resource => resource.enabled);
+        } catch {
+            resources = [];
+        }
+        const conditions = loadActiveConditionNames(workspaceId, entityId);
+        if (!resources.length && !conditions.length) continue;
+        resources.forEach(resource => terms.set(resource.name, 'resource'));
+        conditions.forEach(name => terms.set(name, 'condition'));
+        entries.push({
+            entityId,
+            ...(resources.length ? { resources: resources.map(resource => ({ name: resource.name, current: resource.current, maximum: resource.maximum })) } : {}),
+            ...(conditions.length ? { conditions } : {})
+        });
+    }
+    return { entries, terms: [...terms].map(([name, domain]) => ({ name, domain })) };
+}
+
 // What this turn's triage saw of the conversation: who was heard speaking and who the turn involved.
 function turnCastSignals(triage, actorIds) {
     const speakerIds = (Array.isArray(triage?.sceneMemory) ? triage.sceneMemory : [])
@@ -4525,6 +4880,7 @@ function constrainNarrativeStateResult(value, domains) {
         newEntities: selected.has('entity') && Array.isArray(value.newEntities) ? value.newEntities : [],
         identityUpdates: selected.has('entity') && Array.isArray(value.identityUpdates) ? value.identityUpdates : [],
         resourceChanges: selected.has('resource') && Array.isArray(value.resourceChanges) ? value.resourceChanges : [],
+        conditionChanges: selected.has('condition') && Array.isArray(value.conditionChanges) ? value.conditionChanges : [],
         scenePatch: selected.has('scene') && value.scenePatch && typeof value.scenePatch === 'object' && !Array.isArray(value.scenePatch)
             ? value.scenePatch
             : {},
@@ -4687,10 +5043,11 @@ function loadNarrativeLocationInventoryState(workspaceId, locationId, itemIds) {
 }
 
 const NARRATIVE_TRIAGE_SYSTEM_PROMPT = `You route Roleplay turns to durable-state analyzers and estimate elapsed narrative time. Inspect the user action, final narrative, current time, calendar, time matrix, compact scene, named entities, and locally extracted candidate signals. Candidate signals are hints, not conclusions.
-Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"aboutIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to. Everyone in currentScene who has not left stays in presentIds, whether or not they speak or are mentioned this turn. aboutIds is a separate list and never narrows presentIds, which still holds everyone physically in the scene. aboutIds lists the supplied entities this turn concerns: anyone who speaks, acts or is spoken to, and every person, place, item, group or event that is discussed, asked about, revealed or implied, even when it is only described and never named. A person who is only in the background of this turn stays in presentIds and out of aboutIds.
-Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt","statedSpan":null,"movementOnly":false}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words: an estimate on its own is held to a week. Whenever the user message or the narrative states a span of time, also return statedSpan as {"excerpt":"the exact words that state it, copied verbatim","amount":3,"unit":"minutes|hours|days|weeks|months|years|decades","asserts":"now|framing|history"}: "now" when that time passes in this turn, "framing" when it only frames a scene (a flashback or a setting), "history" when it recounts the world's past. A span needs a stated amount and unit ("two hours later", "20 minutes"): a vague promise such as "it won't take long" or a clock time such as "at 19h" is not a span. Otherwise statedSpan is null. Never translate or paraphrase the excerpt. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes. The category of a journey comes from where the two locations sit, not from the timeMatrix guidance, which describes actions: currentLocation lists the scene's location with what contains it, and each location in availableEntities carries its size. Between spots inside one place is Micro; between places of one area, Local; across the districts of an area, Transit; between areas of a region, Macro. Set movementOnly to true when the turn's time is the journey itself, with only talk, glances or other Micro actions on the way; set it to false when something longer also happens before or after the move (work, a meal, a search, rest, a long conversation), and add that action's time to the duration. With no journey, movementOnly is false.
+Return JSON only with {"consequential":boolean,"types":["entity","scene","resource","condition","inventory","awareness","knowledge","belief","memory","relationship","fact"],"entityIds":["existing-id"],"presentIds":["existing-id"],"aboutIds":["existing-id"],"confidence":0.0,"evidence":["short verbatim excerpt"],"requiresFullAnalysis":boolean,"reason":"brief","timeAdvance":null,"sceneMemory":[]}. entityIds lists every supplied entity the turn involves or is about, including one that is discussed or implied without being present. presentIds lists the supplied Characters and Creatures physically in the scene when the turn ends, including anyone who arrived during it and excluding anyone only mentioned, remembered or written to. Everyone in currentScene who has not left stays in presentIds, whether or not they speak or are mentioned this turn. aboutIds is a separate list and never narrows presentIds, which still holds everyone physically in the scene. aboutIds lists the supplied entities this turn concerns: anyone who speaks, acts or is spoken to, and every person, place, item, group or event that is discussed, asked about, revealed or implied, even when it is only described and never named. A person who is only in the background of this turn stays in presentIds and out of aboutIds.
+Always evaluate elapsed time, even when no other durable domain is consequential. For an in-world action, timeAdvance is {"actionType":"short_snake_case","basis":"explicit|matrix","duration":{"years":0,"months":0,"days":0,"hours":0,"minutes":0},"targetPosition":null,"confidence":0.0,"evidence":"short verbatim excerpt","statedSpan":null,"movementOnly":false,"rest":{"sleepMinutes":0,"restMinutes":0,"restingIds":[]}}. When the final narrative establishes an absolute ending date or time, set basis to "explicit", copy the complete resulting calendar position into targetPosition, and also return the calculated duration. Use null for out-of-character instructions, corrections, hypothetical actions, or when no in-world time passed. A skip of days, months or years is returned in the same duration object and is accepted only when the turn says so in words: an estimate on its own is held to a week. Whenever the user message or the narrative states a span of time, also return statedSpan as {"excerpt":"the exact words that state it, copied verbatim","amount":3,"unit":"minutes|hours|days|weeks|months|years|decades","asserts":"now|framing|history"}: "now" when that time passes in this turn, "framing" when it only frames a scene (a flashback or a setting), "history" when it recounts the world's past. A span needs a stated amount and unit ("two hours later", "20 minutes"): a vague promise such as "it won't take long" or a clock time such as "at 19h" is not a span. Otherwise statedSpan is null. Never translate or paraphrase the excerpt. Travel always costs time: when the turn completes a journey between places, timeAdvance is never null, and its duration must match the distance actually crossed rather than the length of the passage describing it. Walking somewhere is usually described in two lines and still takes as long as the walk takes, so read the duration off the timeMatrix category the journey belongs to and never below that category's minimumMinutes. The category of a journey comes from where the two locations sit, not from the timeMatrix guidance, which describes actions: currentLocation lists the scene's location with what contains it, and each location in availableEntities carries its size. Between spots inside one place is Micro; between places of one area, Local; across the districts of an area, Transit; between areas of a region, Macro. Set movementOnly to true when the turn's time is the journey itself, with only talk, glances or other Micro actions on the way; set it to false when something longer also happens before or after the move (work, a meal, a search, rest, a long conversation), and add that action's time to the duration. With no journey, movementOnly is false. rest says how much of the duration was spent asleep or resting: sleepMinutes for actual sleep, restMinutes for resting awake (sitting down to recover, a meal break, lying down without sleeping), and restingIds for the supplied Characters and Creatures who did it. Count only what the turn shows happening, never a plan to sleep later, and never more than the duration; work, travel, a fight or a long conversation is not rest. A night's sleep the turn skips over counts in full. Otherwise both are 0 and restingIds is empty.
 An explicit final position or duration in the narrative wins over the matrix. Reconcile every clock reference with currentTime; do not describe a turn as reaching a later time while returning null or a conflicting duration. Otherwise choose a reasonable value within the supplied matrix: Micro for dialogue lines, combat rounds, lockpicking, and quick scans; Local for same-district walking, wound care, and careful room inspection; Transit for cross-district travel, crowds, minor repairs, and setting camp; Macro for crafting, deep study, rest, and inter-city travel; Timeskip for supported downtime, recovery, waiting, long-distance travel, or another transition spanning one or more calendar days. Do not advance hours during line-by-line dialogue. Do not use a tiny advance for substantial travel. A jump of one day or more must be explicitly supported by the final narrative or by a completed action whose duration is covered by the configured Timeskip range. Return calendar units directly instead of assuming a 24-hour day.
-Mark inventory for explicit pickup, drop, transfer, gift, payment, purchase, sale, trade, tip, loan, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Money is coins, which are items: paying, spending or receiving money is inventory, never resource. Judge every domain by what happens, in whatever language the turn is written, never by keywords. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change, including someone joining or leaving the conversation, stepping away within the place, or leaving the place. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. When progression is supplied, also mark resource for an outcome that earns experience, or training that changes an attribute, for one of progression.characterIds. When skills is supplied, also mark resource when one of skills.characterIds clearly learns a skill or reaches a milestone in one. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
+mechanics lists, for each Character and Creature in the scene, the resources the world tracks with their current and maximum values, and the conditions they have now. Mark resource when one of them spends, suffers, recovers or consumes something that moves one of those resources, even when the narrative gives no numbers: casting, forging with mana, a hard effort, a wound, a potion. Mark condition when one of them gains, loses, worsens or is treated for a condition, by the meaning of what happens. Sleep and rest are not resource changes: they belong in timeAdvance.rest.
+Mark inventory for explicit pickup, drop, transfer, gift, payment, purchase, sale, trade, tip, loan, theft, loss, consumption, equip, unequip, drawing, sheathing, or quantity change. Money is coins, which are items: paying, spending or receiving money is inventory, never resource. Judge every domain by what happens, in whatever language the turn is written, never by keywords. Mark scene for explicit arrival, departure, movement, participation, observer, nearby, object, or location change, including someone joining or leaving the conversation, stepping away within the place, or leaving the place. Mark epistemic domains only for information actually communicated, perceived, discovered, remembered, believed, or relationally consequential. Mark relationship for a first demonstrated encounter or interaction that must initialize a directional relationship, even when its initial value is 0, and for an event that materially and durably changes an existing value. Direct conversation is mutual interaction. Listening or overhearing is interaction only from the aware listener toward the speaker unless the speaker also perceives the listener. Mere co-presence is not interaction. Ordinary politeness, irritation, banter, compliance, disagreement, or passing mood does not change an existing value. Mark resource for an actual value change, not a price mention or hypothetical. Experience, attributes and skills are weighed when the scene ends, never per turn. A concrete edition of a supplied recurring Event is consequential when it actually takes place, even if the tradition itself is already known.
 A newly introduced persistent named character, stably identifiable individual creature, new race or species, named location, or narratively important unique item is consequential even without an existing ID, and so is a thing made, forged, copied, split off or transformed into something new during the turn, or a new room or place the scene moves into. An unnamed person distinguished only by appearance, ancestry, clothing, age, expression, or scene position may be routed as a sparse entity candidate, but is not yet a Worldbuild identity. Mark entity only for someone or something absent from availableEntities, or for a new name, nickname or title of an existing one. Someone learning, hearing or using the name already on an existing sheet is awareness or knowledge, never entity. Mark false for crowds, atmosphere, repetition, casual dialogue, hypotheticals, offers not completed, item mentions without possession changes, and events without durable consequences. Presence alone never grants awareness or knowledge. Set requiresFullAnalysis only when four or more domains interact or the consequence cannot be safely isolated.
 sceneMemory is short-lived working memory, separate from every durable domain above, and is filled even when consequential is false. For each Character or Creature in presentIds other than currentScene.playerEntityId who took in something new this turn, return {"entityId":"id","perceived":["..."],"heard":[{"fromId":"speaker id or empty string","text":"..."}],"stance":"..."}. perceived lists what that character directly saw or heard happen in front of them, a few words each, with names, numbers and objects exactly as they appeared to that character. heard lists what was said to them or within their hearing, as the speaker's claim and never as the truth, keeping the speaker's own figures and wording; fromId is the speaker's supplied id, or an empty string when the speaker has none. A character who arrived during the turn records only what happened after arriving. Never record another character's thoughts, narration they could not perceive, or anything only the narrator knows: if the narration counts ten crates but the character was only told eight, they heard eight. stance is one short line on what they want right now and how they regard the player character, written only when it is new or differs from characterStances, otherwise an empty string. Skip characters with nothing new, and return [] when nobody qualifies.`;
 const NARRATIVE_REPAIR_SYSTEM_PROMPT = 'Repair the supplied response into one valid JSON object that follows the required schema. Preserve supported values. Return JSON only.';
@@ -4701,13 +5058,19 @@ For Locations, size is region when wider than a scene, area when it holds many p
 
 const NARRATIVE_SCENE_SCOPED_PROMPT = `SCENE DOMAIN: scenePatch may contain locationId, participantIds, possibleObserverIds, nearbyIds, and objectIds. Return complete replacement arrays only for fields that changed. Participants are directly involved, possible observers can witness, nearby entities are in the broader location, and objects are physically present. Explicit completed arrivals, departures, joining a conversation, sitting with the group, leaving, and deliberate movement can change scene membership independently from locationId. Include newly introduced entity referenceIds in the appropriate array. When inventory is also selected, dropping a unique item may add it to objectIds, while picking up, consuming, destroying, or removing it may remove it. Keep unrelated existing objectIds. Change location only after movement is completed and use reachableLocationIds. When the destination is a part of the current location with no entry of its own, such as a room, a floor or a yard, keep the current locationId; never substitute another place for it. Intention, preparation, a destination plan, an open door, or a visible route is not a completed location change. reachableLocationIds already spans the whole surrounding region, so a completed journey across a city, district, or road belongs here. A scene patch is applied whole or not at all: if the destination is not in reachableLocationIds, the participant and object arrays are discarded with it, so return the arrays that match the location you actually set. Presence is not ownership or knowledge.`;
 
-const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resource":"resource name","change":signed-number,"reason":"short phrase from the story"}. change is the amount gained (+) or lost (-), never the resulting total; currentResourceStates shows where each value stands, and the value is kept within its range for you. Use only resources listed for that entity in currentResourceStates. Apply only explicit mechanical gains, losses, recovery, damage, or expenditure. Each resource description says what moves it, and lowestEffect says what happens at its lowest. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual value change are not resource changes. Elapsed time is handled separately: never report recovery or drain that comes only from time passing.`;
+const NARRATIVE_RESOURCE_SCOPED_PROMPT = `RESOURCE DOMAIN: resourceChanges contain {"entityId":"id","resource":"resource name","change":signed-number,"reason":"short phrase from the story"}. change is the amount gained (+) or lost (-), never the resulting total; currentResourceStates shows where each value stands, and the value is kept within its range for you. Use only resources listed for that entity in currentResourceStates. Apply the gains, losses, recovery, damage and expenditure the turn shows happening, even when the narrative gives no numbers: each resource description says what moves it and by how much, so read the amount from what the scene shows (a small adjustment, a hard effort, a heavy blow). lowestEffect says what happens at its lowest. Prices, wages, comparisons, plans, hypotheticals, and narration without an actual change are not resource changes. Elapsed time, sleep and rest are applied by the app: never report recovery or drain that comes only from time passing, sleeping or resting. Report only what they do not cover, such as a potion, a healer or a meal that restores something.`;
 
 const NARRATIVE_RESOURCE_MAXIMUM_PROMPT = `RESOURCE MAXIMUM: a resource with maximumRule in availableResources can have its maximum changed for good. Report it as {"entityId":"id","resource":"resource name","maximum":signed-number,"reason":"short phrase from the story"}, only for a lasting change the story clearly shows and that maximumRule allows, such as long training, an implant, a lost limb or a permanent curse. maximum is the amount the maximum moves, never the new total. Potions, blessings, fatigue and anything that will wear off change the current value with change, never the maximum. Rarely, and never twice for the same resource in a turn.`;
 
-const NARRATIVE_PROGRESSION_PROMPT = `PROGRESSION: progression.characters are the only characters who grow. Report their growth as extra items in resourceChanges.
-- XP: {"entityId":"id","progress":"xp","change":positive-integer,"reason":"short phrase"} for an outcome that earns experience as progression.xpGuidance describes, such as a won fight, a finished quest or a clever solution. Never for routine actions. XP is only added, unless progression.xpCanDrop is true and the story takes experience away. Never report a level: levels follow from XP.
+const NARRATIVE_PROGRESSION_PROMPT = `PROGRESSION: progression.characters are the only characters who grow. Report their growth in changes.
+- XP: {"entityId":"id","progress":"xp","change":positive-integer,"reason":"short phrase"} for what the scene earned as progression.xpGuidance describes, such as a won fight, a finished project or quest, or a clever solution. progression.xpGuidance is the world's own scale: follow its amounts. Routine actions alone earn nothing. XP is only added, unless progression.xpCanDrop is true and the story takes experience away. Never report a level: levels follow from XP.
 - Attribute: {"entityId":"id","progress":"attribute","attribute":"attribute name","change":1,"reason":"short phrase"} only when the story clearly earns a lasting change: sustained training, a hard-won lesson, a breakthrough. When progression.attributeRules.whenToRaise is given, it is the world's own bar for a raise and is stricter than any general reason: follow it. One point at a time, and rarely. Use change -1 only when progression.attributeRules.lower is true and the story shows a lasting injury, curse or age. When progression.attributeRules.raise is false, report no attribute raise.`;
+
+const NARRATIVE_CONDITION_SCOPED_PROMPT = `CONDITION DOMAIN: conditionCatalog lists the conditions this world tracks, with what each does and how it ends; currentConditions lists who has which one now. conditionChanges contain {"entityId":"id","condition":"condition name","action":"start|extend|end","durationMinutes":integer-or-null,"reason":"short phrase from the story"}.
+- start: the turn shows the cause happening to a Character or Creature in the scene: a wound that bleeds, a poison, a curse, an overload the condition describes. durationMinutes only when the story sets how long it lasts; otherwise null and the catalog's rule applies.
+- extend: someone who already has it makes it worse or longer.
+- end: a treatment, a cure or an event the catalog's endsWhen names happens in the turn. Time, sleep and rest end conditions by themselves: never report those.
+A condition tied to a resource (startsBelow) starts and ends by itself with that resource: never report it. When conditionCatalog.createAllowed is true and the turn clearly gives someone a lasting condition the catalog lacks, start it with its own name and add "description":"what it does to them"; prefer an existing condition whenever one fits. Moods, passing pain and anything that ends within the same scene are not conditions.`;
 
 const NARRATIVE_INVENTORY_SCOPED_PROMPT = `INVENTORY DOMAIN: Track explicit pickup, drop, deliberate placement, gift, transfer, theft, loss, consumption, destruction, equip, unequip, drawing, sheathing, and quantity changes. currentInventoryState and currentLocationInventoryState are the pre-turn truth.
 For a unique item move return {"itemId":"id","fromHolderId":"id-or-null","toHolderId":"id-or-null","locationId":"id-or-null","equipped":boolean-when-explicit}. It has exactly one holder or location. Dropping or deliberately leaving it uses locationId. Loss, consumption, or destruction with no destination uses null targets.
@@ -4747,7 +5110,7 @@ Relationship changes only the directional numeric bar. Never return a title or d
 ${RELATIONSHIP_SCALE_GUIDE}
 Ignore existing knowledge and existing memories when deciding what happened, but never restate something the campaign already holds. A turn that changes nothing durable returns no events at all, and that is a correct answer. Most turns produce at most one or two records, and returning many is a sign the durability test was skipped.`;
 
-const NARRATIVE_SKILLS_PROMPT = `SKILLS: skills.characters are the only characters whose skills change. Report changes as extra items in resourceChanges. Ranks are skills.ranks, lowest first; each character's skills show the rank they hold now.
+const NARRATIVE_SKILLS_PROMPT = `SKILLS: skills.characters are the only characters whose skills change. Report them in changes. Ranks are skills.ranks, lowest first; each character's skills show the rank they hold now.
 - Learn: {"entityId":"id","skill":"assign","name":"skill name","rank":"rank name","reason":"short phrase"} when the story shows them actually acquiring a skill from skills.catalog they do not hold yet: being taught, practising until it takes, or proving they already had it. Start at the lowest rank unless the story clearly shows more. Only when skills.rules.assign is true.
 - Rank: {"entityId":"id","skill":"rank","name":"skill name","change":1,"reason":"short phrase"} only for a milestone the scene shows: succeeding at something beyond their current rank, overcoming a failure, finishing a lesson from someone better. Repetition alone never earns a rank. One step at a time, never twice for the same skill in a turn, and rarely. Use change -1 only when skills.rules.lower is true and the story shows lasting loss. When skills.rules.raise is false, report no raise. When skills.rules.guidance is given, it is the world's own bar and is stricter than these: follow it.
 - New skill: {"entityId":"id","skill":"create","name":"New skill name","description":"what it covers","parent":"optional parent skill name","rank":"rank name","reason":"short phrase"} only when skills.rules.create is true and the story shows a distinct, lasting competence that nothing in skills.catalog covers. Prefer an existing skill, or a sub-skill under one with parent, over a broad new one. Never create a skill for a single action.`;
@@ -4845,10 +5208,10 @@ function describeNarrativeProgression(progression, workspaceId, context) {
     };
 }
 
-const EMPTY_MECHANICS = { newEntities: [], identityUpdates: [], resourceChanges: [], scenePatch: {}, inventoryChanges: [] };
+const EMPTY_MECHANICS = { newEntities: [], identityUpdates: [], resourceChanges: [], conditionChanges: [], scenePatch: {}, inventoryChanges: [] };
 
-const NARRATIVE_MECHANICS_BASE_PROMPT = `You are Kallamo's Narrative State interpreter for the live scene. Never write narrative prose. Analyze only routing.selectedDomains. Extract the explicit consequences of the user action and final narrative for the scene, the people in it, their resources and growth, and their items. Lasting knowledge, beliefs, memories, facts and relationships are recorded by a separate pass, never here. Candidate signals are hints, not facts. Use only supplied IDs and resource keys.
-Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"scenePatch":{},"inventoryChanges":[]}. Leave every unselected domain empty. The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never invent a player choice, line, intention, emotion, memory, or private thought. Empty arrays and an empty scenePatch are correct.`;
+const NARRATIVE_MECHANICS_BASE_PROMPT = `You are Kallamo's Narrative State interpreter for the live scene. Never write narrative prose. Analyze only routing.selectedDomains. Extract the explicit consequences of the user action and final narrative for the scene, the people in it, their resources and conditions, and their items. Lasting knowledge, beliefs, memories, facts and relationships are recorded by a separate pass, never here. Candidate signals are hints, not facts. Use only supplied IDs and resource keys.
+Return JSON only with {"newEntities":[],"identityUpdates":[],"resourceChanges":[],"conditionChanges":[],"scenePatch":{},"inventoryChanges":[]}. Leave every unselected domain empty. The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never invent a player choice, line, intention, emotion, memory, or private thought. Empty arrays and an empty scenePatch are correct.`;
 
 const NARRATIVE_STORY_RECORD_PROMPT = `You are Kallamo's story recorder. Never write narrative prose. The live scene of this turn is already settled: turnState says who was present when it ended, who arrived and who left, where it began and ended, and who was introduced. Record only what lasts from the user action and the final narrative, for the domains in turnState.domains. Use only supplied entity IDs.
 Return JSON only with {"events":[]}. The user message is the player character's chosen action. The narrative response contains world and NPC consequences. Never invent a player choice, line, intention, emotion, memory, or private thought. An empty events list is the correct answer when nothing durable happened.
@@ -4873,7 +5236,7 @@ const NARRATIVE_STORY_NUANCE_PROMPT = `HOW SOMETHING IS HELD. These optional fie
 "sharedWith":["id"] on a secret names those its holder knowingly keeps it with; telling anyone else is a breach.
 "heldById":"id" on a belief records what the subject thinks another character holds: the proposition is what they think that character knows or believes, with negated when they think that character does not know it. Record this only when it will shape what the subject says, does or hides later.`;
 
-function buildMechanicsSystemPrompt(domains, languageInstruction = '', withProgression = false, withSkills = false, withStartingProfile = false, withMaximum = false) {
+function buildMechanicsSystemPrompt(domains, languageInstruction = '', withStartingProfile = false, withMaximum = false) {
     return [
         languageInstruction,
         NARRATIVE_MECHANICS_BASE_PROMPT,
@@ -4882,8 +5245,7 @@ function buildMechanicsSystemPrompt(domains, languageInstruction = '', withProgr
         domains.includes('scene') ? NARRATIVE_SCENE_SCOPED_PROMPT : null,
         domains.includes('resource') ? NARRATIVE_RESOURCE_SCOPED_PROMPT : null,
         domains.includes('resource') && withMaximum ? NARRATIVE_RESOURCE_MAXIMUM_PROMPT : null,
-        domains.includes('resource') && withProgression ? NARRATIVE_PROGRESSION_PROMPT : null,
-        domains.includes('resource') && withSkills ? NARRATIVE_SKILLS_PROMPT : null,
+        domains.includes('condition') ? NARRATIVE_CONDITION_SCOPED_PROMPT : null,
         domains.includes('inventory') ? NARRATIVE_INVENTORY_SCOPED_PROMPT : null,
         `Selected domains: ${domains.join(', ')}.`
     ].filter(Boolean).join('\n\n');
@@ -9079,6 +9441,8 @@ ${isRoleplay ? `${inContextLine}- PERSPECTIVE: lookup_entity returns what the na
 
 module.exports = {
     runWorkflow,
+    closeRoleplayScene,
+    roleplayClockLabel,
     executeAgenticRagLoop,
     cancelGeneration,
     resolveErrorDeferred,

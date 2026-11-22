@@ -2,6 +2,7 @@ const NARRATIVE_DOMAINS = [
   'entity',
   'scene',
   'resource',
+  'condition',
   'inventory',
   'awareness',
   'knowledge',
@@ -19,6 +20,7 @@ const MECHANICAL_DOMAINS = new Set([
   'entity',
   'scene',
   'resource',
+  'condition',
   'inventory',
 ]);
 
@@ -180,7 +182,14 @@ function extractNarrativeSignals({ userMessage, narrativeResponse, entities = []
   };
 }
 
-function resolveNarrativeRouting({ triage, signals, hasResourceDefinitions = true, reachableItemIds = [] }) {
+/** The mechanical domains whose tracked names (a resource, a condition) the turn uses. */
+function mentionedMechanics({ userMessage, narrativeResponse, terms = [] }) {
+  const text = normalizeNarrativeText(`${String(userMessage || '')}
+${String(narrativeResponse || '')}`);
+  return unique(terms.filter(term => containsName(text, term.name)).map(term => term.domain));
+}
+
+function resolveNarrativeRouting({ triage, signals, hasResourceDefinitions = true, reachableItemIds = [], namedMechanics = [] }) {
   const triageDomains = unique(
     (Array.isArray(triage?.types) ? triage.types : []).filter(type => NARRATIVE_DOMAINS.includes(type))
   );
@@ -199,6 +208,13 @@ function resolveNarrativeRouting({ triage, signals, hasResourceDefinitions = tru
   if (triage?.consequential && !selectedDomains.has('inventory') && triageItems.some(id => reachable.has(id))) {
     selectedDomains.add('inventory');
     forceReasons.push('item-in-reach');
+  }
+
+  // A turn that names someone's resource or condition is read for it, whatever the triage marked.
+  for (const domain of namedMechanics) {
+    if (!triage?.consequential || !MECHANICAL_DOMAINS.has(domain) || selectedDomains.has(domain)) continue;
+    selectedDomains.add(domain);
+    forceReasons.push(`mechanic-named-${domain}`);
   }
 
   for (const domain of signals.strongDomains || []) {
@@ -486,6 +502,7 @@ module.exports = {
   extractNarrativeSignals,
   groupKnowledgeCardRows,
   hasEpistemicDomain,
+  mentionedMechanics,
   resolveAnalysisHolders,
   resolveNarrativeRouting,
   resolveSceneCast,
