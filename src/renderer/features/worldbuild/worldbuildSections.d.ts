@@ -27,3 +27,7 @@ export declare function normalizeTemplateSections<T extends { id: string; kind?:
   sections?: T[],
 ): T[];
 export declare function variantsOf(typeId: string): SheetVariant[];
+export declare const LOOSE_FIELDS_SECTION: { id: 'custom-fields'; label: string };
+type FieldLayoutTemplate = { layout?: { sections?: Array<{ id: string; kind?: string }>; fieldSections?: Record<string, string> } } | null | undefined;
+export declare function sectionOfField(typeId: string, template: FieldLayoutTemplate, fieldId: string): string;
+export declare function normalizeFieldSections(typeId: string, template: FieldLayoutTemplate, fieldIds: string[]): Record<string, string>;

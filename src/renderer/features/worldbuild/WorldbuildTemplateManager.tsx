@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Eye, EyeOff, GripVertical, LayoutTemplate, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, CornerDownRight, Eye, EyeOff, GripVertical, LayoutTemplate, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import Menu, { MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import UiIconButton from '../../components/ui/IconButton';
 import type { EntityFieldDefinition, EntityFieldType } from '../../../narrative/contracts';
@@ -10,23 +10,25 @@ import Modal from '../../components/ui/Modal';
 import SelectMenuBase from '../../components/ui/SelectMenu';
 
 const SelectMenu = SelectMenuBase as unknown as React.ComponentType<Record<string, unknown>>;
-import type { Toast, WorldbuildApi, WorldbuildEntityTemplate, WorldbuildTemplateSection } from './worldbuildTypes';
+import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate, WorldbuildTemplateSection } from './worldbuildTypes';
+import { FieldInput } from './WorldbuildCustomFields';
+import SearchableSelect from '../../components/ui/SearchableSelect';
 import { meta, TYPE_ORDER } from './worldbuildConfig';
-import { normalizeTemplateSections, templateSections as templatableSections, VARIANT_LABELS, variantsOf } from './worldbuildSections';
+import { LOOSE_FIELDS_SECTION, normalizeFieldSections, normalizeTemplateSections, sectionOfField, templateSections as templatableSections, VARIANT_LABELS, variantsOf } from './worldbuildSections';
 
 const INPUT = 'wb-input w-full rounded-control border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none focus:ring-2 focus:ring-accent/15';
 
-interface Props { workspaceId: string; api: WorldbuildApi; templates: WorldbuildEntityTemplate[]; showToast: Toast; onClose(): void; onSaved(template: WorldbuildEntityTemplate): void; }
-type FieldDraft = { definition?: EntityFieldDefinition; sectionId: string; label: string; valueType: EntityFieldType; optionsText: string; required: boolean; aiAccess: EntityFieldDefinition['aiAccess']; aiGuidance: string };
+interface Props { workspaceId: string; api: WorldbuildApi; templates: WorldbuildEntityTemplate[]; entities?: WorldbuildEntity[]; showToast: Toast; onClose(): void; onSaved(template: WorldbuildEntityTemplate): void; onFieldsChanged?(typeId: string, change: { valuesChanged: boolean }): void; }
+type FieldDraft = { definition?: EntityFieldDefinition; sectionId: string; label: string; valueType: EntityFieldType; optionsText: string; required: boolean; aiAccess: EntityFieldDefinition['aiAccess']; aiGuidance: string; defaultValue: unknown; carryDefault?: boolean };
 type DeleteTarget = { kind: 'field'; field: EntityFieldDefinition } | { kind: 'section'; section: WorldbuildTemplateSection; fields: EntityFieldDefinition[] };
 
-export default function WorldbuildTemplateManager({ workspaceId, api, templates, showToast, onClose, onSaved }: Props) {
+export default function WorldbuildTemplateManager({ workspaceId, api, templates, entities = [], showToast, onClose, onSaved, onFieldsChanged }: Props) {
   const [typeId, setTypeId] = useState('Characters');
   const [draft, setDraft] = useState<WorldbuildEntityTemplate>(() => templateFor('Characters', templates));
   const [fields, setFields] = useState<EntityFieldDefinition[]>([]);
   const [fieldDraft, setFieldDraft] = useState<FieldDraft | null>(null);
   const [deleting, setDeleting] = useState<DeleteTarget | null>(null);
-  const [confirmingTypeChange, setConfirmingTypeChange] = useState(false);
+  const [typeChange, setTypeChange] = useState<{ kept: number; lost: Array<{ id: string; name: string }>; defaultLost: boolean } | null>(null);
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -60,43 +62,53 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
     required: definition?.required ?? false,
     aiAccess: definition?.aiAccess ?? 'read-write',
     aiGuidance: definition?.aiGuidance ?? '',
+    defaultValue: definition?.defaultValue ?? null,
   });
 
   const persistTemplate = async (next: WorldbuildEntityTemplate) => {
-    const result = await api.saveWorldbuildEntityTemplate({ ...next, workspaceId });
+    const fieldSections = normalizeFieldSections(typeId, next, Object.keys(next.layout.fieldSections || {}));
+    const result = await api.saveWorldbuildEntityTemplate({ ...next, layout: { ...next.layout, fieldSections }, workspaceId });
     if (!result.success || !result.template) throw new Error(result.error || 'Could not save the template.');
     onSaved(result.template);
     setDraft(templateFor(typeId, [result.template]));
     return result.template;
   };
 
-  const saveField = async (clearValuesOnTypeChange = false) => {
+  const fieldPayload = (draftField: FieldDraft) => {
+    const isChoice = draftField.valueType === 'single-choice' || draftField.valueType === 'multiple-choice';
+    return {
+      id: draftField.definition?.id, key: draftField.definition?.key,
+      projectId: workspaceId, typeId, label: draftField.label.trim(), valueType: draftField.valueType,
+      options: isChoice ? optionsFromText(draftField.optionsText, draftField.definition?.options) : undefined,
+      required: draftField.required, position: draftField.definition?.position ?? fields.length,
+      aiAccess: draftField.aiAccess, aiGuidance: draftField.aiGuidance,
+      defaultValue: draftField.defaultValue ?? null,
+      carryDefault: Boolean(draftField.carryDefault),
+    };
+  };
+
+  const saveField = async (confirmTypeChange = false) => {
     if (!fieldDraft?.label.trim()) return;
-    const hasTypeChange = fieldDraft.definition && fieldDraft.definition.valueType !== fieldDraft.valueType;
-    if (hasTypeChange && !clearValuesOnTypeChange) {
-      setConfirmingTypeChange(true);
-      return;
-    }
+    const hasTypeChange = Boolean(fieldDraft.definition && fieldDraft.definition.valueType !== fieldDraft.valueType);
     setSaving(true);
     try {
-      const isChoice = fieldDraft.valueType === 'single-choice' || fieldDraft.valueType === 'multiple-choice';
-      const result = await api.saveWorldbuildFieldDefinition({
-        id: fieldDraft.definition?.id, key: fieldDraft.definition?.key,
-        projectId: workspaceId, typeId, label: fieldDraft.label.trim(), valueType: fieldDraft.valueType,
-        options: isChoice ? optionsFromText(fieldDraft.optionsText, fieldDraft.definition?.options) : undefined,
-        required: fieldDraft.required, position: fieldDraft.definition?.position ?? fields.length,
-        aiAccess: fieldDraft.aiAccess, aiGuidance: fieldDraft.aiGuidance,
-        clearValuesOnTypeChange,
-      });
+      if (hasTypeChange && !confirmTypeChange) {
+        const preview = await api.previewWorldbuildFieldTypeChange(fieldPayload(fieldDraft));
+        if (!preview.success) throw new Error(preview.error || 'Could not check the stored values.');
+        setTypeChange({ kept: preview.kept ?? 0, lost: preview.lost ?? [], defaultLost: Boolean(preview.defaultLost) });
+        return;
+      }
+      const result = await api.saveWorldbuildFieldDefinition({ ...fieldPayload(fieldDraft), confirmTypeChange });
       if (!result.success || !result.field) throw new Error(result.error || 'Could not save the custom field.');
       setFields(current => [...current.filter(field => field.id !== result.field!.id), result.field!].sort((a, b) => a.position - b.position));
       await persistTemplate({
         ...draft,
         layout: { ...draft.layout, fieldSections: { ...(draft.layout.fieldSections || {}), [result.field.id]: fieldDraft.sectionId } },
       });
+      onFieldsChanged?.(typeId, { valuesChanged: hasTypeChange });
       showToast(fieldDraft.definition ? 'Custom field updated.' : 'Custom field added.', 'success');
       setFieldDraft(null);
-      setConfirmingTypeChange(false);
+      setTypeChange(null);
     } catch (error) { showToast(error instanceof Error ? error.message : 'Could not save the custom field.', 'error'); }
     finally { setSaving(false); }
   };
@@ -115,6 +127,7 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
       const nextSections = deleting.kind === 'section' ? sections.filter(section => section.id !== deleting.section.id) : sections;
       setFields(current => current.filter(field => !deletedIds.has(field.id)));
       await persistTemplate({ ...draft, layout: { ...draft.layout, sections: nextSections, fieldSections } });
+      onFieldsChanged?.(typeId, { valuesChanged: true });
       setDeleting(null);
       showToast(deleting.kind === 'section' ? 'Custom section deleted.' : 'Custom field deleted.', 'success');
     } catch (error) { showToast(error instanceof Error ? error.message : 'Could not delete the custom content.', 'error'); }
@@ -130,12 +143,49 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
     finally { setSaving(false); }
   };
 
+  const moveField = async (field: EntityFieldDefinition, sectionId: string) => {
+    setSaving(true);
+    try {
+      await persistTemplate({ ...draft, layout: { ...draft.layout, fieldSections: { ...(draft.layout.fieldSections || {}), [field.id]: sectionId } } });
+      onFieldsChanged?.(typeId, { valuesChanged: false });
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Could not move the field.', 'error'); }
+    finally { setSaving(false); }
+  };
+  const sectionOf = (field: EntityFieldDefinition) => sectionOfField(typeId, draft, field.id);
+  const looseFields = fields.filter(field => sectionOf(field) === LOOSE_FIELDS_SECTION.id);
+  const moveTargets = sections.map(section => ({ id: section.id, label: section.label }));
+  const fieldRow = (field: EntityFieldDefinition, sectionId: string) => (
+    <div key={field.id} className="flex items-center gap-2 rounded-md py-0.5 pl-6 text-sm">
+      <span className="min-w-0 flex-1 truncate text-text-secondary">{field.label.replace(/\s*:\s*$/, '')}</span>
+      <span className="shrink-0 text-xs text-text-subtle">{VALUE_TYPE_LABELS[field.valueType]}</span>
+      <FieldMenu label={field.label} moveTargets={moveTargets.filter(target => target.id !== sectionId)} onMove={target => moveField(field, target)} onEdit={() => startField(sectionId, field)} onDelete={() => setDeleting({ kind: 'field', field })} />
+    </div>
+  );
+
+  const fillEmptyWithDefault = async (field: EntityFieldDefinition) => {
+    setSaving(true);
+    try {
+      const result = await api.applyWorldbuildFieldDefault(workspaceId, field.id);
+      if (!result.success) throw new Error(result.error || 'Could not fill the empty entries.');
+      onFieldsChanged?.(typeId, { valuesChanged: true });
+      showToast(result.updated ? `Filled ${result.updated} empty entr${result.updated === 1 ? 'y' : 'ies'}.` : 'No entry had this field empty.', 'success');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Could not fill the empty entries.', 'error'); }
+    finally { setSaving(false); }
+  };
+  const races = entities.filter(entity => entity.type === 'Races' && entity.status !== 'proposed');
+  const defaultRace = (draft.layout as { nativeDefaults?: { race?: string } }).nativeDefaults?.race ?? '';
+  const setDefaultRace = (race: string) => setDraft(current => {
+    const { race: _previous, ...others } = (current.layout as { nativeDefaults?: Record<string, string> }).nativeDefaults ?? {};
+    const nativeDefaults = race ? { ...others, race } : others;
+    return { ...current, layout: { ...current.layout, nativeDefaults } };
+  });
+
   const requestClose = () => { if (dirty) setConfirmingClose(true); else onClose(); };
 
   return <Modal size="2xl" title="Entity types" icon={LayoutTemplate} iconClassName="text-text-muted" onClose={requestClose} closeOnOverlay={!saving && !dirty} closeOnEsc={!saving && !dirty}>
     <div className="grid h-[min(42rem,calc(100vh-9rem))] min-h-0 grid-cols-[13rem_minmax(0,1fr)_20rem] overflow-hidden">
       <TypeList typeId={typeId} templates={templates} onSelect={setTypeId} />
-      <TemplatePreview typeId={typeId} draft={draft} fields={fields} variantOf={variantOf} variants={variants} />
+      <TemplatePreview typeId={typeId} draft={draft} fields={fields} looseFields={looseFields} sectionOf={sectionOf} variantOf={variantOf} variants={variants} />
       <aside className="min-h-0 overflow-y-auto border-l border-border-subtle p-4 custom-scrollbar">
         <label className="block"><span className="mb-1.5 block text-xs font-medium text-text-muted">Name in Worldbuild</span><input className={INPUT} value={draft.displayName} onChange={event => setDraft(current => ({ ...current, displayName: event.target.value }))} placeholder={typeId} /></label>
         <p className="caption mt-1">The plural shown in lists and filters.</p>
@@ -146,7 +196,7 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
         </div>
         <p className="caption mb-3">Drag to reorder. Inventory, connections, knowledge and occurrences are fixed tabs.</p>
         <div className="space-y-2">{sections.map((section, index) => {
-          const sectionFields = fields.filter(field => draft.layout.fieldSections?.[field.id] === section.id);
+          const sectionFields = fields.filter(field => sectionOf(field) === section.id);
           const variant = variantOf(section);
           return <div key={section.id}
             draggable
@@ -171,20 +221,30 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
                 onDelete={section.kind === 'custom' ? () => setDeleting({ kind: 'section', section, fields: sectionFields }) : undefined}
               />
             </div>
+            {!section.hidden && typeId === 'Characters' && section.id === 'identity' && <div className="border-t border-border-subtle px-3 py-2">
+              <span className="mb-1.5 block text-xs font-medium text-text-muted">Default race</span>
+              <SearchableSelect value={defaultRace} onChange={(race: string) => setDefaultRace(race)} options={[{ id: '', label: 'None' }, ...races.map(race => ({ id: race.id, label: race.canonicalName }))]} placeholder="None" searchPlaceholder="Filter races…" />
+              <span className="caption mt-1 block">New characters start as this race. Existing ones keep theirs.</span>
+            </div>}
             {!section.hidden && (sectionFields.length > 0 || fieldDraft?.sectionId === section.id) && <div className="border-t border-border-subtle px-2 pb-1.5 pt-1">
-              {sectionFields.map(field => (
-                <div key={field.id} className="flex items-center gap-2 rounded-md py-0.5 pl-6 text-sm">
-                  <span className="min-w-0 flex-1 truncate text-text-secondary">{field.label.replace(/\s*:\s*$/, '')}</span>
-                  <span className="shrink-0 text-xs text-text-subtle">{VALUE_TYPE_LABELS[field.valueType]}</span>
-                  <FieldMenu label={field.label} onEdit={() => startField(section.id, field)} onDelete={() => setDeleting({ kind: 'field', field })} />
-                </div>
-              ))}
+              {sectionFields.map(field => fieldRow(field, section.id))}
               {fieldDraft?.sectionId === section.id
-                ? <FieldEditor draft={fieldDraft} saving={saving} sectionLabel="" onChange={setFieldDraft} onCancel={() => setFieldDraft(null)} onSave={() => saveField()} />
+                ? <FieldEditor draft={fieldDraft} saving={saving} sectionLabel="" entities={entities} onChange={setFieldDraft} onCancel={() => setFieldDraft(null)} onSave={() => saveField()} onFillEmpty={fieldDraft.definition && Object.hasOwn(fieldDraft.definition, 'defaultValue') ? () => fillEmptyWithDefault(fieldDraft.definition!) : undefined} />
                 : sectionFields.length > 0 && <button type="button" onClick={() => startField(section.id)} className="ml-5 inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-semibold text-text-muted hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="h-3.5 w-3.5" aria-hidden="true" />Add field</button>}
             </div>}
           </div>;
-        })}</div>
+        })}
+        {looseFields.length > 0 && <div className="rounded-card border border-dashed border-border-default bg-surface-canvas/20">
+          <div className="px-3 pb-1 pt-2">
+            <span className="text-sm font-semibold text-text-primary">{LOOSE_FIELDS_SECTION.label}</span>
+            <p className="caption mt-0.5">Fields without a section. The sheet shows them last. Move them into a section from their menu.</p>
+          </div>
+          <div className="border-t border-border-subtle px-2 pb-1.5 pt-1">
+            {looseFields.map(field => fieldRow(field, LOOSE_FIELDS_SECTION.id))}
+            {fieldDraft?.sectionId === LOOSE_FIELDS_SECTION.id && <FieldEditor draft={fieldDraft} saving={saving} sectionLabel="" entities={entities} onChange={setFieldDraft} onCancel={() => setFieldDraft(null)} onSave={() => saveField()} onFillEmpty={fieldDraft.definition && Object.hasOwn(fieldDraft.definition, 'defaultValue') ? () => fillEmptyWithDefault(fieldDraft.definition!) : undefined} />}
+          </div>
+        </div>}
+        </div>
       </aside>
     </div>
     <footer className="flex items-center justify-end gap-3 border-t border-border-subtle px-5 py-4">
@@ -193,9 +253,20 @@ export default function WorldbuildTemplateManager({ workspaceId, api, templates,
       <Button onClick={saveTemplate} loading={saving} disabled={!dirty}>Save changes</Button>
     </footer>
     {deleting && <ConfirmDialog title={deleting.kind === 'section' ? 'Delete custom section' : 'Delete custom field'} message={deleting.kind === 'section' ? `Delete “${deleting.section.label}”? ${deleting.fields.length ? `Its ${deleting.fields.length} custom field${deleting.fields.length === 1 ? '' : 's'} and all stored values will also be permanently deleted.` : 'This section will be permanently removed.'}` : `Delete “${deleting.field.label}” from every ${typeId.toLowerCase()} entry? All stored values will be permanently removed.`} actions={[{ label: 'Cancel', variant: 'ghost', onClick: () => setDeleting(null) }, { label: 'Delete', variant: 'danger', loading: saving, autoFocus: true, onClick: removeCustomContent }]} onClose={() => setDeleting(null)} />}
-    {confirmingTypeChange && fieldDraft?.definition && <ConfirmDialog tone="warning" title="Change field type" message={`Change “${fieldDraft.definition.label}” from ${fieldDraft.definition.valueType} to ${fieldDraft.valueType}? Existing values in every ${typeId.toLowerCase()} entry will be permanently cleared.`} actions={[{ label: 'Cancel', variant: 'ghost', onClick: () => setConfirmingTypeChange(false) }, { label: 'Change type', variant: 'danger', loading: saving, autoFocus: true, onClick: () => saveField(true) }]} onClose={() => setConfirmingTypeChange(false)} />}
+    {typeChange && fieldDraft?.definition && <ConfirmDialog tone="warning" title="Change field type" message={typeChangeMessage(fieldDraft.definition.label, VALUE_TYPE_LABELS[fieldDraft.valueType], typeChange)} actions={[{ label: 'Cancel', variant: 'ghost', onClick: () => setTypeChange(null) }, { label: 'Change type', variant: typeChange.lost.length ? 'danger' : 'primary', loading: saving, autoFocus: true, onClick: () => saveField(true) }]} onClose={() => setTypeChange(null)} />}
     {confirmingClose && <ConfirmDialog tone="warning" title="Discard section changes" message="The renames, order and visibility you changed have not been saved. Close anyway?" actions={[{ label: 'Keep editing', variant: 'ghost', onClick: () => setConfirmingClose(false) }, { label: 'Discard', variant: 'danger', autoFocus: true, onClick: onClose }]} onClose={() => setConfirmingClose(false)} />}
   </Modal>;
+}
+
+// Names the entries that lose a value, so a type change never empties a field unannounced.
+function typeChangeMessage(label: string, typeLabel: string, change: { kept: number; lost: Array<{ name: string }>; defaultLost: boolean }) {
+  const head = `Change “${label}” to ${typeLabel.toLowerCase()}?`;
+  const lostDefault = change.defaultLost ? ' Its default value cannot become this type and will be removed.' : '';
+  const kept = change.kept ? ` ${change.kept} stored value${change.kept === 1 ? '' : 's'} will be converted.` : '';
+  if (!change.lost.length) return `${head}${kept || ' No entry holds a value yet.'}${lostDefault}`;
+  const names = change.lost.slice(0, 5).map(entry => entry.name).join(', ');
+  const more = change.lost.length > 5 ? ` and ${change.lost.length - 5} more` : '';
+  return `${head}${kept} ${change.lost.length} value${change.lost.length === 1 ? '' : 's'} cannot become ${typeLabel.toLowerCase()} and will be cleared: ${names}${more}.${lostDefault}`;
 }
 
 // Stored values point at option ids, so an edited line keeps its id: by label first, then a line
@@ -252,8 +323,9 @@ const NATIVE_GRID: Record<string, Record<string, string[]>> = {
   Events: { overview: ['How often', 'Date', 'Where'] },
 };
 
-function TemplatePreview({ typeId, draft, fields, variantOf, variants }: {
-  typeId: string; draft: WorldbuildEntityTemplate; fields: EntityFieldDefinition[];
+function TemplatePreview({ typeId, draft, fields, looseFields, sectionOf, variantOf, variants }: {
+  typeId: string; draft: WorldbuildEntityTemplate; fields: EntityFieldDefinition[]; looseFields: EntityFieldDefinition[];
+  sectionOf(field: EntityFieldDefinition): string;
   variantOf(section: WorldbuildTemplateSection): string | undefined;
   variants: string[];
 }) {
@@ -266,7 +338,7 @@ function TemplatePreview({ typeId, draft, fields, variantOf, variants }: {
       )}
     </div>
     <div className="space-y-3">{visible.map(section => {
-      const sectionFields = fields.filter(field => draft.layout.fieldSections?.[field.id] === section.id);
+      const sectionFields = fields.filter(field => sectionOf(field) === section.id);
       const variant = variantOf(section);
       return <div key={section.id} className="overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/70">
         <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-4 py-2.5">
@@ -278,7 +350,11 @@ function TemplatePreview({ typeId, draft, fields, variantOf, variants }: {
         </div>
       </div>;
     })}
-    {!visible.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-6 text-center text-sm text-text-disabled">Every section is hidden.</p>}
+    {looseFields.length > 0 && <div className="overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/70">
+      <div className="border-b border-border-subtle px-4 py-2.5"><span className="truncate text-sm font-semibold text-text-primary">{LOOSE_FIELDS_SECTION.label}</span></div>
+      <div className="p-4"><SectionPreview grid={[]} native={false} fields={looseFields} /></div>
+    </div>}
+    {!visible.length && !looseFields.length && <p className="rounded-card border border-dashed border-border-subtle px-4 py-6 text-center text-sm text-text-disabled">Every section is hidden.</p>}
     </div>
   </main>;
 }
@@ -304,14 +380,33 @@ function SectionPreview({ grid, native, fields }: { grid: string[]; native: bool
   </>;
 }
 
-function FieldEditor({ draft, saving, sectionLabel, onChange, onCancel, onSave }: { draft: FieldDraft; saving: boolean; sectionLabel: string; onChange(draft: FieldDraft): void; onCancel(): void; onSave(): void }) {
+function FieldEditor({ draft, saving, sectionLabel, entities, onChange, onCancel, onSave, onFillEmpty }: { draft: FieldDraft; saving: boolean; sectionLabel: string; entities: WorldbuildEntity[]; onChange(draft: FieldDraft): void; onCancel(): void; onSave(): void; onFillEmpty?(): void }) {
   const update = (patch: Partial<FieldDraft>) => onChange({ ...draft, ...patch });
   const isChoice = draft.valueType === 'single-choice' || draft.valueType === 'multiple-choice';
+  // An option typed but not saved yet has no id; its label stands in, and the main maps it on save.
+  const preview = {
+    id: draft.definition?.id ?? 'draft', projectId: '', typeId: '', key: draft.definition?.key ?? 'draft', position: 0,
+    label: 'Default', valueType: draft.valueType, required: false, aiAccess: draft.aiAccess,
+    constraints: draft.definition?.valueType === draft.valueType ? draft.definition?.constraints : undefined,
+    options: isChoice ? optionsFromText(draft.optionsText, draft.definition?.options).map(option => ({ id: option.id ?? option.label, label: option.label })) : undefined,
+  } as EntityFieldDefinition;
+  const savedDefault = draft.definition && Object.hasOwn(draft.definition, 'defaultValue') && draft.definition.valueType === draft.valueType;
   return <div className="my-2 space-y-2 rounded-control border border-border-strong bg-surface-hover/30 p-3">
     <p className="text-sm font-semibold text-text-primary">{draft.definition ? 'Edit field' : 'New field'}{sectionLabel ? ` · ${sectionLabel}` : ''}</p>
     <input aria-label="Field name" className={INPUT} value={draft.label} onChange={event => update({ label: event.target.value })} placeholder="Field name" autoFocus />
-    <SelectMenu ariaLabel="Field type" value={draft.valueType} onChange={(valueType: EntityFieldType) => update({ valueType, optionsText: '' })} options={Object.entries(VALUE_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
+    <SelectMenu ariaLabel="Field type" value={draft.valueType} onChange={(valueType: EntityFieldType) => update({ valueType, optionsText: '', defaultValue: null, carryDefault: true })} options={Object.entries(VALUE_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
     {isChoice && <textarea aria-label="Available options" className={`${INPUT} min-h-20 resize-y`} value={draft.optionsText} onChange={event => update({ optionsText: event.target.value })} placeholder="One option per line" />}
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-text-muted">Default</span>
+        {draft.defaultValue != null && draft.defaultValue !== '' && <button type="button" onClick={() => update({ defaultValue: null, carryDefault: false })} className="rounded px-1 text-xs font-semibold text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Clear</button>}
+      </div>
+      <FieldInput definition={preview} value={draft.defaultValue ?? (draft.valueType === 'multiple-choice' || draft.valueType === 'entity-reference-list' ? [] : '')} onChange={defaultValue => update({ defaultValue, carryDefault: false })} entities={entities} />
+      <span className="caption mt-1 block">{draft.carryDefault && draft.definition && Object.hasOwn(draft.definition, 'defaultValue') && draft.defaultValue == null
+        ? 'The current default is converted to the new type when you save.'
+        : 'Optional. New entries start with this value.'}</span>
+      {onFillEmpty && savedDefault && <button type="button" disabled={saving} onClick={onFillEmpty} className="mt-1.5 inline-flex h-7 items-center rounded-md px-1.5 text-xs font-semibold text-text-muted hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40">Fill empty entries with the default</button>}
+    </div>
     <SelectMenu ariaLabel="AI access" value={draft.aiAccess} onChange={(aiAccess: FieldDraft['aiAccess']) => update({ aiAccess })} options={[{ value: 'read-write', label: 'The AI reads it and suggests edits' }, { value: 'read-only', label: 'The AI reads it only' }, { value: 'hidden', label: 'Hidden from the AI' }]} />
     {draft.aiAccess !== 'hidden' && <label className="block"><span className="mb-1.5 block text-xs font-medium text-text-muted">AI guidance</span><textarea className={`${INPUT} min-h-20 resize-y`} value={draft.aiGuidance} onChange={event => update({ aiGuidance: event.target.value })} placeholder="How the AI should read or fill this field" /><span className="caption mt-1 block">Optional. Describe the field's purpose and what the AI should not infer.</span></label>}
     <div className="flex items-center gap-2.5 rounded-control border border-border-subtle px-3 py-2.5"><Checkbox checked={draft.required} onChange={required => update({ required })} ariaLabel="Required field" /><span className="text-xs text-text-secondary">Required</span></div>
@@ -336,13 +431,14 @@ function SectionMenu({ label, canMoveUp, canMoveDown, onMoveUp, onMoveDown, onAd
   </>;
 }
 
-function FieldMenu({ label, onEdit, onDelete }: { label: string; onEdit(): void; onDelete(): void }) {
+function FieldMenu({ label, moveTargets, onMove, onEdit, onDelete }: { label: string; moveTargets: Array<{ id: string; label: string }>; onMove(sectionId: string): void; onEdit(): void; onDelete(): void }) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   return <>
     <UiIconButton ref={anchorRef} icon={MoreHorizontal} size="sm" label={`${label} actions`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)} />
-    <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label={`${label} actions`} className="w-44" align="right">
+    <Menu anchorRef={anchorRef} open={open} onClose={() => setOpen(false)} label={`${label} actions`} className="w-52" align="right">
       <MenuItem icon={Pencil} label="Edit field" onSelect={() => { setOpen(false); onEdit(); }} />
+      {moveTargets.length > 0 && <><MenuSeparator />{moveTargets.map(target => <MenuItem key={target.id} icon={CornerDownRight} label={`Move to ${target.label}`} onSelect={() => { setOpen(false); onMove(target.id); }} />)}</>}
       <MenuSeparator />
       <MenuItem icon={Trash2} label="Delete field" danger onSelect={() => { setOpen(false); onDelete(); }} />
     </Menu>

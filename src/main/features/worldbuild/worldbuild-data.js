@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const path = require('path');
 const { createWorldbuildKnowledgeService } = require('./knowledge-service');
+const { convertFieldValue } = require('./field-conversion');
+const { normalizeDefaultValue } = require('./field-defaults');
 const SEEDED_BY = require('../../../shared/seed-provenance.json');
 const {
   normalizeKnowledgeCategory,
@@ -50,15 +52,61 @@ function createWorldbuildDataService(db) {
     return rows.map(hydrateFieldDefinition);
   }
 
+  function getFieldDefinitionRow(workspaceId, fieldId) {
+    return db.prepare(`
+      SELECT workspace_id, field_id, type_id, field_key, label, value_type,
+        options_json, constraints_json, default_value_json, has_default,
+        required, position, ai_access, ai_guidance
+      FROM worldbuild_field_definitions WHERE workspace_id = ? AND field_id = ?
+    `).get(workspaceId, fieldId);
+  }
+
+  // Every entry holding the field, with what its value becomes under the new definition.
+  function planFieldTypeChange(previous, next) {
+    const rows = db.prepare('SELECT id, canonicalName, data FROM entities WHERE workspaceId = ? AND type = ?').all(previous.projectId, previous.typeId);
+    return rows.flatMap(row => {
+      const data = parseObject(row.data);
+      if (!data.customFields || !Object.hasOwn(data.customFields, previous.key)) return [];
+      return [{ row, data, ...convertFieldValue(data.customFields[previous.key], previous, next) }];
+    });
+  }
+
+  /** How many stored values a type change keeps, and which entries would lose theirs. */
+  // A reference default must name an entity of this world; an entities table is absent only in narrow tests.
+  const entityExists = (workspaceId) => (id) => {
+    try { return Boolean(db.prepare('SELECT 1 FROM entities WHERE workspaceId = ? AND id = ?').get(workspaceId, id)); } catch { return false; }
+  };
+
+  // With `carryDefault`, the editor left the default alone while changing the type, so the stored
+  // default goes through the same conversion as the stored values.
+  function withCarriedDefault(input, definition, existing) {
+    if (!input.carryDefault || !existing || existing.has_default !== 1) return { definition, defaultLost: false };
+    const previous = hydrateFieldDefinition(existing);
+    const converted = convertFieldValue(previous.defaultValue, previous, definition);
+    const defaultValue = converted.kept ? normalizeDefaultValue(definition, converted.value, entityExists(definition.projectId)) : undefined;
+    return { definition: { ...definition, defaultValue, hasDefault: defaultValue !== undefined }, defaultLost: defaultValue === undefined };
+  }
+
+  function previewFieldTypeChange(input) {
+    const normalized = normalizeFieldDefinition(input);
+    const existing = getFieldDefinitionRow(normalized.projectId, normalized.id);
+    if (!existing || existing.value_type === normalized.valueType) return { kept: 0, lost: [], defaultLost: false };
+    const { definition: next, defaultLost } = withCarriedDefault(input, normalized, existing);
+    const plan = planFieldTypeChange(hydrateFieldDefinition(existing), next);
+    return {
+      kept: plan.filter(entry => entry.kept && entry.value !== undefined).length,
+      lost: plan.filter(entry => !entry.kept).map(entry => ({ id: entry.row.id, name: entry.row.canonicalName })),
+      defaultLost,
+    };
+  }
+
   function saveFieldDefinition(input) {
-    const definition = normalizeFieldDefinition(input);
-    const existing = db.prepare(`
-      SELECT type_id, field_key, value_type FROM worldbuild_field_definitions
-      WHERE workspace_id = ? AND field_id = ?
-    `).get(definition.projectId, definition.id);
+    const normalized = normalizeFieldDefinition(input, entityExists(input.projectId));
+    const existing = getFieldDefinitionRow(normalized.projectId, normalized.id);
+    const { definition } = withCarriedDefault(input, normalized, existing);
     const hasTypeChange = existing && existing.value_type !== definition.valueType;
-    if (hasTypeChange && !input.clearValuesOnTypeChange) {
-      throw new Error('Changing a custom field type requires clearing its existing values.');
+    if (hasTypeChange && !input.confirmTypeChange) {
+      throw new Error('Changing a custom field type needs confirmation, since some values may not fit the new type.');
     }
     const saveDefinition = db.prepare(`
       INSERT INTO worldbuild_field_definitions (
@@ -90,14 +138,30 @@ function createWorldbuildDataService(db) {
         definition.hasDefault ? 1 : 0, definition.required ? 1 : 0,
         definition.position, definition.aiAccess, definition.aiGuidance || null,
       );
-      if (hasTypeChange) clearFieldValues(definition.projectId, existing.type_id, existing.field_key);
+      if (hasTypeChange) convertFieldValues(hydrateFieldDefinition(existing), definition);
     })();
-    return hydrateFieldDefinition(db.prepare(`
-      SELECT workspace_id, field_id, type_id, field_key, label, value_type,
-        options_json, constraints_json, default_value_json, has_default,
-        required, position, ai_access, ai_guidance
-      FROM worldbuild_field_definitions WHERE workspace_id = ? AND field_id = ?
-    `).get(definition.projectId, definition.id));
+    return hydrateFieldDefinition(getFieldDefinitionRow(definition.projectId, definition.id));
+  }
+
+  // A staged suggestion was written for the old type, so it goes with the change.
+  function convertFieldValues(previous, next) {
+    const updateEntity = db.prepare('UPDATE entities SET data = ?, last_modified = ? WHERE id = ?');
+    for (const entry of planFieldTypeChange(previous, next)) {
+      const data = entry.data;
+      const customFields = { ...data.customFields };
+      if (entry.kept && entry.value !== undefined) customFields[previous.key] = entry.value;
+      else delete customFields[previous.key];
+      if (Object.keys(customFields).length) data.customFields = customFields;
+      else delete data.customFields;
+      dropStagedField(data, previous.key);
+      updateEntity.run(JSON.stringify(data), Date.now(), entry.row.id);
+    }
+  }
+
+  function dropStagedField(data, fieldKey) {
+    const staged = data._enrichPending?.data;
+    if (!staged || !Object.hasOwn(staged, `customFields.${fieldKey}`)) return;
+    delete staged[`customFields.${fieldKey}`];
   }
 
   function clearFieldValues(workspaceId, typeId, fieldKey) {
@@ -110,8 +174,26 @@ function createWorldbuildDataService(db) {
       delete customFields[fieldKey];
       if (Object.keys(customFields).length) data.customFields = customFields;
       else delete data.customFields;
+      dropStagedField(data, fieldKey);
       updateEntity.run(JSON.stringify(data), Date.now(), entity.id);
     }
+  }
+
+  /** Writes the field's default into every entry of its type that leaves the field empty. */
+  function applyFieldDefaultToEmpty(workspaceId, fieldId) {
+    const row = getFieldDefinitionRow(workspaceId, fieldId);
+    if (!row || row.has_default !== 1) return 0;
+    const value = JSON.parse(row.default_value_json);
+    const entities = db.prepare('SELECT id, data FROM entities WHERE workspaceId = ? AND type = ?').all(workspaceId, row.type_id);
+    const updateEntity = db.prepare('UPDATE entities SET data = ?, last_modified = ? WHERE id = ?');
+    return db.transaction(() => entities.reduce((count, entity) => {
+      const data = parseObject(entity.data);
+      const current = data.customFields?.[row.field_key];
+      if (!(current === undefined || current === null || current === '' || (Array.isArray(current) && !current.length))) return count;
+      data.customFields = { ...(data.customFields || {}), [row.field_key]: value };
+      updateEntity.run(JSON.stringify(data), Date.now(), entity.id);
+      return count + 1;
+    }, 0))();
   }
 
   function deleteFieldDefinition(workspaceId, fieldId) {
@@ -611,6 +693,8 @@ function createWorldbuildDataService(db) {
   return {
     listFieldDefinitions,
     saveFieldDefinition,
+    previewFieldTypeChange,
+    applyFieldDefaultToEmpty,
     deleteFieldDefinition,
     listEntityTemplates,
     saveEntityTemplate,
@@ -640,7 +724,7 @@ function createWorldbuildDataService(db) {
   };
 }
 
-function normalizeFieldDefinition(input = {}) {
+function normalizeFieldDefinition(input = {}, entityExists = () => true) {
   const projectId = requireText(input.projectId, 'projectId');
   const typeId = requireText(input.typeId, 'typeId');
   const label = requireText(input.label, 'label');
@@ -652,11 +736,13 @@ function normalizeFieldDefinition(input = {}) {
   if (isChoice && !options.length) throw new Error('Choice fields need at least one option.');
   const aiAccess = AI_ACCESS.has(input.aiAccess) ? input.aiAccess : 'read-write';
   const position = Number.isInteger(input.position) && input.position >= 0 ? input.position : 0;
-  const hasDefault = Object.hasOwn(input, 'defaultValue') && input.defaultValue !== undefined;
+  const constraints = normalizeConstraints(input.constraints, valueType);
+  // A default that no longer fits (a removed option, a deleted entity) is dropped, never stored broken.
+  const defaultValue = normalizeDefaultValue({ valueType, options, constraints }, input.defaultValue, entityExists);
   return {
     id: input.id || crypto.randomUUID(), projectId, typeId, key, label, valueType,
-    options, constraints: normalizeConstraints(input.constraints, valueType),
-    defaultValue: input.defaultValue, hasDefault,
+    options, constraints,
+    defaultValue, hasDefault: defaultValue !== undefined,
     required: Boolean(input.required), position, aiAccess,
     aiGuidance: String(input.aiGuidance || '').trim(),
   };

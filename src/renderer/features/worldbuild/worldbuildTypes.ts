@@ -183,9 +183,21 @@ export interface WorldbuildApi {
     fields?: EntityFieldDefinition[];
     error?: string;
   }>;
-  saveWorldbuildFieldDefinition(definition: Omit<Partial<EntityFieldDefinition>, 'options'> & { options?: Array<{ id?: string; label: string }>; clearValuesOnTypeChange?: boolean }): Promise<{
+  saveWorldbuildFieldDefinition(definition: Omit<Partial<EntityFieldDefinition>, 'options'> & { options?: Array<{ id?: string; label: string }>; confirmTypeChange?: boolean; carryDefault?: boolean }): Promise<{
     success: boolean;
     field?: EntityFieldDefinition;
+    error?: string;
+  }>;
+  previewWorldbuildFieldTypeChange(definition: Omit<Partial<EntityFieldDefinition>, 'options'> & { options?: Array<{ id?: string; label: string }>; carryDefault?: boolean }): Promise<{
+    success: boolean;
+    kept?: number;
+    lost?: Array<{ id: string; name: string }>;
+    defaultLost?: boolean;
+    error?: string;
+  }>;
+  applyWorldbuildFieldDefault(workspaceId: string, fieldId: string): Promise<{
+    success: boolean;
+    updated?: number;
     error?: string;
   }>;
   deleteWorldbuildFieldDefinition(workspaceId: string, fieldId: string): Promise<{

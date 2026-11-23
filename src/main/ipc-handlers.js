@@ -13,7 +13,7 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const db = require('./database');
-const { getMessagePage } = require('./features/chat/message-pages');
+const { getMessagePage, getMessageDebugNotice, debugNoticeToSave } = require('./features/chat/message-pages');
 const { findPendingNarrativeTurn } = require('./features/chat/narrative-turns');
 const { ROLE_IDS, resolveAiEngineRole } = require('./features/ai-engine/role-resolver');
 const {
@@ -2748,6 +2748,24 @@ ipcMain.handle('save-worldbuild-field-definition', async (event, definition = {}
   }
 });
 
+ipcMain.handle('preview-worldbuild-field-type-change', async (event, definition = {}) => {
+  try {
+    return { success: true, ...worldbuildData.previewFieldTypeChange(definition) };
+  } catch (e) {
+    console.error('[preview-worldbuild-field-type-change] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('apply-worldbuild-field-default', async (event, { workspaceId, fieldId } = {}) => {
+  try {
+    return { success: true, updated: worldbuildData.applyFieldDefaultToEmpty(workspaceId, fieldId) };
+  } catch (e) {
+    console.error('[apply-worldbuild-field-default] failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('delete-worldbuild-field-definition', async (event, { workspaceId, fieldId } = {}) => {
   try {
     return { success: true, deleted: worldbuildData.deleteFieldDefinition(workspaceId, fieldId) };
@@ -5036,6 +5054,15 @@ ipcMain.handle('get-chat-message-page', async (event, { chatId, before }) => {
   }
 });
 
+ipcMain.handle('get-message-debug-notice', async (event, messageId) => {
+  try {
+    return { success: true, debugNotice: getMessageDebugNotice(db, messageId) };
+  } catch (e) {
+    console.error('Error loading message diagnostics:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('save-message', async (event, message) => {
   try {
     const insert = db.prepare(`
@@ -5050,7 +5077,7 @@ ipcMain.handle('save-message', async (event, message) => {
       message.content,
       message.aiName || '',
       message.aiColor || '',
-      message.debugNotice || '',
+      debugNoticeToSave(db, message),
       typeof message.attachedFiles === 'string' ? message.attachedFiles : JSON.stringify(message.attachedFiles || []),
       message.createdAt || Date.now()
     );

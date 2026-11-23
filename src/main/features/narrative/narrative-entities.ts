@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { normalizeLocationSize, type LocationSize } from '../../../shared/location-sizes';
 import { loadLocationChain, proposeLocationParent } from '../worldbuild/location-graph';
+import { defaultRaceFor, withFieldDefaults } from '../worldbuild/field-defaults';
 import { applyStartingProfile, resolveStartingProfile, type StartingProfile } from './starting-profile';
 import { beginReplacement, cancelReplacement, completeReplacement } from './umwelt/story-lifecycle';
 import { retireStoryEntity } from './umwelt/story-entities';
@@ -732,13 +733,13 @@ export class NarrativeEntitySystem {
 
   private createEntity(workspaceId: string, entityId: string, proposal: NarrativeEntityProposal, provenanceId: string, status: 'confirmed' | 'proposed'): void {
     const now = Date.now();
-    const data = {
+    const data = withFieldDefaults(this.db, workspaceId, proposal.type, {
       ...natureData(proposal),
       ...(proposal.type === 'Locations' && proposal.size ? { size: proposal.size } : {}),
       ...(proposal.derivedFromId ? { derivedFromId: proposal.derivedFromId } : {}),
       narrativeOrigin: { originId: provenanceId, excerpt: proposal.excerpt },
       needsEnrichment: true
-    };
+    });
     this.db.prepare(`
       INSERT INTO entities
         (id, workspaceId, type, canonicalName, aliases, lore, loreDocumentId, data, status, createdAt, last_modified)
@@ -746,11 +747,13 @@ export class NarrativeEntitySystem {
     `).run(entityId, workspaceId, proposal.type, proposal.name, JSON.stringify(proposal.aliases ?? []), JSON.stringify(data), status, now, now);
     this.fileInsideContainer(workspaceId, entityId, proposal);
     const member = proposal.type === 'Characters' || (proposal.type === 'Creatures' && proposal.scope !== 'group');
-    if (proposal.groupId && member) {
+    // A group the scene named wins over the template's default race.
+    const raceId = proposal.groupId && member ? proposal.groupId : defaultRaceFor(this.db, workspaceId, proposal.type);
+    if (raceId) {
       this.db.prepare(`
         INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, label, metadata_json, createdAt)
         VALUES (?, ?, ?, 'is_race', ?, NULL, '{}', ?)
-      `).run(randomUUID(), workspaceId, entityId, proposal.groupId, now);
+      `).run(randomUUID(), workspaceId, entityId, raceId, now);
     }
     if (status === 'confirmed' && member) applyStartingProfile(this.db, workspaceId, entityId, proposal.startingProfile, provenanceId);
   }

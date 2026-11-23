@@ -145,28 +145,33 @@ describe('Worldbuild runtime data adapter', () => {
     expect(JSON.parse(row.data)).toEqual({ rarity: 'Rare' });
   });
 
-  test('requires confirmation to change a field type and clears incompatible values atomically', () => {
+  test('a type change asks first, converts what fits and names what it clears', () => {
     db.exec(`
       CREATE TABLE entities (
-        id TEXT PRIMARY KEY, workspaceId TEXT, type TEXT NOT NULL,
+        id TEXT PRIMARY KEY, workspaceId TEXT, type TEXT NOT NULL, canonicalName TEXT NOT NULL DEFAULT '',
         data TEXT, last_modified INTEGER DEFAULT 0
       );
     `);
     const field = service.saveFieldDefinition({
-      projectId: 'workspace-one', typeId: 'Items', label: 'Rarity',
+      projectId: 'workspace-one', typeId: 'Items', label: 'Weight',
       valueType: 'short-text', position: 0, aiAccess: 'read-write',
-      aiGuidance: 'Use only the established world-level rarity.'
+      aiGuidance: 'Use only the established weight.'
     });
-    db.prepare('INSERT INTO entities (id, workspaceId, type, data) VALUES (?, ?, ?, ?)')
-      .run('item-one', 'workspace-one', 'Items', JSON.stringify({ customFields: { rarity: 'Rare' }, description: 'A blade.' }));
+    const insert = db.prepare('INSERT INTO entities (id, workspaceId, type, canonicalName, data) VALUES (?, ?, ?, ?, ?)');
+    insert.run('item-one', 'workspace-one', 'Items', 'Blade', JSON.stringify({ customFields: { weight: '12' }, description: 'A blade.' }));
+    insert.run('item-two', 'workspace-one', 'Items', 'Cloak', JSON.stringify({
+      customFields: { weight: 'light' },
+      _enrichPending: { data: { 'customFields.weight': { value: 'very light' } } },
+    }));
 
-    expect(() => service.saveFieldDefinition({ ...field, valueType: 'number' }))
-      .toThrow('requires clearing its existing values');
-    const updated = service.saveFieldDefinition({ ...field, valueType: 'number', clearValuesOnTypeChange: true });
+    expect(() => service.saveFieldDefinition({ ...field, valueType: 'number' })).toThrow('needs confirmation');
+    expect(service.previewFieldTypeChange({ ...field, valueType: 'number' })).toEqual({ kept: 1, lost: [{ id: 'item-two', name: 'Cloak' }], defaultLost: false });
+    const updated = service.saveFieldDefinition({ ...field, valueType: 'number', confirmTypeChange: true });
 
-    expect(updated).toEqual(expect.objectContaining({ valueType: 'number', aiGuidance: 'Use only the established world-level rarity.' }));
-    const row = db.prepare('SELECT data FROM entities WHERE id = ?').get('item-one') as { data: string };
-    expect(JSON.parse(row.data)).toEqual({ description: 'A blade.' });
+    expect(updated).toEqual(expect.objectContaining({ valueType: 'number', aiGuidance: 'Use only the established weight.' }));
+    const dataOf = (id: string) => JSON.parse((db.prepare('SELECT data FROM entities WHERE id = ?').get(id) as { data: string }).data);
+    expect(dataOf('item-one')).toEqual({ customFields: { weight: 12 }, description: 'A blade.' });
+    expect(dataOf('item-two')).toEqual({ _enrichPending: { data: {} } });
   });
 
   test('adds, revises, and removes a Known entry through narrative revisions', () => {

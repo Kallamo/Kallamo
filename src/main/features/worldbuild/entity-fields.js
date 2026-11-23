@@ -2,16 +2,17 @@
 // so a test can hold them against each other; the sheet (JSX) is still checked by hand.
 
 const { LOCATION_SIZE_IDS } = require('../../../../dist-main/shared/location-sizes');
+const { ABUNDANCE_IDS, ITEM_CATEGORY_IDS } = require('../../../../dist-main/shared/item-vocabulary');
 
 // Closed vocabularies for the fields that are enums. A value outside its list is dropped
 // rather than stored.
 const ENRICH_ENUMS = {
     status: ['alive', 'deceased', 'missing', 'unknown'],
     disposition: ['hostile', 'neutral', 'friendly', 'unknown'],
-    abundance: ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'],
+    abundance: [...ABUNDANCE_IDS],
     threat: ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'],
     size: [...LOCATION_SIZE_IDS],
-    itemType: ['Weapon', 'Armor', 'Tool', 'Consumable', 'Artifact', 'Document', 'Container', 'Currency', 'Material', 'Resource', 'Object'],
+    itemType: [...ITEM_CATEGORY_IDS],
 };
 
 // Mirrors what the sheet renders per type: the AI may only fill what the user can see.

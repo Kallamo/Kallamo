@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  canonicalSectionId, normalizeTemplateSections, sheetSections, sheetTabs, tabLabel,
+  canonicalSectionId, LOOSE_FIELDS_SECTION, normalizeFieldSections, normalizeTemplateSections, sectionOfField, sheetSections, sheetTabs, tabLabel,
   TAB_ORDER, templateSections, TYPE_SECTIONS, variantsOf,
 } from '../../src/renderer/features/worldbuild/worldbuildSections.js';
 
@@ -87,5 +87,26 @@ describe('Worldbuild sheet sections', () => {
   test('a deliberate rename of a legacy section survives the migration', () => {
     const [migrated] = normalizeTemplateSections('Creatures', [{ id: 'overview', label: 'Beast profile', kind: 'native' as const }]);
     expect(migrated).toMatchObject({ id: 'details', label: 'Beast profile' });
+  });
+
+  test('a template field lands in its section, under its legacy id too, or in the loose group', () => {
+    const template = {
+      layout: {
+        sections: [{ id: 'details', kind: 'native' }, { id: 'custom-1', kind: 'custom', hidden: true }],
+        fieldSections: { size: 'details', legacy: 'overview', mine: 'custom-1', gone: 'custom-deleted' },
+      },
+    };
+    expect(sectionOfField('Creatures', template, 'size')).toBe('details');
+    expect(sectionOfField('Creatures', template, 'legacy')).toBe('details');
+    // A hidden section keeps its fields; they hide with it instead of moving to the loose group.
+    expect(sectionOfField('Creatures', template, 'mine')).toBe('custom-1');
+    expect(sectionOfField('Creatures', template, 'gone')).toBe(LOOSE_FIELDS_SECTION.id);
+    expect(sectionOfField('Creatures', template, 'unassigned')).toBe(LOOSE_FIELDS_SECTION.id);
+    expect(sectionOfField('Creatures', undefined, 'size')).toBe(LOOSE_FIELDS_SECTION.id);
+  });
+
+  test('a saved template stores only resolved field sections', () => {
+    const template = { layout: { sections: [], fieldSections: { legacy: 'overview', gone: 'custom-deleted' } } };
+    expect(normalizeFieldSections('Creatures', template, ['legacy', 'gone'])).toEqual({ legacy: 'details' });
   });
 });

@@ -3,6 +3,7 @@ const db = require('./database');
 const crypto = require('crypto');
 const { discardEnrichPending, normalizeRelationshipLabel } = require('./features/worldbuild/entity-review');
 const { foldText } = require('./features/world-index/text-fold');
+const { defaultRaceFor, withFieldDefaults } = require('./features/worldbuild/field-defaults');
 const { countEntityReferences, releaseEntityReferences, replaceEntityId, repointEntityReferences } = require('./features/worldbuild/entity-references');
 const path = require('path');
 
@@ -58,12 +59,14 @@ function getEntity(id) {
   return hydrate(db.prepare('SELECT * FROM entities WHERE id = ?').get(id));
 }
 
-function createEntity({ workspaceId, type, canonicalName, aliases = [], lore = '', loreDocumentId = null, data = {}, status = 'confirmed' } = {}) {
+// `applyDefaults` is off only for a package import: a package copies a world, it does not create in it.
+function createEntity({ workspaceId, type, canonicalName, aliases = [], lore = '', loreDocumentId = null, data = {}, status = 'confirmed', applyDefaults = true } = {}) {
   if (!type || !canonicalName || !String(canonicalName).trim()) {
     throw new Error('type and canonicalName are required');
   }
   const id = crypto.randomUUID();
   const now = Date.now();
+  if (applyDefaults) data = withFieldDefaults(db, workspaceId, type, data || {});
   db.prepare(`
     INSERT INTO entities (id, workspaceId, type, canonicalName, aliases, lore, loreDocumentId, data, status, createdAt, last_modified)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -72,6 +75,8 @@ function createEntity({ workspaceId, type, canonicalName, aliases = [], lore = '
     JSON.stringify(Array.isArray(aliases) ? aliases.map(a => String(a).trim()).filter(Boolean) : []),
     lore || '', loreDocumentId || null, JSON.stringify(data || {}), status || 'confirmed', now, now
   );
+  const raceId = applyDefaults ? defaultRaceFor(db, workspaceId, type) : null;
+  if (raceId) setLink({ workspaceId, fromId: id, relType: 'is_race', toId: raceId, single: true });
   return getEntity(id);
 }
 
@@ -696,7 +701,7 @@ function importWorldbuild(workspaceId, payload, { confirmed = false } = {}) {
       const created = createEntity({
         workspaceId, type: e.type, canonicalName: e.canonicalName,
         aliases: Array.isArray(e.aliases) ? e.aliases : [],
-        lore: e.lore || '', data, status: confirmed ? 'confirmed' : 'proposed',
+        lore: e.lore || '', data, status: confirmed ? 'confirmed' : 'proposed', applyDefaults: false,
       });
       idMap.set(e.ref, created.id);
       entitiesAdded++;

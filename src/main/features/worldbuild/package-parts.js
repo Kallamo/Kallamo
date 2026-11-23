@@ -59,7 +59,10 @@ function importTemplates({ db, worldbuildData, workspaceId, templates, idMap }) 
 
   const current = new Map(worldbuildData.listEntityTemplates(workspaceId).map(template => [template.typeId, template]));
   for (const template of Array.isArray(templates.templates) ? templates.templates : []) {
-    const incoming = template.layout || {};
+    // A default race was written with the package's refs; a ref the package did not carry is dropped.
+    const { nativeDefaults: packaged, ...rest } = template.layout || {};
+    const race = packaged?.race && idMap?.get(packaged.race);
+    const incoming = race ? { ...rest, nativeDefaults: { ...packaged, race } } : rest;
     const fieldSections = Object.fromEntries(Object.entries(incoming.fieldSections || {})
       .flatMap(([fieldId, sectionId]) => (fieldIdMap.has(fieldId) ? [[fieldIdMap.get(fieldId), sectionId]] : [])));
     const mine = current.get(template.typeId);
@@ -72,7 +75,8 @@ function importTemplates({ db, worldbuildData, workspaceId, templates, idMap }) 
     const known = new Set(sections.map(section => section.id));
     const added = (incoming.sections || []).filter(section => !known.has(section.id));
     const placed = { ...fieldSections, ...(mine.layout.fieldSections || {}) };
-    worldbuildData.saveEntityTemplate({ workspaceId, typeId: template.typeId, displayName: mine.displayName, layout: { ...mine.layout, sections: [...sections, ...added], fieldSections: placed } });
+    const nativeDefaults = mine.layout.nativeDefaults || incoming.nativeDefaults;
+    worldbuildData.saveEntityTemplate({ workspaceId, typeId: template.typeId, displayName: mine.displayName, layout: { ...mine.layout, sections: [...sections, ...added], fieldSections: placed, ...(nativeDefaults ? { nativeDefaults } : {}) } });
   }
 
   // Entity-reference values were written with the package's refs.

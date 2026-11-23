@@ -72,6 +72,7 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'worldbuild_event_occurrences', column: 'related_entity_ids_json', merge: 'repoint', delete: 'unlist' },
   { table: 'worldbuild_event_occurrences', column: 'consequences_json', merge: 'repoint', delete: 'keep history' },
   { table: 'worldbuild_field_definitions', column: 'default_value_json', merge: 'repoint', delete: 'unlist' },
+  { table: 'worldbuild_entity_templates', column: 'layout_json', merge: 'repoint', delete: 'unlist' },
   { table: 'entities', column: 'data', merge: 'repoint', delete: 'unlist' },
   { table: 'entity_redirects', column: 'to_id', merge: 'repoint', delete: 'remove' },
   { table: 'in_world_texts', column: 'item_id', merge: 'repoint', delete: 'clear, the text stays in-world' },
@@ -349,7 +350,8 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     ['worldbuild_event_occurrences', 'location_ids_json'],
     ['worldbuild_event_occurrences', 'related_entity_ids_json'],
     ['worldbuild_event_occurrences', 'consequences_json'],
-    ['worldbuild_field_definitions', 'default_value_json']
+    ['worldbuild_field_definitions', 'default_value_json'],
+    ['worldbuild_entity_templates', 'layout_json']
   ]) {
     if (!has(table)) continue;
     rewriteJsonColumn(db, { table, column, where: `workspace_id = ? AND ${column} LIKE ? ESCAPE '\\'`, params: [workspaceId, like], transform: replace });
@@ -534,6 +536,9 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
   }
   if (has('worldbuild_field_definitions')) {
     rewriteJsonColumn(db, { table: 'worldbuild_field_definitions', column: 'default_value_json', where: "workspace_id = ? AND default_value_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist });
+  }
+  if (has('worldbuild_entity_templates')) {
+    rewriteJsonColumn(db, { table: 'worldbuild_entity_templates', column: 'layout_json', where: "workspace_id = ? AND layout_json LIKE ? ESCAPE '\\'", params: [workspaceId, like], transform: unlist });
   }
 
   rewriteJsonColumn(db, {

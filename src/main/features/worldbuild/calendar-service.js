@@ -26,7 +26,13 @@ const DEFAULT_CALENDAR = Object.freeze({
     { id: 'ce', name: 'Common Era', shortName: 'CE', direction: 'forward', offset: 1 }
   ],
   defaultEraId: 'ce',
-  seasons: []
+  // Astronomical dates, so winter runs through a leap day instead of leaving 29 February without a season.
+  seasons: [
+    { id: 'season-spring', name: 'Spring', color: '#86efac', description: '', start: { month: 3, day: 20 }, end: { month: 6, day: 20 } },
+    { id: 'season-summer', name: 'Summer', color: '#fcd34d', description: '', start: { month: 6, day: 21 }, end: { month: 9, day: 22 } },
+    { id: 'season-autumn', name: 'Autumn', color: '#fdba74', description: '', start: { month: 9, day: 23 }, end: { month: 12, day: 20 } },
+    { id: 'season-winter', name: 'Winter', color: '#93c5fd', description: '', start: { month: 12, day: 21 }, end: { month: 3, day: 19 } }
+  ]
 });
 
 function buildDefaultTimeMatrix(hoursPerDay = DEFAULT_CALENDAR.hoursPerDay) {

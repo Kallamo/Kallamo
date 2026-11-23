@@ -5842,6 +5842,17 @@ function choiceOptionLabels(field, value) {
     return Array.isArray(value) ? value.map(label) : label(value);
 }
 
+// A value still equal to the template default was set by the template, not by the sources, so the
+// model is told it may replace it.
+function customFieldState(field, entity, emptyFields) {
+    if (emptyFields.includes(`customFields.${field.key}`)) return 'EMPTY';
+    const value = entity.data?.customFields?.[field.key];
+    if (Object.hasOwn(field, 'defaultValue') && JSON.stringify(value) === JSON.stringify(field.defaultValue)) {
+        return 'TEMPLATE DEFAULT, replace it when the sources establish another value';
+    }
+    return 'CURRENT VALUE PRESENT';
+}
+
 function customFieldPromptShape(field) {
     if (field.valueType === 'boolean') return 'true or false';
     if (field.valueType === 'number' || field.valueType === 'range') return 'a JSON number';
@@ -7060,7 +7071,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     const customFieldDefinitions = db.prepare(`
         SELECT field_key AS key, label, value_type AS valueType,
           options_json AS optionsJson, constraints_json AS constraintsJson,
-          ai_access AS aiAccess, ai_guidance AS aiGuidance
+          ai_access AS aiAccess, ai_guidance AS aiGuidance,
+          default_value_json AS defaultValueJson, has_default AS hasDefault
         FROM worldbuild_field_definitions
         WHERE workspace_id = ? AND type_id = ?
         ORDER BY position, field_id
@@ -7165,7 +7177,8 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         const customDefinitions = customFieldDefinitions.all(workspaceId, ent.type).map(row => ({
             ...row,
             options: row.optionsJson ? JSON.parse(row.optionsJson) : [],
-            constraints: row.constraintsJson ? JSON.parse(row.constraintsJson) : {}
+            constraints: row.constraintsJson ? JSON.parse(row.constraintsJson) : {},
+            ...(row.hasDefault === 1 ? { defaultValue: JSON.parse(row.defaultValueJson) } : {})
         }));
         const visibleCustomFields = customDefinitions.filter(field => field.aiAccess !== 'hidden');
         const writableCustomFields = visibleCustomFields.filter(field => field.aiAccess === 'read-write');
@@ -7201,7 +7214,7 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
             return `- ${field} [${state}]: ${shape}. ${ENRICH_FIELD_GUIDANCE[field]}`;
         });
         const customFieldLines = writableCustomFields.map(field =>
-            `- customFields.${field.key} [${emptyWritableFields.includes(`customFields.${field.key}`) ? 'EMPTY' : 'CURRENT VALUE PRESENT'}]: ${customFieldPromptShape(field)}. ${field.aiGuidance || `Use this field only for the meaning expressed by “${field.label}”.`}`
+            `- customFields.${field.key} [${customFieldState(field, ent, emptyWritableFields)}]: ${customFieldPromptShape(field)}. ${field.aiGuidance || `Use this field only for the meaning expressed by “${field.label}”.`}`
         );
         const fieldLines = [...nativeFieldLines, ...customFieldLines].join('\n');
         const relSpecs = enrichRelationsForEntity(ent);

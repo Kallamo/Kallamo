@@ -129,3 +129,26 @@ export const normalizeTemplateSections = (typeId, sections = []) => {
 };
 
 export const variantsOf = (typeId) => TYPE_VARIANTS[typeId] || [];
+
+// Where a template field with no section of its own lands, on the sheet and in the editor alike.
+export const LOOSE_FIELDS_SECTION = { id: 'custom-fields', label: 'More details' };
+
+/**
+ * The section a template field belongs to. Legacy ids map onto their section, a hidden section
+ * keeps its fields (they hide with it), and a missing or unknown one sends the field to the loose group.
+ */
+export const sectionOfField = (typeId, template, fieldId) => {
+  const assigned = template?.layout?.fieldSections?.[fieldId];
+  if (!assigned) return LOOSE_FIELDS_SECTION.id;
+  const id = canonicalSectionId(typeId, assigned);
+  const known = new Set([
+    ...templateSections(typeId).map(item => item.id),
+    ...(template?.layout?.sections ?? []).filter(item => item.kind === 'custom').map(item => item.id),
+  ]);
+  return known.has(id) ? id : LOOSE_FIELDS_SECTION.id;
+};
+
+/** fieldSections with every entry resolved, so a saved template stores no legacy or dangling ids. */
+export const normalizeFieldSections = (typeId, template, fieldIds) => Object.fromEntries(fieldIds
+  .map(fieldId => [fieldId, sectionOfField(typeId, template, fieldId)])
+  .filter(([, sectionId]) => sectionId !== LOOSE_FIELDS_SECTION.id));

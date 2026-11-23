@@ -1,8 +1,9 @@
 import {
-  Anvil, Box, CircleHelp, Coins, DoorOpen, FlaskRound, Gem, Hammer, LandPlot, Map as MapIcon, MapPin, Orbit, Package, Pickaxe, Scroll, Shield, Sword, UserRound, UsersRound,
+  Anvil, Armchair, Box, CircleHelp, Coins, DoorOpen, FlaskRound, Gem, Hammer, LandPlot, Map as MapIcon, MapPin, Orbit, Package, Palette, Pickaxe, Scroll, Shield, Ship, Sword, UserRound, UsersRound,
 } from 'lucide-react';
 import { DragonIcon, MoneybagIcon, PennantIcon, StopwatchIcon, StoreIcon } from '../../components/ui/glyphs';
 import { LOCATION_SIZES, locationSizeGuide, locationSizeLabel, locationSizeOf, presenceOrder } from '../../../shared/location-sizes';
+import { ABUNDANCE_IDS, ABUNDANCE_LEVELS, ITEM_CATEGORIES, ITEM_CATEGORY_IDS } from '../../../shared/item-vocabulary';
 
 // `wash` tints the open sheet's header with the type's color, so each kind of
 // record is recognizable before its name is read.
@@ -18,10 +19,8 @@ export const TYPES = {
 };
 
 export const TYPE_ORDER = ['Characters', 'Locations', 'Factions', 'Items', 'Races', 'Creatures', 'Events', 'System'];
-export const ITEM_TYPES = [
-  'Weapon', 'Armor', 'Tool', 'Consumable', 'Artifact', 'Document',
-  'Container', 'Currency', 'Material', 'Resource', 'Object',
-];
+export const ITEM_TYPES = [...ITEM_CATEGORY_IDS];
+export const itemTypeHint = (itemType) => ITEM_CATEGORIES.find(category => category.id === itemType)?.hint;
 
 export const ITEM_TYPE_META = {
   Weapon: { icon: Sword, label: 'Weapon' },
@@ -34,6 +33,9 @@ export const ITEM_TYPE_META = {
   Currency: { icon: Coins, label: 'Currency' },
   Material: { icon: Anvil, label: 'Material' },
   Resource: { icon: Pickaxe, label: 'Resource' },
+  Furniture: { icon: Armchair, label: 'Furniture' },
+  Art: { icon: Palette, label: 'Art' },
+  Vehicle: { icon: Ship, label: 'Vehicle' },
   Object: { icon: Package, label: 'Object' },
 };
 
@@ -87,7 +89,7 @@ export const locationPresenceOptions = (locations) => sortLocationsForPresence(l
       icon: locationSizeIcon(size),
     };
   });
-export const RARITY = ['Unique', 'Rare', 'Uncommon', 'Common', 'Abundant'];
+export const RARITY = [...ABUNDANCE_IDS];
 export const THREAT = ['Harmless', 'Minor', 'Dangerous', 'Deadly', 'Legendary'];
 // `dot` is the state read at a glance; the label stays neutral text beside it.
 export const STATUS = {
@@ -103,13 +105,7 @@ export const DISPOSITION = {
   unknown: { label: 'Unknown', dot: 'bg-text-subtle' },
 };
 export const CREATURE_NATURES = ['Beast', 'Monster', 'Spirit', 'Undead', 'Construct', 'Elemental', 'Deity', 'Aberration'];
-export const ABUNDANCE_HELP = [
-  ['Unique', 'Only one exists in the whole world.'],
-  ['Rare', 'Very few, hard to come by.'],
-  ['Uncommon', 'Exists, but not everywhere.'],
-  ['Common', 'Found in most places.'],
-  ['Abundant', 'Everywhere, effectively unlimited.'],
-];
+export const ABUNDANCE_HELP = ABUNDANCE_LEVELS.map(level => [level.id, level.hint]);
 export const GENDERS = ['Female', 'Male', 'Non-binary'];
 export const RELATIONSHIP_LABELS = ['Father', 'Mother', 'Sibling', 'Child', 'Friend', 'Rival', 'Enemy', 'Mentor', 'Ally', 'Lover'];
 

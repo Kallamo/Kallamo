@@ -4,6 +4,7 @@ import type { EntityFieldDefinition, EntityFieldType } from '../../../narrative/
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import type { Toast, WorldbuildApi, WorldbuildEntity, WorldbuildEntityTemplate } from './worldbuildTypes';
 import { TYPES } from './worldbuildConfig';
+import { sectionOfField } from './worldbuildSections';
 import { FieldEye, SpoilerCover, SpoilerText, SpoilerTextArea } from './Spoilers';
 
 // A template field is hidden from readers under its own key, like a native field.
@@ -42,12 +43,7 @@ interface Props {
 
 /** The template fields a section holds, in the template's order. Unassigned ones belong to "custom-fields". */
 export function fieldsForSection(definitions: EntityFieldDefinition[], template: WorldbuildEntityTemplate | undefined, sectionId: string) {
-  const sections = new Set((template?.layout.sections ?? []).filter(section => !section.hidden).map(section => section.id));
-  return definitions.filter(definition => {
-    const assigned = template?.layout.fieldSections?.[definition.id];
-    if (sectionId === 'custom-fields') return !assigned || !sections.has(assigned);
-    return assigned === sectionId;
-  });
+  return definitions.filter(definition => sectionOfField(definition.typeId, template, definition.id) === sectionId);
 }
 
 export const isLongField = (definition: EntityFieldDefinition) => LONG_TYPES.has(definition.valueType);
@@ -76,7 +72,10 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
   const values = entity.data.customFields ?? {};
   const fields = fieldsForSection(definitions, template, sectionId);
   if (!fields.length) return null;
-  const valueOf = (definition: EntityFieldDefinition) => values[definition.key] ?? definition.defaultValue;
+  const stored = (definition: EntityFieldDefinition) => values[definition.key];
+  // A draft shows the default it will be created with; a saved entry only shows it, marked, until someone fills it.
+  const showsDefault = (definition: EntityFieldDefinition) => !isFilledValue(stored(definition)) && isFilledValue(definition.defaultValue) && !Object.hasOwn(values, definition.key);
+  const valueOf = (definition: EntityFieldDefinition) => showsDefault(definition) ? definition.defaultValue : stored(definition);
   const short = fields.filter(definition => !LONG_TYPES.has(definition.valueType));
   const long = fields.filter(definition => LONG_TYPES.has(definition.valueType));
 
@@ -87,7 +86,7 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
       <FieldShell key={definition.id} definition={definition} editing full={LONG_TYPES.has(definition.valueType)}>
         <FieldInput
           definition={definition}
-          value={valueOf(definition) ?? emptyValue(definition.valueType)}
+          value={(entity.id ? stored(definition) : valueOf(definition)) ?? emptyValue(definition.valueType)}
           onChange={value => onDraftChange?.({ ...values, [definition.key]: normalizeValue(value, definition) })}
           entities={entities}
         />
@@ -97,14 +96,14 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
   }
 
   const cell = (definition: EntityFieldDefinition) => (
-    <FieldShell key={definition.id} definition={definition} value={valueOf(definition)}>
+    <FieldShell key={definition.id} definition={definition} value={stored(definition)} defaulted={showsDefault(definition)}>
       <FieldValue definition={definition} value={valueOf(definition)} entities={entities} />
     </FieldShell>
   );
   // A long field sits under a rule, labelled, after whatever text the section already has.
   const longBlock = (definition: EntityFieldDefinition) => (
     <div key={definition.id} className="border-t border-border-subtle pt-4">
-      <FieldShell definition={definition} value={valueOf(definition)} full>
+      <FieldShell definition={definition} value={stored(definition)} defaulted={showsDefault(definition)} full>
         <FieldValue definition={definition} value={valueOf(definition)} entities={entities} />
       </FieldShell>
     </div>
@@ -116,7 +115,7 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
   if (fields.every(definition => readsAsNumber(definition, valueOf(definition)) || (definition.valueType === 'short-text' && !isFilledValue(valueOf(definition)))) && fields.some(definition => isFilledValue(valueOf(definition)))) {
     return <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">{fields.map(definition => (
       <div key={definition.id} className="min-w-0 rounded-control border border-border-subtle bg-surface-canvas/30 px-3 py-2.5">
-        <div className="truncate text-xs font-medium text-text-muted">{labelOf(definition)}</div>
+        <div className="truncate text-xs font-medium text-text-muted">{labelOf(definition)}{showsDefault(definition) && <span data-tooltip="The template default. Not saved on this entry, so the AI reads it as empty." className="text-text-subtle"> · Default</span>}</div>
         <SpoilerCover field={spoilerKey(definition)}><FieldValue definition={definition} value={valueOf(definition)} entities={entities} large /></SpoilerCover>
       </div>
     ))}</div>;
@@ -126,7 +125,7 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
     <div className="space-y-4">
       {short.length > 0 && <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3">{short.map(cell)}</div>}
       {long.map((definition, index) => short.length || index > 0 ? longBlock(definition) : (
-        <FieldShell key={definition.id} definition={definition} value={valueOf(definition)} full>
+        <FieldShell key={definition.id} definition={definition} value={stored(definition)} defaulted={showsDefault(definition)} full>
           <FieldValue definition={definition} value={valueOf(definition)} entities={entities} />
         </FieldShell>
       ))}
@@ -134,14 +133,16 @@ export default function WorldbuildCustomFields({ workspaceId, entity, entities, 
   );
 }
 
-function FieldShell({ definition, value, editing = false, full = false, children }: { definition: EntityFieldDefinition; value?: unknown; editing?: boolean; full?: boolean; children: ReactNode }) {
-  const missing = !editing && definition.required && !isFilledValue(value);
+function FieldShell({ definition, value, editing = false, full = false, defaulted = false, children }: { definition: EntityFieldDefinition; value?: unknown; editing?: boolean; full?: boolean; defaulted?: boolean; children: ReactNode }) {
+  // Required asks for a stored value: a default only shown here is not what the AI reads.
+  const missing = !editing && definition.required && !isFilledValue(value) && !defaulted;
   return (
     <div className={`min-w-0 ${full ? 'col-span-full' : ''}`}>
       <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-muted">
         <span className="truncate">{labelOf(definition)}</span>
         {editing && <FieldEye field={spoilerKey(definition)} size="sm" />}
         {missing && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-warning" />}
+        {defaulted && <span data-tooltip="The template default. Not saved on this entry, so the AI reads it as empty." className="shrink-0 text-text-subtle">Default</span>}
         {editing && definition.required && <span className="text-status-warning">Required</span>}
         {editing && definition.aiAccess === 'read-only' && <span data-tooltip="The AI reads it but never changes it" className="inline-flex text-text-subtle"><Lock className="h-3 w-3" aria-label="Read only for the AI" /></span>}
         {editing && definition.aiAccess === 'hidden' && <span data-tooltip="Hidden from the AI" className="inline-flex text-text-subtle"><EyeOff className="h-3 w-3" aria-label="Hidden from the AI" /></span>}
@@ -151,7 +152,7 @@ function FieldShell({ definition, value, editing = false, full = false, children
   );
 }
 
-function FieldInput({ definition, value, onChange, entities }: { definition: EntityFieldDefinition; value: unknown; onChange(value: unknown): void; entities: WorldbuildEntity[] }) {
+export function FieldInput({ definition, value, onChange, entities }: { definition: EntityFieldDefinition; value: unknown; onChange(value: unknown): void; entities: WorldbuildEntity[] }) {
   const options = definition.options ?? [];
   const type = definition.valueType;
   if (type === 'boolean') {
