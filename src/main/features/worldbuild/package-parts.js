@@ -117,6 +117,7 @@ function exportOccurrences(db, workspaceId, entityIds) {
       WHERE occurrences.workspace_id = ? AND occurrences.archived = 0 AND occurrences.source = 'user' AND events.status = 'approved'
       ORDER BY occurrences.created_at
     `).all(workspaceId).filter(row => ids.has(row.event_entity_id)).map(row => ({
+      ref: row.occurrence_id,
       eventRef: row.event_entity_id,
       title: row.title,
       summary: row.summary,
@@ -133,7 +134,8 @@ function exportOccurrences(db, workspaceId, entityIds) {
 }
 
 // The consequences already shaped the exported state, so they are recorded, never applied again.
-function importOccurrences({ db, service, workspaceId, occurrences, idMap }) {
+// `landed`, when given, receives each occurrence's ref → its new id.
+function importOccurrences({ db, service, workspaceId, occurrences, idMap, landed = null }) {
   const result = { occurrencesAdded: 0, occurrencesSkipped: 0 };
   if (!occurrences || occurrences.version !== 1) return result;
   const record = db.prepare('UPDATE worldbuild_event_occurrences SET consequences_json = ? WHERE workspace_id = ? AND occurrence_id = ?');
@@ -152,6 +154,7 @@ function importOccurrences({ db, service, workspaceId, occurrences, idMap }) {
         relatedEntityIds: mapIds(entry.relatedRefs),
       });
       record.run(JSON.stringify(remapRefs(entry.consequences || {}, idMap)), workspaceId, created.id);
+      if (landed && entry.ref) landed.set(entry.ref, created.id);
       result.occurrencesAdded++;
     } catch (error) {
       console.warn('[import-worldbuild] skipped an occurrence:', error.message);
@@ -187,7 +190,7 @@ function exportChapters(db, workspaceId, entityIds) {
   };
 }
 
-function importChapters({ db, workspaceId, chapters, idMap, createFolder, createDocument }) {
+function importChapters({ db, workspaceId, chapters, idMap, createFolder, createDocument, landed = null }) {
   const result = { chaptersAdded: 0 };
   const entries = chapters?.version === 1 && Array.isArray(chapters.entries) ? chapters.entries : [];
   if (!entries.length) return result;
@@ -198,6 +201,7 @@ function importChapters({ db, workspaceId, chapters, idMap, createFolder, create
     const owners = (entry.entityRefs || []).map(ref => idMap.get(ref)).filter(Boolean);
     if (!owners.length) continue;
     const document = createDocument({ workspaceId, folderId: folder.id, title: entry.title || 'Untitled', content: entry.content });
+    if (landed && entry.ref) landed.set(entry.ref, document.id);
     for (const entityId of owners) {
       const row = db.prepare('SELECT data FROM entities WHERE id = ?').get(entityId);
       const data = parseObject(row?.data);

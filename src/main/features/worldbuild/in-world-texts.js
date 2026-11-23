@@ -247,7 +247,7 @@ function itemTextFolder(db, workspaceId, itemId, createFolder) {
 }
 
 /** Lands a package's texts as Writing Desk documents, in reading order, each tied to its item. */
-function importItemTexts(db, workspaceId, texts, idMap, { createFolder, createDocument }) {
+function importItemTexts(db, workspaceId, texts, idMap, { createFolder, createDocument }, landed = null) {
   const list = (Array.isArray(texts) ? texts : []).filter(text => text && idMap.get(text.itemRef));
   let textsAdded = 0;
   for (const itemRef of [...new Set(list.map(text => text.itemRef))]) {
@@ -257,6 +257,7 @@ function importItemTexts(db, workspaceId, texts, idMap, { createFolder, createDo
       const content = typeof text.content === 'string' ? text.content : JSON.stringify(text.content || { type: 'doc', content: [{ type: 'paragraph' }] });
       const doc = createDocument({ workspaceId, folderId: folder.id, title: String(text.title || 'Untitled'), content });
       setInWorldText(db, { documentId: doc.id, itemId, authorId: idMap.get(text.authorRef) || null });
+      if (landed && text.ref) landed.set(text.ref, doc.id);
       textsAdded += 1;
     }
   }

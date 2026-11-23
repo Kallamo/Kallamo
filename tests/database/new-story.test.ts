@@ -181,6 +181,24 @@ describe('starting a new story', () => {
     expect(db.prepare('SELECT entity FROM chunk_tags WHERE chunkId = ?').get(docChunk).entity).toBe(`${id}-mara`);
   });
 
+  test('comes from the same packages as the world it copies, and its texts keep their package uids', async () => {
+    chat('ws', 'The Lighthouse');
+    entity('mara', { data: { loreDocumentIds: ['doc-1'] } });
+    db.prepare("INSERT INTO folders (id, workspaceId, name) VALUES ('f1', 'ws', 'Background chapters')").run();
+    db.prepare("INSERT INTO documents (id, workspaceId, folderId, title, content) VALUES ('doc-1', 'ws', 'f1', 'The cabin', 'text')").run();
+    db.prepare(`
+      INSERT INTO worldbuild_package_origins (import_id, workspace_id, package_id, version, content_hash, imported_at, base_json)
+      VALUES ('import-1', 'ws', 'lighthouse', 3, 'hash', 5, '{}')
+    `).run();
+    db.prepare("INSERT INTO worldbuild_package_uids (workspace_id, part, local_id, package_uid) VALUES ('ws', 'chapters', 'doc-1', 'author-chapter')").run();
+
+    const { id } = await service().svc.start('ws', {});
+    expect(db.prepare('SELECT package_id, version, content_hash, imported_at FROM worldbuild_package_origins WHERE workspace_id = ?').all(id))
+      .toEqual([{ package_id: 'lighthouse', version: 3, content_hash: 'hash', imported_at: 5 }]);
+    const copy = db.prepare('SELECT id FROM documents WHERE workspaceId = ?').get(id).id;
+    expect(db.prepare('SELECT local_id, package_uid FROM worldbuild_package_uids WHERE workspace_id = ?').all(id)).toEqual([{ local_id: copy, package_uid: 'author-chapter' }]);
+  });
+
   test('a guided story is seeded again instead of copied', async () => {
     chat('guided', 'Evenwell');
     const { svc } = service();

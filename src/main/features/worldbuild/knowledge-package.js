@@ -81,8 +81,8 @@ function exportAuthoredKnowledge({ db, worldbuildData, workspaceId, entityIds })
 
 // Recreates each piece through the same calls the sheet uses, so the imported world holds it
 // exactly as if the author had written it there. One piece that no longer fits is skipped.
-function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, idMap, linkIdByEnds }) {
-  const entryIdMap = new Map();
+function importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge, idMap, linkIdByEnds, landed = null }) {
+  const entryIdMap = landed || new Map();
   let entriesAdded = 0, skipped = 0;
   const mapLink = (link) => {
     const [relType, fromRef, toRef] = String(link || '').split('|');
@@ -185,18 +185,21 @@ function exportAuthoredFacts({ worldbuildData, workspaceId, entityIds }) {
   return { version: 1, entries };
 }
 
-function importAuthoredFacts({ worldbuildData, workspaceId, facts, idMap }) {
+function importAuthoredFacts({ worldbuildData, workspaceId, facts, idMap, landed = null }) {
   let factsAdded = 0, factsSkipped = 0;
   if (!facts || facts.version !== 1) return { factsAdded, factsSkipped };
   worldbuildData.withStoryBatch(workspaceId, () => { for (const fact of Array.isArray(facts.entries) ? facts.entries : []) {
     const title = String(fact?.title || '').trim();
     const statement = String(fact?.statement || '').trim();
     if (!title || !statement) { factsSkipped++; continue; }
+    const referenceId = crypto.randomUUID();
     try {
       worldbuildData.saveWorldFact({
         workspaceId,
+        referenceId,
         entry: { title, statement, relatedEntityIds: (fact.relatedRefs || []).map(ref => idMap.get(ref)).filter(Boolean) },
       });
+      if (landed && fact.ref) landed.set(fact.ref, referenceId);
       factsAdded++;
     } catch (error) {
       console.warn('[import-worldbuild] skipped a Fact:', error.message);

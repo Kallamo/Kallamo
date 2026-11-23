@@ -1799,6 +1799,38 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_roleplay_condition_changes_entity
         ON roleplay_condition_changes (workspace_id, entity_id, created_at);
     `)
+  },
+  {
+    // Which package a world came from, and the ids its parts carry there, so a later version can be
+    // matched part by part. The imported package is kept as the base that version is compared with.
+    id: 'worldbuild_package_identity_v1',
+    up: (db) => db.exec(`
+      CREATE TABLE IF NOT EXISTS worldbuild_package_identity (
+        workspace_id TEXT PRIMARY KEY,
+        package_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        exported_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS worldbuild_package_origins (
+        import_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        package_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        imported_at INTEGER NOT NULL,
+        base_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_worldbuild_package_origins_workspace
+        ON worldbuild_package_origins (workspace_id, package_id);
+      CREATE TABLE IF NOT EXISTS worldbuild_package_uids (
+        workspace_id TEXT NOT NULL,
+        part TEXT NOT NULL,
+        local_id TEXT NOT NULL,
+        package_uid TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, part, local_id)
+      );
+    `)
   }
 ];
 

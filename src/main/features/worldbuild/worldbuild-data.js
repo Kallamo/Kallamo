@@ -562,7 +562,8 @@ function createWorldbuildDataService(db) {
     const title = requireText(entry.title, 'title');
     const statement = requireText(entry.statement, 'statement');
     const relatedEntityIds = normalizeIds(entry.relatedEntityIds ?? (entry.aboutId ? [entry.aboutId] : []));
-    const referenceId = current?.referenceId || crypto.randomUUID();
+    // A package import names a new Fact itself, so it knows which Fact each packaged one became.
+    const referenceId = current?.referenceId || (typeof payload.referenceId === 'string' && payload.referenceId) || crypto.randomUUID();
     const operations = [];
     if (current) {
       operations.push(buildFactOperation(current.payload.proposition, 'retracted', evidenceId, {

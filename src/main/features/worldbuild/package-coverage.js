@@ -38,6 +38,8 @@ const PACKAGED = [
   { table: 'roleplay_time_matrices', by: 'rules' },
   { table: 'roleplay_equipment', by: 'what characters wear' },
   { table: 'roleplay_location_inventory', by: 'items lying in places' },
+  { table: 'worldbuild_package_identity', by: 'packageId and packageVersion' },
+  { table: 'worldbuild_package_uids', by: 'the uid on each identified record' },
 ];
 
 /** Stays in the workspace, with the reason the export dialog gives. */
@@ -59,13 +61,42 @@ const STAYS = [
     'entity_enrichment_chunks', 'entity_enrichment_errors', 'entity_update_jobs', 'entity_update_runs',
     'entity_update_evidence', 'entity_update_origins', 'entity_redirects', 'entity_sheet_edits', 'entity_field_checks',
   ].map(table => ({ table, reason: 'review' })),
+  // Where this world came from; the package it brought is the base a later version is compared with.
+  { table: 'worldbuild_package_origins', reason: 'origin' },
   // Not part of a world.
   ...[
     'chats', 'messages', 'api_profiles', 'writing_profiles', 'workflows', 'variables', 'settings', 'token_calibration',
     'knowledge_chunks', 'knowledge_chunks_fts', 'chunk_tags', 'chunk_tag_suppressions', 'constant_memory', 'tags',
     'world_index_chunk_status', 'world_index_runs', 'document_notes', 'document_analyses', 'pending_suggestions',
-    'pinned_directives', 'workspace_ui_state', 'workspace_experience_modes', 'schema_migrations',
+    'pinned_directives', 'workspace_ui_state', 'workspace_experience_modes', 'workspace_threads', 'schema_migrations',
   ].map(table => ({ table, reason: 'not-world' })),
 ];
 
-module.exports = { PACKAGED, STAYS };
+/** The keys of worldbuild.json that describe the package itself rather than a part of the world. */
+const PACKAGE_HEADER = ['kallamoWorldbuild', 'exportedAt', 'packageId', 'packageVersion', 'packageHash'];
+
+/**
+ * Parts whose records have an id of their own. Each record is exported under its local id (`ref`)
+ * and carries a `uid` that stays the same through every export, import and re-export of the world.
+ */
+const IDENTIFIED = [
+  { part: 'entities', records: payload => payload.entities },
+  { part: 'knowledge', records: payload => payload.knowledge?.entries },
+  { part: 'facts', records: payload => payload.facts?.entries },
+  { part: 'occurrences', records: payload => payload.occurrences?.entries },
+  { part: 'texts', records: payload => payload.texts },
+  { part: 'chapters', records: payload => payload.chapters?.entries },
+];
+
+/** Parts matched by what they are: a uid would add nothing a later version could not find by these. */
+const KEYED = [
+  { part: 'links', by: 'relType and both ends' },
+  { part: 'knowledge', by: 'cards and exclusions: owner and target' },
+  { part: 'calendar', by: 'one per world' },
+  { part: 'templates', by: 'entity type; fields by type and key, which stay fixed through renames' },
+  { part: 'roleplayRules', by: 'resource, attribute, skill and condition keys' },
+  { part: 'placement', by: 'holder or place, and item' },
+  { part: 'images', by: 'entity and kind' },
+];
+
+module.exports = { PACKAGED, STAYS, PACKAGE_HEADER, IDENTIFIED, KEYED };

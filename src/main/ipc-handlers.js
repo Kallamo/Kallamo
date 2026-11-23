@@ -32,6 +32,7 @@ const entitiesStore = require('./entities');
 const inWorldTexts = require('./features/worldbuild/in-world-texts');
 const worldChanges = require('./features/worldbuild/world-changes');
 const packageParts = require('./features/worldbuild/package-parts');
+const packageIdentity = require('./features/worldbuild/package-identity');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 const { detectedContextWindows, refreshContextWindow, refreshLocalContextWindows } = require('./features/llm/local-context-window');
@@ -3295,9 +3296,12 @@ function buildWorldbuildPackage(workspaceId, { includeImages = true, includeCurr
     for (const image of entityImages.listForExport(workspaceId, refs)) {
       const file = `images/${image.entityId}/${image.kind}${path.extname(image.absolute).toLowerCase()}`;
       images.push({ file, absolute: image.absolute });
-      data.images.push({ ref: image.entityId, kind: image.kind, file, focus: image.focus });
+      // The file's own hash, so a new picture under the same name changes the package's hash too.
+      const sha256 = crypto.createHash('sha256').update(fs.readFileSync(image.absolute)).digest('hex');
+      data.images.push({ ref: image.entityId, kind: image.kind, file, focus: image.focus, sha256 });
     }
   }
+  packageIdentity.stampUids(db, workspaceId, data);
   const writeZip = (filePath) => {
     const zip = new AdmZip();
     for (const image of images) zip.addFile(image.file, fs.readFileSync(image.absolute));
@@ -3318,7 +3322,9 @@ ipcMain.handle('export-worldbuild', async (event, { workspaceId, includeImages =
       filters: [{ name: 'Kallamo Worldbuild Package', extensions: ['klwb'] }],
     });
     if (canceled || !filePath) return { cancelled: true };
+    const keepIdentity = packageIdentity.stampIdentity(db, workspaceId, data);
     writeZip(filePath);
+    keepIdentity();
     return { success: true, filePath, entities: data.entities.length, links: data.links.length };
   } catch (e) {
     console.error('[export-worldbuild] failed:', e);
@@ -3424,6 +3430,8 @@ function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = '
   ).get(workspaceId)?.count || 0;
   // Entities first, so a package that fails to land leaves this world's calendar untouched.
   const { idMap, linkIdByEnds, ...res } = entitiesStore.importWorldbuild(workspaceId, payload, { confirmed });
+  // Each identified part's ref → the id it landed under, for the origin recorded at the end.
+  const landed = { entities: idMap, knowledge: new Map(), facts: new Map(), occurrences: new Map(), texts: new Map(), chapters: new Map() };
   let calendarImported = false;
   let calendarConflict = false;
   if (payload.calendar && calendarMode) {
@@ -3465,20 +3473,22 @@ function importWorldbuildPayload(workspaceId, filePath, payload, { rulesMode = '
     rulesImported = rulesMode !== 'skip';
   }
   // After the rules, so a statement can name anything the package brought.
-  const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds });
-  const factResult = importAuthoredFacts({ worldbuildData, workspaceId, facts: payload.facts, idMap });
+  const knowledgeResult = importAuthoredKnowledge({ db, worldbuildData, workspaceId, knowledge: payload.knowledge, idMap, linkIdByEnds, landed: landed.knowledge });
+  const factResult = importAuthoredFacts({ worldbuildData, workspaceId, facts: payload.facts, idMap, landed: landed.facts });
   const templateResult = packageParts.importTemplates({ db, worldbuildData, workspaceId, templates: payload.templates, idMap });
   const { EventOccurrenceService } = require('../../dist-main/main/features/worldbuild/event-occurrences');
   const occurrenceResult = packageParts.importOccurrences({
-    db, service: new EventOccurrenceService(db, getCalendarService(), { includeProposed: true }), workspaceId, occurrences: payload.occurrences, idMap
+    db, service: new EventOccurrenceService(db, getCalendarService(), { includeProposed: true }), workspaceId, occurrences: payload.occurrences, idMap,
+    landed: landed.occurrences
   });
   const placementResult = packageParts.importPlacement({ db, workspaceId, placement: payload.placement, idMap });
   const writing = {
     createFolder: insertFolder,
     createDocument: ({ workspaceId: ws, folderId, title, content }) => insertDocumentWithDefaults({ workspaceId: ws, folderId, title, content })
   };
-  const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, writing);
-  const chapterResult = packageParts.importChapters({ db, workspaceId, chapters: payload.chapters, idMap, ...writing });
+  const textResult = inWorldTexts.importItemTexts(db, workspaceId, payload.texts, idMap, writing, landed.texts);
+  const chapterResult = packageParts.importChapters({ db, workspaceId, chapters: payload.chapters, idMap, ...writing, landed: landed.chapters });
+  packageIdentity.recordImport(db, workspaceId, payload, landed);
   refreshNameTagsFor(workspaceId);
   return {
     success: true, ...res, ...knowledgeResult, ...factResult, ...templateResult, ...occurrenceResult, ...placementResult,
@@ -3708,6 +3718,7 @@ function getEvenwellOnboarding() {
       calendar: getCalendarService(),
       setExperienceMode: (workspaceId, mode) => setWorkspaceExperienceMode(db, workspaceId, mode),
       purgeWorkspace,
+      worldbuildData,
       setBackground: (workspaceId, packagePath, file) => {
         const entry = new AdmZip(packagePath).getEntry(file);
         if (!entry) return;
@@ -6930,4 +6941,10 @@ try {
   if (getEvenwellOnboarding().seedOnce()) console.log('[Onboarding] Seeded the Evenwell story.');
 } catch (error) {
   log.error('[Onboarding] Seeding Evenwell failed:', error);
+}
+try {
+  const adopted = getEvenwellOnboarding().adoptOrigins();
+  if (adopted.length) console.log(`[Onboarding] Recorded where ${adopted.length} Evenwell ${adopted.length === 1 ? 'story' : 'stories'} came from.`);
+} catch (error) {
+  log.error('[Onboarding] Recording Evenwell origins failed:', error);
 }

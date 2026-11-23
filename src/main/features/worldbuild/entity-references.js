@@ -18,6 +18,8 @@ const ENTITY_REFERENCE_COLUMNS = [
   { table: 'entity_update_origins', column: 'previous_json', merge: 'repoint', delete: 'remove' },
   { table: 'entity_update_origins', column: 'next_json', merge: 'repoint', delete: 'remove' },
   { table: 'entity_sheet_edits', column: 'entity_id', merge: 'repoint', delete: 'remove' },
+  // An entity's package uid is its own: a merged-away entity's lineage ends with it.
+  { table: 'worldbuild_package_uids', column: 'local_id', merge: 'remove', delete: 'remove' },
   { table: 'narrative_events', column: 'location_id', merge: 'repoint', delete: 'keep history' },
   { table: 'narrative_events', column: 'operations_json', merge: 'repoint proposed', delete: 'reject proposed' },
   { table: 'narrative_event_participants', column: 'entity_id', merge: 'repoint', delete: 'keep history' },
@@ -177,6 +179,7 @@ function repointEntityReferences(db, { workspaceId, sourceId, targetId, prefer =
     }
   }
   if (has('entity_sheet_edits')) db.prepare('UPDATE entity_sheet_edits SET entity_id = ? WHERE workspace_id = ? AND entity_id = ?').run(targetId, workspaceId, sourceId);
+  if (has('worldbuild_package_uids')) db.prepare("DELETE FROM worldbuild_package_uids WHERE workspace_id = ? AND part = 'entities' AND local_id = ?").run(workspaceId, sourceId);
 
   if (has('narrative_events')) {
     db.prepare('UPDATE narrative_events SET location_id = ? WHERE workspace_id = ? AND location_id = ?').run(targetId, workspaceId, sourceId);
@@ -434,6 +437,7 @@ function releaseEntityReferences(db, { workspaceId, entityId }) {
     `).run(workspaceId, entityId, like, like);
   }
   if (has('entity_sheet_edits')) db.prepare('DELETE FROM entity_sheet_edits WHERE workspace_id = ? AND entity_id = ?').run(workspaceId, entityId);
+  if (has('worldbuild_package_uids')) db.prepare("DELETE FROM worldbuild_package_uids WHERE workspace_id = ? AND part = 'entities' AND local_id = ?").run(workspaceId, entityId);
 
   if (has('narrative_events')) {
     const proposed = db.prepare(`

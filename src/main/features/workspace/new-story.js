@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { nextStoryTitle } = require('./story-title');
 const { replaceEntityId } = require('../worldbuild/entity-references');
 const { markPending, clearPending } = require('./pending-workspaces');
+const { copyOrigins, copyUids } = require('../worldbuild/package-identity');
 
 // A new story in the same world: a new workspace with this one's Worldbuild, documents, memories
 // and settings, as the world stood before the story changed it. Edits made by hand stay.
@@ -260,6 +261,10 @@ function createNewStoryService(deps) {
         copyRow(db, 'in_world_texts', text, { document_id: documentId, workspace_id: targetId, item_id: mapEntity(text.item_id) || null, author_id: mapEntity(text.author_id) || null, created_at: now });
       }
     }
+    // Texts and chapters are copied here rather than through the package, so their uids are too.
+    if (hasTable(db, 'worldbuild_package_uids')) {
+      for (const part of ['texts', 'chapters']) copyUids(db, { sourceId, targetId, part, idMap: documentMap });
+    }
     const update = db.prepare('UPDATE entities SET data = ?, loreDocumentId = ? WHERE id = ?');
     for (const row of db.prepare('SELECT id, data FROM entities WHERE workspaceId = ?').all(sourceId)) {
       const target = idMap.get(row.id);
@@ -360,6 +365,7 @@ function createNewStoryService(deps) {
       db.transaction(() => {
         copyWritingAndMemory(sourceId, targetId, idMap);
         copyStoryStart(sourceId, targetId, idMap, storyStartState);
+        if (hasTable(db, 'worldbuild_package_origins')) copyOrigins(db, sourceId, targetId);
       })();
       if (source.backgroundImage) deps.copyBackground(source.backgroundImage, targetId);
       clearPending(db, targetId);

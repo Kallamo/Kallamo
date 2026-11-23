@@ -10,13 +10,18 @@ const SCOPE = 'onboarding';
 const STAGES = new Set(['intro', 'own-character', 'playing']);
 
 const { nextStoryTitle } = require('../workspace/story-title');
+const { adoptPackageOrigin } = require('../worldbuild/package-adoption');
+
+// Rooms a world seeded on 2.0.0-beta.1 does not have, so adoption leaves them out of its base.
+const ADDED_AFTER_BETA_1 = ['The Common Room', 'The Kitchen', 'The Gallery', 'Room 1', 'Room 2', 'Room 3', 'Room 4', 'Room 5', 'Room 6']
+  .map(name => ({ type: 'Locations', name }));
 const { markPending, clearPending } = require('../workspace/pending-workspaces');
 
 const newId = prefix => `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
 // Seeds the Evenwell roleplay and runs its first scene. The world comes from the bundled
 // package through the same import as a user's package, so the seed cannot drift from it.
-function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, calendar, setExperienceMode, purgeWorkspace, setBackground = () => {} }) {
+function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, calendar, setExperienceMode, purgeWorkspace, setBackground = () => {}, worldbuildData = null }) {
   const readState = workspaceId => {
     const row = db.prepare('SELECT valueJson FROM workspace_ui_state WHERE workspaceId = ? AND scope = ?').get(workspaceId, SCOPE);
     try { return row ? JSON.parse(row.valueJson) : null; } catch { return null; }
@@ -110,6 +115,28 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     const workspaceId = seed({ recent: Boolean(db.isFreshInstall) });
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')").run(SEEDED_KEY);
     return workspaceId;
+  }
+
+  // A world seeded without a package identity gets the origin a seed records, so a later Evenwell
+  // can update it. Only origin and uid rows are written; the story is left as it is.
+  function adoptOrigins() {
+    const stories = db.prepare('SELECT workspaceId, valueJson FROM workspace_ui_state WHERE scope = ?').all(SCOPE)
+      .filter(row => { try { return JSON.parse(row.valueJson)?.story === story.STORY_ID; } catch { return false; } })
+      .map(row => row.workspaceId)
+      .filter(workspaceId => !db.prepare('SELECT 1 FROM worldbuild_package_origins WHERE workspace_id = ?').get(workspaceId));
+    if (!stories.length || !worldbuildData) return [];
+    const payload = readPackage(PACKAGE_PATH);
+    if (!payload?.packageId) return [];
+    const adopted = [];
+    for (const workspaceId of stories) {
+      try {
+        const result = adoptPackageOrigin({ db, worldbuildData, workspaceId, payload, addedLater: ADDED_AFTER_BETA_1 });
+        if (result) adopted.push({ workspaceId, ...result });
+      } catch (error) {
+        console.warn('[Onboarding] An Evenwell story kept no origin:', error.message);
+      }
+    }
+    return adopted;
   }
 
   let packagedNames = null;
@@ -214,7 +241,7 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
 
   const isStory = workspaceId => readState(workspaceId)?.story === story.STORY_ID;
 
-  return { seed, seedOnce, getStory, setStage, begin, isStory };
+  return { seed, seedOnce, adoptOrigins, getStory, setStage, begin, isStory };
 }
 
 module.exports = { createEvenwellOnboarding };
