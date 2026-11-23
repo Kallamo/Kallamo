@@ -132,6 +132,9 @@ function createWindow () {
     show: false,
     width: savedState?.width ?? 1200,
     height: savedState?.height ?? 800,
+    // Room for every view's side panels at their narrowest beside its center column.
+    minWidth: 1024,
+    minHeight: 600,
     x: savedState?.x,
     y: savedState?.y,
     frame: false,

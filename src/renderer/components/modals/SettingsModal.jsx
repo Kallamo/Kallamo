@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Plus, Eye, EyeOff, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, AlertTriangle, Sparkles, FileSearch, Plug, Zap, Activity, ArrowLeft, Search, Server, MoreHorizontal, Copy, Pencil, Info, GitPullRequest, Drama, Tags, Route, Archive, Languages, CircleOff } from 'lucide-react';
+import { X, Plus, Eye, EyeOff, Layers, HardDrive, Trash2, FolderOpen, RefreshCw, Cpu, Database, Palette, AlertTriangle, Sparkles, FileSearch, Plug, Zap, Activity, ArrowLeft, Search, Server, MoreHorizontal, Copy, Pencil, Info, GitPullRequest, Drama, Tags, Route, Archive, Languages, CircleOff, RotateCcw } from 'lucide-react';
 import Logo, { Logotype, ReedPen } from '../../logo';
 import Toggle from '../ui/Toggle';
 import Button from '../ui/Button';
+import { resetLayout } from '../../features/layout/layout-store';
 import IconButton from '../ui/IconButton';
 import SelectMenu from '../ui/SelectMenu';
 import SegmentedControl from '../ui/SegmentedControl';
@@ -1328,6 +1329,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
               <Toggle checked={smartTypography} ariaLabel="Smart typography" onChange={value => updateSetting('interface', 'smartTypography', value)} />
             </SettingsRow>
           </SettingsGroup>
+          <SettingsGroup title="Panels">
+            <SettingsRow label="Panel layout" description="Widths, sides and the Roleplay panel's blocks.">
+              <Button variant="ghost" size="sm" icon={RotateCcw} onClick={resetLayout}>Reset layout</Button>
+            </SettingsRow>
+          </SettingsGroup>
         </div>
         <div className="min-w-0">
           <div className="sticky top-0">
@@ -1676,6 +1682,7 @@ const SEARCH_INDEX = [
   { page: 'appearance', label: 'Colored dialogue', keywords: 'speech quotes dash color colour' },
   { page: 'appearance', label: 'Formatting toolbar', keywords: 'writing desk fixed bubble' },
   { page: 'appearance', label: 'Smart typography', keywords: 'quotes dashes ellipsis' },
+  { page: 'appearance', label: 'Panel layout', keywords: 'reset width side resize panels rail' },
   { page: 'data', label: 'Back up', keywords: 'backup export' },
   { page: 'data', label: 'Restore', keywords: 'import backup' },
   { page: 'data', label: 'Safety copies', keywords: 'update migration backups' },

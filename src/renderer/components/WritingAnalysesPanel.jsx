@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import PanelResizeHandle from './ui/PanelResizeHandle';
 import { Check, ChevronDown, CornerDownLeft, NotebookPen, Trash2, X, AlertTriangle } from 'lucide-react';
 import { AiGlyph } from './ui/glyphs';
 import { ReedPen } from '../logo';
@@ -27,7 +28,7 @@ function when(timestamp) {
 
 // Every Analyze result for the chapter, newest first. Notes stay the writer's own list;
 // an analysis only joins them when the writer adds it.
-export default function WritingAnalysesPanel({ documentId, documentTitle, workspaceId, electronAPI, refreshKey, expandId, onJump, onChange, onNotesChange, onClose }) {
+export default function WritingAnalysesPanel({ documentId, documentTitle, workspaceId, electronAPI, refreshKey, expandId, onJump, onChange, onNotesChange, onClose, panel }) {
   const { settings } = useApp();
   const tokenDebug = Boolean(settings?.advanced?.tokenDebug);
   const ragDebug = Boolean(settings?.advanced?.ragDebug);
@@ -89,12 +90,13 @@ export default function WritingAnalysesPanel({ documentId, documentTitle, worksp
   };
 
   return (
-    <aside aria-label="Analyses" className="glass-rail flex w-[26rem] shrink-0 flex-col border-l border-border-subtle">
+    <aside aria-label="Analyses" style={{ width: panel.width }} className={`glass-rail relative flex shrink-0 flex-col border-border-subtle ${panel.side === 'left' ? 'order-first border-r' : 'border-l'}`}>
+      <PanelResizeHandle label="Resize Analyses panel" {...panel.handle} />
       <div className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border-subtle pl-4 pr-2">
         <h2 className="text-sm font-bold text-text-primary">Analyses</h2>
         {documentTitle && <span className="min-w-0 truncate text-xs text-text-subtle">on {documentTitle}</span>}
         <span className="flex-1" />
-        <IconButton icon={X} label="Close analyses" size="sm" tooltipSide="left" onClick={onClose} />
+        <IconButton icon={X} label="Close analyses" size="sm" tooltipSide={panel.side === 'left' ? 'right' : 'left'} onClick={onClose} />
       </div>
 
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 py-4 [&>*]:shrink-0">

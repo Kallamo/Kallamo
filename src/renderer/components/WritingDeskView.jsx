@@ -17,11 +17,22 @@ import { showsTourExample, tourStage } from '../features/onboarding/tours';
 import WritingTourExample from '../features/onboarding/WritingTourExample';
 import ExampleChip from '../features/onboarding/ExampleChip';
 import LIGHTHOUSE from '../../shared/lighthouse-sample.json';
+import { getCachedUiState, saveUiState } from '../features/chat/workspace-presentation';
+import { usePanelWidth } from '../features/layout/usePanelWidth';
+import { CENTER_MIN, panelSide, panelWidth } from '../features/layout/layout-model';
+import { resetWritingDeskLayout, setPanelSide, useLayout } from '../features/layout/layout-store';
+import PanelResizeHandle from './ui/PanelResizeHandle';
 import {
   Folder, FolderOpen, FolderPlus, Plus, ChevronDown, ChevronLeft, FileText, Trash2, FolderInput,
-  PenLine, Download, FileInput, MoreHorizontal, ScrollText, Lightbulb
+  PenLine, Download, FileInput, MoreHorizontal, ScrollText, Lightbulb, ArrowLeftRight, RotateCcw
 } from 'lucide-react';
 import { AiGlyph, AiNoteGlyph, IndexingGlyph, SuggestionPendingGlyph, WritingGlyph } from './ui/glyphs';
+
+const WRITING_DESK_SCOPE = 'writing-desk';
+const navigationFromState = state => state === undefined ? null : {
+  expanded: Object.fromEntries((Array.isArray(state?.expandedFolderIds) ? state.expandedFolderIds : []).map(id => [id, true])),
+  selectedDocId: typeof state?.lastDocumentId === 'string' ? state.lastDocumentId : null,
+};
 
 export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const { settings, showToast } = useApp();
@@ -35,10 +46,12 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const tourExample = showsTourExample(tourStage(tour, 'writing'));
 
   const [tree, setTree] = useState({ folders: [], documents: [] });
-  const [expanded, setExpanded] = useState({});
-  const [selectedDocId, setSelectedDocId] = useState(null);
-  const navigationStateRef = useRef({ expanded: {}, selectedDocId: null });
+  const [initialNavigation] = useState(() => navigationFromState(getCachedUiState(workspaceId, WRITING_DESK_SCOPE)));
+  const [expanded, setExpanded] = useState(() => initialNavigation?.expanded || {});
+  const [selectedDocId, setSelectedDocId] = useState(() => initialNavigation?.selectedDocId || null);
+  const navigationStateRef = useRef(initialNavigation || { expanded: {}, selectedDocId: null });
   const [currentDoc, setCurrentDoc] = useState(null);
+  const [docLoadedFor, setDocLoadedFor] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -71,37 +84,10 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
   const [directivesOn, setDirectivesOn] = useState(0);
   const [directivesRefresh, setDirectivesRefresh] = useState(0);
 
-  const getWritingDeskState = useCallback(async () => {
-    if (electronAPI.getWritingDeskState) {
-      try {
-        const result = await electronAPI.getWritingDeskState(workspaceId);
-        if (result?.success) return result;
-      } catch {
-        // The generic state IPC stays available while the main process reloads.
-      }
-    }
-
-    const result = await electronAPI.getWorkspaceUiState?.(workspaceId, 'writing-desk');
-    return { ...result, state: result?.value };
-  }, [electronAPI, workspaceId]);
-
-  const saveWritingDeskState = useCallback(async (nextExpanded, nextSelectedDocId) => {
-    const state = {
-      expandedFolderIds: Object.keys(nextExpanded).filter(id => nextExpanded[id]),
-      lastDocumentId: nextSelectedDocId,
-    };
-
-    if (electronAPI.setWritingDeskState) {
-      try {
-        const result = await electronAPI.setWritingDeskState(workspaceId, state);
-        if (result?.success) return result;
-      } catch {
-        // The generic state IPC stays available while the main process reloads.
-      }
-    }
-
-    return electronAPI.setWorkspaceUiState?.(workspaceId, 'writing-desk', state);
-  }, [electronAPI, workspaceId]);
+  const saveWritingDeskState = useCallback((nextExpanded, nextSelectedDocId) => saveUiState(electronAPI, workspaceId, WRITING_DESK_SCOPE, {
+    expandedFolderIds: Object.keys(nextExpanded).filter(id => nextExpanded[id]),
+    lastDocumentId: nextSelectedDocId,
+  }), [electronAPI, workspaceId]);
 
   const updateNavigationState = useCallback((nextExpanded, nextSelectedDocId, persist = true) => {
     navigationStateRef.current = { expanded: nextExpanded, selectedDocId: nextSelectedDocId };
@@ -173,28 +159,25 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     if (payload?.workspaceId === workspaceId) loadTree();
   }), [electronAPI, workspaceId, loadTree]);
 
+  // Only when the preload missed: the tree and the open chapter then settle once the read lands.
   useEffect(() => {
+    if (initialNavigation) return undefined;
     let active = true;
-    updateNavigationState({}, null, false);
-
-    getWritingDeskState().then(result => {
-      if (!active || !result?.success) return;
-
-      const state = result.state || {};
-      updateNavigationState(
-        Object.fromEntries((state.expandedFolderIds || []).map(id => [id, true])),
-        state.lastDocumentId || null,
-        false
-      );
-    });
-
+    electronAPI.getWorkspaceUiState?.(workspaceId, WRITING_DESK_SCOPE)
+      .then(result => {
+        const navigation = active && result?.success && navigationFromState(result.value);
+        if (navigation) updateNavigationState(navigation.expanded, navigation.selectedDocId, false);
+      })
+      .catch(() => {});
     return () => { active = false; };
-  }, [getWritingDeskState, updateNavigationState]);
+  }, [initialNavigation, electronAPI, workspaceId, updateNavigationState]);
 
   useEffect(() => {
-    if (!selectedDocId) { setCurrentDoc(null); return; }
+    if (!selectedDocId) { setCurrentDoc(null); setDocLoadedFor(null); return; }
     let active = true;
-    electronAPI.getDocument(selectedDocId).then(d => { if (active) setCurrentDoc(d); });
+    electronAPI.getDocument(selectedDocId)
+      .then(d => { if (active) setCurrentDoc(d); })
+      .finally(() => { if (active) setDocLoadedFor(selectedDocId); });
     return () => { active = false; };
   }, [selectedDocId, electronAPI]);
 
@@ -648,13 +631,33 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
     : [];
   const currentParent = menuItem ? (menuItem.type === 'folder' ? menuItem.parentId || null : menuItem.folderId || null) : null;
   const currentFolder = currentDoc?.folderId ? tree.folders.find(f => f.id === currentDoc.folderId) : null;
-  const showSidebar = !sidebarCollapsed || !currentDoc || tourExample;
+  // While the saved chapter loads, nothing stands in for it, so neither the empty state nor a
+  // collapsed chapter list flashes before the editor.
+  const docPending = !!selectedDocId && docLoadedFor !== selectedDocId;
+  const showSidebar = !sidebarCollapsed || (!currentDoc && !docPending) || tourExample;
+  const panelOpen = !tourExample && (rightPanel === 'directives' || (currentDoc && ['notes', 'analyses'].includes(rightPanel)));
+  // Chapters sit on one side and the reading panels on the other; each leaves room for the other.
+  const layout = useLayout();
+  const chaptersSide = panelSide(layout, 'chapters');
+  const panelsSide = chaptersSide === 'left' ? 'right' : 'left';
+  const chapters = usePanelWidth('chapters', { side: chaptersSide, centerMin: CENTER_MIN.writing, reserved: panelOpen ? panelWidth(layout, rightPanel) : 0 });
+  const readingReserved = showSidebar ? chapters.width : 0;
+  const readingWidths = {
+    notes: usePanelWidth('notes', { side: panelsSide, centerMin: CENTER_MIN.writing, reserved: readingReserved }),
+    directives: usePanelWidth('directives', { side: panelsSide, centerMin: CENTER_MIN.writing, reserved: readingReserved }),
+    analyses: usePanelWidth('analyses', { side: panelsSide, centerMin: CENTER_MIN.writing, reserved: readingReserved }),
+  };
+  const readingPanel = id => {
+    const { width, handle } = readingWidths[id];
+    return { width, side: panelsSide, handle };
+  };
   const isEmpty = tree.folders.length === 0 && tree.documents.length === 0;
 
   return (
     <div className="relative flex flex-1 overflow-hidden select-none">
       {showSidebar && (
-        <aside aria-label="Chapters" data-tour="wd-chapters" className="glass-rail flex w-[21rem] shrink-0 flex-col border-r border-border-subtle">
+        <aside aria-label="Chapters" data-tour="wd-chapters" style={{ width: chapters.width }} className={`glass-rail relative flex shrink-0 flex-col border-border-subtle ${chaptersSide === 'right' ? 'order-last border-l' : 'border-r'}`}>
+          <PanelResizeHandle label="Resize Chapters panel" {...chapters.handle} />
           <div className="flex h-[3.25rem] shrink-0 items-center gap-1 pl-4 pr-3">
             <h2 className="text-[0.9375rem] font-bold text-text-primary">Chapters</h2>
             <span className="text-xs tabular-nums text-text-subtle">{tree.documents.length}</span>
@@ -664,6 +667,14 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             <IconButton ref={moreMenuRef} icon={MoreHorizontal} label="More chapter actions" size="sm" tooltipSide="bottom" aria-haspopup="menu" aria-expanded={showMoreMenu} onClick={() => setShowMoreMenu(v => !v)} />
             <Menu anchorRef={moreMenuRef} open={showMoreMenu} onClose={() => setShowMoreMenu(false)} label="Chapter actions" className="w-64">
               <MenuItem icon={FileInput} label="Import" description="Bring in a .docx or .pdf as a new chapter." onSelect={() => { setShowMoreMenu(false); importDocument(); }} />
+              <MenuSeparator />
+              <MenuItem
+                icon={ArrowLeftRight}
+                label={chaptersSide === 'left' ? 'Move chapters to right' : 'Move chapters to left'}
+                description="Notes, Directives and Analyses switch sides."
+                onSelect={() => { setShowMoreMenu(false); setPanelSide('chapters', panelsSide); }}
+              />
+              <MenuItem icon={RotateCcw} label="Reset layout" onSelect={() => { setShowMoreMenu(false); resetWritingDeskLayout(); }} />
               <MenuSeparator />
               <MenuItem icon={Lightbulb} label="Take the tour" description="A one-minute look around the Writing Desk." onSelect={() => { setShowMoreMenu(false); startTour('writing'); }} />
             </Menu>
@@ -725,6 +736,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             jumpRef={editorJumpRef}
             onOpenEntity={onOpenEntity}
             chaptersHidden={sidebarCollapsed}
+            chaptersSide={chaptersSide}
             onToggleChapters={toggleSidebar}
             rightPanel={rightPanel}
             onTogglePanel={togglePanel}
@@ -740,13 +752,15 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
             }}
           />
         </div>
+      ) : docPending ? (
+        <div className="flex-1" />
       ) : (
         <div className="flex flex-1 items-center justify-center p-6">
           <section aria-label="No chapter open" className="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-surface border border-border-subtle px-8 py-8 text-center">
             <span className="flex h-12 w-12 items-center justify-center rounded-card bg-tint/[0.06] text-text-primary"><WritingGlyph className="h-6 w-6" /></span>
             <h2 className="mt-1 text-lg font-bold text-text-primary">{isEmpty ? 'Start your first chapter' : 'Pick a chapter, or start one'}</h2>
             <p className="mb-2 text-sm leading-relaxed text-text-muted">
-              {isEmpty ? 'Write here from scratch, or bring in a manuscript you already have.' : 'Chapters live in the list on the left. You can also bring in a manuscript you already have.'}
+              {isEmpty ? 'Write here from scratch, or bring in a manuscript you already have.' : `Chapters live in the list on the ${chaptersSide}. You can also bring in a manuscript you already have.`}
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               <Button icon={Plus} onClick={() => newDocument(null)}>New chapter</Button>
@@ -758,6 +772,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
 
       {rightPanel === 'directives' && !tourExample && (
         <WritingDirectivesPanel
+          panel={readingPanel('directives')}
           workspaceId={workspaceId}
           workspaceTitle={chat.title}
           electronAPI={electronAPI}
@@ -767,6 +782,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
       )}
       {rightPanel === 'notes' && currentDoc && !tourExample && (
         <WritingNotesPanel
+          panel={readingPanel('notes')}
           documentId={currentDoc.id}
           documentTitle={currentDoc.title}
           workspaceId={workspaceId}
@@ -781,6 +797,7 @@ export default function WritingDeskView({ chat, electronAPI, onOpenEntity }) {
 
       {rightPanel === 'analyses' && currentDoc && !tourExample && (
         <WritingAnalysesPanel
+          panel={readingPanel('analyses')}
           documentId={currentDoc.id}
           documentTitle={currentDoc.title}
           workspaceId={workspaceId}

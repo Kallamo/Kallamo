@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import PanelResizeHandle from './ui/PanelResizeHandle';
 import { Trash2, X, RotateCcw, CornerDownLeft, ChevronDown, ChevronRight, CircleCheck } from 'lucide-react';
 import { AiGlyph, NoteGlyph } from './ui/glyphs';
 import { parseMarkdown } from '../utils/markdown';
@@ -17,7 +18,7 @@ const preview = (body) => {
 };
 
 // Per-chapter review notes, with their excerpt and, for AI notes, provenance.
-export default function WritingNotesPanel({ documentId, documentTitle, workspaceId, electronAPI, onClose, onJump, onChange, refreshKey, expandId }) {
+export default function WritingNotesPanel({ documentId, documentTitle, workspaceId, electronAPI, onClose, onJump, onChange, refreshKey, expandId, panel }) {
   const { settings, showToast } = useApp();
   const tokenDebug = Boolean(settings?.advanced?.tokenDebug);
   const ragDebug = Boolean(settings?.advanced?.ragDebug);
@@ -187,12 +188,13 @@ export default function WritingNotesPanel({ documentId, documentTitle, workspace
   );
 
   return (
-    <aside aria-label="Notes" className="glass-rail flex w-[21rem] shrink-0 flex-col border-l border-border-subtle">
+    <aside aria-label="Notes" style={{ width: panel.width }} className={`glass-rail relative flex shrink-0 flex-col border-border-subtle ${panel.side === 'left' ? 'order-first border-r' : 'border-l'}`}>
+      <PanelResizeHandle label="Resize Notes panel" {...panel.handle} />
       <div className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border-subtle pl-4 pr-2">
         <h2 className="text-sm font-bold text-text-primary">Notes</h2>
         {documentTitle && <span className="min-w-0 truncate text-xs text-text-subtle">on {documentTitle}</span>}
         <span className="flex-1" />
-        <IconButton icon={X} label="Close notes" size="sm" tooltipSide="left" onClick={onClose} />
+        <IconButton icon={X} label="Close notes" size="sm" tooltipSide={panel.side === 'left' ? 'right' : 'left'} onClick={onClose} />
       </div>
 
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 py-3.5 [&>*]:shrink-0">

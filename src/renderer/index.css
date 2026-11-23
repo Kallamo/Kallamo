@@ -741,6 +741,18 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* A reserved gutter keeps the thread centred on the same axis as the composer, overflowing or not. */
 .chat-thread { scrollbar-gutter: stable; }
 
+/* Worldbuild list rows off screen skip style, layout and paint, so a long world opens at the
+   cost of what is visible. A row holding focus renders in full so its ring is not clipped. */
+.wb-list-rows > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1.875rem;
+}
+.wb-list-rows > *:has(:focus-visible) { content-visibility: visible; }
+
+/* The chat under another tab keeps its laid-out state but skips rendering, so coming back
+   costs no layout of the whole thread and keeps the scroll position. */
+.chat-parked { content-visibility: hidden; }
+
 /* Older chat rows skip layout and paint while far off screen. `auto` makes the browser
    remember each row's real height once shown, so scrolling back does not jump. */
 .chat-message-deferred {

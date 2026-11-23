@@ -6,7 +6,7 @@ import {
   Bold, Italic, Underline, Strikethrough, List, ListOrdered, Quote, ChevronDown, ChevronRight, Search, Check,
   Table as TableIcon, Rows3, Trash2, Combine, ArrowUpToLine, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine,
   AlignLeft, AlignCenter, AlignRight, AlignJustify, AlignVerticalSpaceAround, Plus, FileCog, Asterisk, Download,
-  ExternalLink, Unlink, PanelLeftClose, PanelLeftOpen, Pin, Target, X, AlertTriangle, CircleAlert, ScrollText
+  ExternalLink, Unlink, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Target, X, AlertTriangle, CircleAlert, ScrollText
 } from 'lucide-react';
 import {
   AiGlyph, SuggestionPendingGlyph, IndexingGlyph, IndexedGlyph, IndexOutdatedGlyph, IndexErrorGlyph, IndexNeverGlyph,
@@ -680,7 +680,7 @@ export function PanelToggle({ icon: Icon, label, count, active, onClick }) {
 export default function WritingEditor({
   doc, folderName, electronAPI, workspaceId, inFlight = false, inFlightProfileId = null, pending = null, onDispatch, onResolved,
   toolbarMode = 'fixed', smartTypography = true, onDocPatch, onRename, jumpRef, onOpenEntity,
-  chaptersHidden = false, onToggleChapters, rightPanel = '', onTogglePanel, notesCount = 0, directivesCount = 0, analysesCount = 0,
+  chaptersHidden = false, chaptersSide = 'left', onToggleChapters, rightPanel = '', onTogglePanel, notesCount = 0, directivesCount = 0, analysesCount = 0,
   indexingElsewhere = false, indexingProgress = null, onIndexingChange, inWorld = false, onInWorld,
 }) {
   const { showToast, settings } = useApp();
@@ -1193,7 +1193,7 @@ export default function WritingEditor({
 
       {/* Chapter header, always visible (incl. bubble mode) so Export and Page setup never disappear. */}
       <div className="@container ws-clear glass-panel flex h-[3.25rem] shrink-0 items-center gap-1 border-b border-border-subtle pl-3 pr-3">
-        <IconButton icon={chaptersHidden ? PanelLeftOpen : PanelLeftClose} label={chaptersHidden ? 'Show chapters' : 'Hide chapters'} size="sm" tooltipSide="bottom" onClick={onToggleChapters} />
+        <IconButton icon={chaptersSide === 'right' ? (chaptersHidden ? PanelRightOpen : PanelRightClose) : (chaptersHidden ? PanelLeftOpen : PanelLeftClose)} label={chaptersHidden ? 'Show chapters' : 'Hide chapters'} size="sm" tooltipSide="bottom" onClick={onToggleChapters} />
         {folderName && (
           <>
             <span className="ml-1 max-w-[10rem] shrink truncate text-sm text-text-subtle">{folderName}</span>

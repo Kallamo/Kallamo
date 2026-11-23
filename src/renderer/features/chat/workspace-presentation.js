@@ -54,3 +54,30 @@ export async function preloadMessageFrames(api, workspaceId, messages) {
 }
 
 export const getPreloadedFrames = workspaceId => preloadedFrames.get(workspaceId) || null;
+
+// Saved per-workspace layout (expanded places, collapsed sections) read before the workspace
+// shows, so the views mount with it. undefined = not read yet, null = nothing saved.
+const UI_STATE_SCOPES = ['worldbuild-navigation', 'memory-sections', 'writing-desk'];
+const uiStateCache = new Map();
+const uiStateKey = (workspaceId, scope) => `${workspaceId}\u0000${scope}`;
+
+export const getCachedUiState = (workspaceId, scope) => uiStateCache.get(uiStateKey(workspaceId, scope));
+
+export function saveUiState(api, workspaceId, scope, value) {
+  uiStateCache.set(uiStateKey(workspaceId, scope), value);
+  return api.setWorkspaceUiState?.(workspaceId, scope, value)?.catch?.(() => undefined);
+}
+
+// A read that misses the timeout still lands in the cache for the next visit.
+export async function preloadUiState(api, workspaceId, onRead) {
+  const reads = UI_STATE_SCOPES
+    .filter(scope => getCachedUiState(workspaceId, scope) === undefined)
+    .map(scope => Promise.resolve(api.getWorkspaceUiState?.(workspaceId, scope))
+      .then(result => {
+        if (!result?.success) return;
+        uiStateCache.set(uiStateKey(workspaceId, scope), result.value ?? null);
+        onRead?.(scope, result.value ?? null);
+      })
+      .catch(() => undefined));
+  await withTimeout(Promise.all(reads));
+}

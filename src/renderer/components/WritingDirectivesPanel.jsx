@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import PanelResizeHandle from './ui/PanelResizeHandle';
 import { Pin, Trash2, X } from 'lucide-react';
 import Toggle from './ui/Toggle';
 import Button from './ui/Button';
@@ -7,7 +8,7 @@ import IconButton from './ui/IconButton';
 const Kbd = ({ children }) => <kbd className="rounded border border-border-default px-1.5 py-px font-sans text-xs text-text-subtle">{children}</kbd>;
 
 // Workspace-scoped directives, injected verbatim into every invocation and immune to summarization.
-export default function WritingDirectivesPanel({ workspaceId, workspaceTitle, electronAPI, onClose, onChange }) {
+export default function WritingDirectivesPanel({ workspaceId, workspaceTitle, electronAPI, onClose, onChange, panel }) {
   const [directives, setDirectives] = useState([]);
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState(null);
@@ -54,12 +55,13 @@ export default function WritingDirectivesPanel({ workspaceId, workspaceTitle, el
   const onCount = directives.filter(d => d.enabled !== 0).length;
 
   return (
-    <aside aria-label="Directives" className="glass-rail flex w-[21rem] shrink-0 flex-col border-l border-border-subtle">
+    <aside aria-label="Directives" style={{ width: panel.width }} className={`glass-rail relative flex shrink-0 flex-col border-border-subtle ${panel.side === 'left' ? 'order-first border-r' : 'border-l'}`}>
+      <PanelResizeHandle label="Resize Directives panel" {...panel.handle} />
       <div className="flex h-[3.25rem] shrink-0 items-center gap-2 border-b border-border-subtle pl-4 pr-2">
         <h2 className="text-sm font-bold text-text-primary">Directives</h2>
         {workspaceTitle && <span className="min-w-0 truncate text-xs text-text-subtle">in {workspaceTitle}</span>}
         <span className="flex-1" />
-        <IconButton icon={X} label="Close directives" size="sm" tooltipSide="left" onClick={onClose} />
+        <IconButton icon={X} label="Close directives" size="sm" tooltipSide={panel.side === 'left' ? 'right' : 'left'} onClick={onClose} />
       </div>
 
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 py-3.5 [&>*]:shrink-0">

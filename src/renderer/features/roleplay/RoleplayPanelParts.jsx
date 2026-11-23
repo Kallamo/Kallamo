@@ -1,7 +1,7 @@
-import { useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import {
   Backpack, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clapperboard, Gamepad2, HandHelping, Image as ImageIcon, Loader2, MapPin,
-  MoreHorizontal, PanelRightOpen, Pencil, Search, Swords, Trash2, X
+  MoreHorizontal, PanelLeftOpen, PanelRightOpen, Pencil, Search, Swords, Trash2, X
 } from 'lucide-react';
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../components/ui/Menu';
 import Popover from '../../components/ui/Popover';
@@ -11,6 +11,7 @@ import { DAYLIGHT, daylightPhase } from './daylight';
 import Tooltip from '../../components/ui/Tooltip';
 import { PortraitContext, usePortraitOf } from '../worldbuild/portraits';
 import FramedImage from '../worldbuild/FramedImage';
+import { BlockHeader, useBlockHeader } from './RoleplayLayoutBlock';
 
 export const PRESENCE = {
   participating: { label: 'Participating', icon: Swords, hint: 'Acts and speaks in the scene.' },
@@ -66,7 +67,9 @@ export function Avatar({ entity, player = false, size = 'md' }) {
 }
 
 /** The collapsed panel: a slim rail that keeps the scene in view beside the chat. */
-export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, progress, locationName, locationType, inventoryCount, onOpen }) {
+export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, progress, locationName, locationType, inventoryCount, onOpen, side = 'right' }) {
+  const tipSide = side === 'right' ? 'left' : 'right';
+  const OpenIcon = side === 'right' ? PanelRightOpen : PanelLeftOpen;
   const portraits = useContext(PortraitContext);
   const visible = others.slice(0, COLLAPSED_ACTOR_LIMIT);
   const hidden = others.slice(COLLAPSED_ACTOR_LIMIT);
@@ -114,20 +117,20 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
     );
   };
   return (
-    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full w-16 shrink-0 flex-col items-center gap-1 border-l border-border-subtle pb-3 pt-[3.25rem]">
-      <Tooltip side="left" content="Open roleplay panel">
+    <aside aria-label="Roleplay" className={`glass-rail glass-dense relative z-20 flex h-full w-16 shrink-0 flex-col items-center gap-1 ${side === 'right' ? 'border-l' : 'order-first border-r'} border-border-subtle pb-3 pt-[3.25rem]`}>
+      <Tooltip side={tipSide} content="Open roleplay panel">
         <button type="button" onClick={() => onOpen()} aria-label="Open roleplay panel" className={`${railButton} h-10 w-10 text-text-muted hover:text-text-primary`}>
-          <PanelRightOpen aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
+          <OpenIcon aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
         </button>
       </Tooltip>
-      <Tooltip side="left" content={<span className="font-medium text-text-primary">Roleplay · {statusLabel}</span>}>
+      <Tooltip side={tipSide} content={<span className="font-medium text-text-primary">Roleplay · {statusLabel}</span>}>
         <span tabIndex={0} className="flex h-6 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <RoleplayStatus processing={processing} pendingCount={pendingCount} /><span className="sr-only">{statusLabel}</span>
         </span>
       </Tooltip>
       {separator}
       <Tooltip
-        side="left"
+        side={tipSide}
         content={(
           <span className="flex items-start gap-2.5">
             <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${phase.tile}`}><PhaseIcon aria-hidden="true" className="h-4 w-4" /></span>
@@ -155,21 +158,21 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
       {separator}
       <div className="flex flex-col items-center gap-1.5">
         {player && (
-          <Tooltip side="left" className={tipClass(player)} content={actorTip(player, 'playing')}>
+          <Tooltip side={tipSide} className={tipClass(player)} content={actorTip(player, 'playing')}>
             <button type="button" onClick={() => onOpen('scene')} aria-label={`${player.canonicalName}, playing`} className={`${railButton} p-0.5`}>
               <Avatar entity={player} player size="sm" />
             </button>
           </Tooltip>
         )}
         {visible.map(entity => (
-          <Tooltip key={entity.id} side="left" className={tipClass(entity)} content={actorTip(entity, presenceOf(entity.id))}>
+          <Tooltip key={entity.id} side={tipSide} className={tipClass(entity)} content={actorTip(entity, presenceOf(entity.id))}>
             <button type="button" onClick={() => onOpen('scene')} aria-label={`${entity.canonicalName}, ${PRESENCE[presenceOf(entity.id)]?.label}`} className={`${railButton} p-0.5`}>
               <Avatar entity={entity} size="sm" />
             </button>
           </Tooltip>
         ))}
         {hidden.length > 0 && (
-          <Tooltip side="left" content={<span className="block space-y-0.5">{hidden.map(entity => <span key={entity.id} className="block text-text-secondary">{entity.canonicalName}</span>)}</span>}>
+          <Tooltip side={tipSide} content={<span className="block space-y-0.5">{hidden.map(entity => <span key={entity.id} className="block text-text-secondary">{entity.canonicalName}</span>)}</span>}>
             <button type="button" onClick={() => onOpen('scene')} aria-label={`${hidden.length} more in scene`} className={`${railButton} h-9 w-9 border border-border-default text-xs font-semibold text-text-secondary`}>
               +{hidden.length}
             </button>
@@ -178,7 +181,7 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
       </div>
       {separator}
       <Tooltip
-        side="left"
+        side={tipSide}
         content={(
           <span className="flex items-center gap-2.5">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-entity-location/40 bg-entity-location/15 text-entity-location"><MapPin aria-hidden="true" className="h-4 w-4" /></span>
@@ -194,7 +197,7 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
         </button>
       </Tooltip>
       <span className="flex-1" />
-      <Tooltip side="left" content={<span><span className="font-semibold text-text-primary">Inventory</span> · {inventoryCount} {inventoryCount === 1 ? 'item' : 'items'}</span>}>
+      <Tooltip side={tipSide} content={<span><span className="font-semibold text-text-primary">Inventory</span> · {inventoryCount} {inventoryCount === 1 ? 'item' : 'items'}</span>}>
         <button type="button" onClick={() => onOpen('inventory')} aria-label={`Inventory, ${inventoryCount} items`} className={`${railButton} relative h-10 w-10 text-text-muted hover:text-text-primary`}>
           <Backpack aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
           {inventoryCount > 0 && <span className="absolute right-0 top-0.5 flex h-4 min-w-[1.125rem] items-center justify-center rounded-full bg-surface-hover px-1 text-[0.625rem] font-semibold text-text-secondary">{inventoryCount}</span>}
@@ -260,6 +263,8 @@ export function PanelTabs({ tab, onChange, inventoryCount }) {
 }
 
 export function SectionHead({ title, children }) {
+  const block = useBlockHeader();
+  if (block) return <BlockHeader block={block} title={title} />;
   return (
     <div className="mb-2 flex min-h-7 items-center justify-between gap-2 px-1">
       <h3 className="eyebrow">{title}</h3>
@@ -814,7 +819,10 @@ function CarriedRow({ item, onToggle, onTransfer }) {
   );
 }
 
-export function InventoryTab({ player, inventory, onToggle, onTransfer }) {
+const INVENTORY_BLOCKS = ['equipped', 'carried'];
+
+// `renderBlock` places each section in the rail's saved order and edit mode.
+export function InventoryTab({ player, inventory, onToggle, onTransfer, order = INVENTORY_BLOCKS, renderBlock = (id, node) => node }) {
   const [query, setQuery] = useState('');
   const equipped = inventory.filter(item => item.equipped);
   const carried = inventory.filter(item => !item.equipped);
@@ -832,27 +840,30 @@ export function InventoryTab({ player, inventory, onToggle, onTransfer }) {
           <span className="block text-xs text-accent/90">{player ? `Carrying ${totalCount} ${totalCount === 1 ? 'item' : 'items'}` : 'Choose one in Roleplay settings.'}</span>
         </span>
       </div>
-      <section>
-        <SectionHead title="Equipped"><span className="text-xs text-text-subtle tabular-nums">{equipped.length}</span></SectionHead>
-        {equipped.length
-          ? <EquippedCarousel items={equipped} onToggle={onToggle} onTransfer={onTransfer} />
-          : <p className="rounded-card border border-dashed border-border-subtle px-3 py-4 text-center text-xs text-text-disabled">Nothing is equipped.</p>}
-      </section>
-      <section>
-        <SectionHead title="Carried"><span className="text-xs text-text-subtle tabular-nums">{carried.length}</span></SectionHead>
-        {carried.length >= INVENTORY_FILTER_FROM && (
-          <label className="mb-1.5 flex h-9 items-center gap-2 rounded-control border border-border-subtle bg-surface-input/50 px-3 text-text-subtle focus-within:border-accent/50">
-            <Search aria-hidden="true" className="h-4 w-4 shrink-0" />
-            <span className="sr-only">Filter items</span>
-            <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Filter items" className="h-full min-w-0 flex-1 bg-transparent text-[0.8125rem] text-text-primary outline-none placeholder:text-text-subtle" />
-          </label>
-        )}
-        <div>
-          {visibleCarried.map(item => <CarriedRow key={item.itemId} item={item} onToggle={onToggle} onTransfer={onTransfer} />)}
-          {!carried.length && <p className="rounded-card border border-dashed border-border-subtle px-3 py-4 text-center text-xs text-text-disabled">This character carries nothing else.</p>}
-          {carried.length > 0 && !visibleCarried.length && <p className="px-3 py-4 text-center text-xs text-text-disabled">No items match.</p>}
-        </div>
-      </section>
+      {order.map(id => <Fragment key={id}>{renderBlock(id, id === 'equipped' ? (
+        <section>
+          <SectionHead title="Equipped"><span className="text-xs text-text-subtle tabular-nums">{equipped.length}</span></SectionHead>
+          {equipped.length
+            ? <EquippedCarousel items={equipped} onToggle={onToggle} onTransfer={onTransfer} />
+            : <p className="rounded-card border border-dashed border-border-subtle px-3 py-4 text-center text-xs text-text-disabled">Nothing is equipped.</p>}
+        </section>
+      ) : (
+        <section>
+          <SectionHead title="Carried"><span className="text-xs text-text-subtle tabular-nums">{carried.length}</span></SectionHead>
+          {carried.length >= INVENTORY_FILTER_FROM && (
+            <label className="mb-1.5 flex h-9 items-center gap-2 rounded-control border border-border-subtle bg-surface-input/50 px-3 text-text-subtle focus-within:border-accent/50">
+              <Search aria-hidden="true" className="h-4 w-4 shrink-0" />
+              <span className="sr-only">Filter items</span>
+              <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Filter items" className="h-full min-w-0 flex-1 bg-transparent text-[0.8125rem] text-text-primary outline-none placeholder:text-text-subtle" />
+            </label>
+          )}
+          <div>
+            {visibleCarried.map(item => <CarriedRow key={item.itemId} item={item} onToggle={onToggle} onTransfer={onTransfer} />)}
+            {!carried.length && <p className="rounded-card border border-dashed border-border-subtle px-3 py-4 text-center text-xs text-text-disabled">This character carries nothing else.</p>}
+            {carried.length > 0 && !visibleCarried.length && <p className="px-3 py-4 text-center text-xs text-text-disabled">No items match.</p>}
+          </div>
+        </section>
+      ), true)}</Fragment>)}
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createHistoryEdit } from './generation-target';
 import { reconcileMessages } from './message-reconcile';
-import { preloadMessageFrames, preloadPresentation } from './workspace-presentation';
+import { preloadMessageFrames, preloadPresentation, preloadUiState } from './workspace-presentation';
+import { adoptLegacyUiState } from '../layout/layout-store';
 import { createStore } from '../../utils/store';
 import { perfStart } from '../../utils/perf';
 import { ChatWorkspaceView } from '../../views';
@@ -189,6 +190,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     const [messages] = await Promise.all([
       loadLatestChatMessages(chatId),
       preloadPresentation(api, chatId),
+      preloadUiState(api, chatId, adoptLegacyUiState),
       ChatWorkspaceView.preload().catch(() => undefined)
     ]);
     await preloadMessageFrames(api, chatId, messages);
@@ -388,6 +390,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       const updatedMessage = {
         ...message,
         id: `msg_${crypto.randomUUID()}`,
+        debugNoticeFrom: message.id,
         content: selected.content,
         aiName: selected.aiName,
         aiColor: selected.aiColor,

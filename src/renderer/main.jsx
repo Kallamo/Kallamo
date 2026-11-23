@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { loadLayout } from './features/layout/layout-store';
 
 // Self-hosted fonts (bundled by Vite, served from the app origin instead of Google's CDN)
 import '@fontsource-variable/inter';
@@ -12,8 +13,11 @@ import '@fontsource-variable/jetbrains-mono/wght-italic.css';
 
 import './index.css';
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+// The window stays hidden until the app is ready, so waiting for the layout costs no blank frame.
+loadLayout(window.electronAPI).finally(() => {
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+});

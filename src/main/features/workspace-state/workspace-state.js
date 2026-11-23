@@ -48,7 +48,43 @@ function setWritingDeskState(workspaceId, state) {
   setWorkspaceUiState(workspaceId, WRITING_DESK_SCOPE, normalizeWritingDeskState(state));
 }
 
+// The app-wide panel layout sits with the other global settings; the renderer normalizes it.
+const UI_LAYOUT_KEY = 'ui-layout';
+
+function getUiLayout() {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(UI_LAYOUT_KEY);
+  if (!row) return null;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return null;
+  }
+}
+
+function setUiLayout(value) {
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(UI_LAYOUT_KEY, JSON.stringify(value || {}));
+}
+
 function registerWorkspaceStateIpc(ipcMain) {
+  ipcMain.handle('get-ui-layout', async () => {
+    try {
+      return { success: true, value: getUiLayout() };
+    } catch (error) {
+      console.error('[get-ui-layout] failed:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('set-ui-layout', async (event, value) => {
+    try {
+      setUiLayout(value);
+      return { success: true };
+    } catch (error) {
+      console.error('[set-ui-layout] failed:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('get-workspace-ui-state', async (event, { workspaceId, scope } = {}) => {
     try {
       if (!workspaceId || !scope) return { success: false, error: 'workspaceId and scope are required' };

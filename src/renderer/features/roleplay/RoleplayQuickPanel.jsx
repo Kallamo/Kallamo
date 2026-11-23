@@ -1,9 +1,20 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Backpack, Check, ChevronRight, Clock3, Flag, PanelRightClose, Plus, Settings2, X } from 'lucide-react';
+import {
+  ArrowLeftRight, Backpack, Check, ChevronRight, Clock3, Eye, EyeOff, Flag, Move, PanelLeftClose, PanelRightClose,
+  PanelsLeftBottom, PanelsRightBottom, Plus, RotateCcw, Settings2, X
+} from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 import IconButton from '../../components/ui/IconButton';
+import PanelResizeHandle from '../../components/ui/PanelResizeHandle';
+import { Menu, MenuItem, MenuSeparator } from '../../components/ui/Menu';
+import { CENTER_MIN, ROLEPLAY_BLOCKS, blocksOfTab, panelSide, roleplayBlock } from '../layout/layout-model';
+import {
+  moveBlock, resetRoleplayBlocks, resetRoleplayLayout, setBlock, setPanelSide, stepBlock, useLayout
+} from '../layout/layout-store';
+import { usePanelWidth } from '../layout/usePanelWidth';
+import { BLOCK_DRAG_TYPE, LayoutBlock } from './RoleplayLayoutBlock';
 import { locationPresenceOptions, meta } from '../worldbuild/worldbuildConfig';
 import { locationSizeLabel } from '../../../shared/location-sizes';
 import WorldDateInput from '../worldbuild/WorldDateInput';
@@ -25,6 +36,8 @@ const EMPTY_SCENE = {
 };
 
 const RECENT_TURN_LIMIT = 5;
+const blockLabel = id => ROLEPLAY_BLOCKS.find(block => block.id === id)?.label || id;
+const blockTab = id => ROLEPLAY_BLOCKS.find(block => block.id === id)?.tab;
 const EMPTY_VITALS = { resources: new Map(), progress: null };
 
 function RoleplayQuickPanel({
@@ -67,6 +80,13 @@ function RoleplayQuickPanel({
   const backgroundInputRef = useRef(null);
   const refreshFrameRef = useRef(null);
   const wasVisibleRef = useRef(visible);
+  const layout = useLayout();
+  const side = panelSide(layout, 'roleplay');
+  const { width: panelWidth, handle: resizeHandle } = usePanelWidth('roleplay', { side, centerMin: CENTER_MIN.chat });
+  const [editingLayout, setEditingLayout] = useState(false);
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const layoutMenuRef = useRef(null);
+  const [blockDrag, setBlockDrag] = useState(null); // { id, overId, after } while a block is dragged
 
   const load = useCallback(async () => {
     const configurationPromise = api.getRoleplayConfiguration(workspaceId);
@@ -417,6 +437,7 @@ function RoleplayQuickPanel({
         progress={vitals.progress}
         inventoryCount={inventory.length}
         onOpen={openPanel}
+        side={side}
       />
     );
   }
@@ -439,8 +460,70 @@ function RoleplayQuickPanel({
   );
   const visibleTurns = showAllTurns ? recentTurns : recentTurns.slice(0, RECENT_TURN_LIMIT);
 
+  // A drop lands where the line shows, wherever the pointer is released inside the panel: over
+  // a gap or over the dragged block itself, the last line shown still counts.
+  const acceptBlockDrop = event => {
+    if (!blockDrag) return false;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    return true;
+  };
+  const dropBlock = event => {
+    if (!blockDrag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (blockDrag.overId && blockDrag.overId !== blockDrag.id) moveBlock(blockDrag.id, blockDrag.overId, blockDrag.after);
+    setBlockDrag(null);
+  };
+  const dragHandlers = id => ({
+    onDragStart: event => {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData(BLOCK_DRAG_TYPE, id);
+      setBlockDrag({ id, overId: null, after: false });
+    },
+    onDragOver: event => {
+      if (!blockDrag || blockTab(blockDrag.id) !== blockTab(id) || !acceptBlockDrop(event)) return;
+      if (id === blockDrag.id) return;
+      const box = event.currentTarget.getBoundingClientRect();
+      const after = event.clientY > box.top + box.height / 2;
+      if (blockDrag.overId !== id || blockDrag.after !== after) setBlockDrag({ ...blockDrag, overId: id, after });
+    },
+    onDrop: dropBlock,
+    onDragEnd: () => setBlockDrag(null),
+  });
+  // Places one block of a tab: its saved order, collapse and visibility, and the edit controls.
+  const blockRenderer = tabId => {
+    const visibleIds = blocksOfTab(layout, tabId).filter(block => !block.hidden).map(block => block.id);
+    return (id, node, titled = false) => {
+      if (!node && !editingLayout) return null;
+      const saved = roleplayBlock(layout, id);
+      const index = visibleIds.indexOf(id);
+      const block = {
+        ...saved,
+        label: blockLabel(id),
+        editing: editingLayout,
+        canMoveUp: index > 0,
+        canMoveDown: index >= 0 && index < visibleIds.length - 1,
+        onToggle: () => setBlock(id, { collapsed: !saved.collapsed }),
+        onStep: step => stepBlock(id, step),
+        onHide: () => setBlock(id, { hidden: true }),
+      };
+      const dropEdge = blockDrag?.overId === id && blockDrag.id !== id ? (blockDrag.after ? 'after' : 'before') : null;
+      return (
+        <LayoutBlock key={id} block={block} titled={titled} dropEdge={dropEdge} dragging={blockDrag?.id === id} dragHandlers={dragHandlers(id)}>
+          {node}
+        </LayoutBlock>
+      );
+    };
+  };
+  const sceneBlock = blockRenderer('scene');
+  const clockHidden = roleplayBlock(layout, 'clock').hidden;
+  const hiddenBlocks = layout.roleplayBlocks.filter(block => block.hidden && [null, tab].includes(blockTab(block.id)));
+  const CollapseIcon = side === 'left' ? PanelLeftClose : PanelRightClose;
+
   return (
-    <aside aria-label="Roleplay" className="glass-rail glass-dense relative z-20 flex h-full pt-10 w-[clamp(18rem,30vw,22.5rem)] shrink-0 flex-col border-l border-border-subtle shadow-2xl 2xl:w-[23.5rem]">
+    <aside aria-label="Roleplay" style={{ width: panelWidth }} className={`glass-rail glass-dense relative z-20 flex h-full shrink-0 flex-col border-border-subtle pt-10 shadow-2xl ${side === 'left' ? 'order-first border-r' : 'border-l'}`}>
+      <PanelResizeHandle label="Resize Roleplay panel" {...resizeHandle} />
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle pl-4 pr-3">
         <div className="flex min-w-0 items-center gap-2.5 text-accent">
           <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />
@@ -453,7 +536,37 @@ function RoleplayQuickPanel({
         </div>
         <div className="flex items-center gap-0.5">
           <IconButton icon={Settings2} label="Roleplay settings" size="sm" onClick={openConfiguration} />
-          <IconButton icon={PanelRightClose} label="Collapse panel" size="sm" onClick={() => savePanelState(true)} />
+          <IconButton
+            ref={layoutMenuRef}
+            icon={side === 'left' ? PanelsLeftBottom : PanelsRightBottom}
+            label="Layout"
+            size="sm"
+            tone={editingLayout ? 'accent' : 'default'}
+            aria-haspopup="menu"
+            aria-expanded={layoutMenuOpen}
+            onClick={() => setLayoutMenuOpen(open => !open)}
+          />
+          <Menu anchorRef={layoutMenuRef} open={layoutMenuOpen} onClose={() => setLayoutMenuOpen(false)} label="Layout" align={side === 'left' ? 'left' : 'right'}>
+            <MenuItem
+              icon={Move}
+              label={editingLayout ? 'Stop editing' : 'Edit layout'}
+              description={editingLayout ? undefined : 'Reorder, collapse or hide blocks.'}
+              onSelect={() => { setLayoutMenuOpen(false); setEditingLayout(value => !value); }}
+            />
+            <MenuItem
+              icon={ArrowLeftRight}
+              label={side === 'left' ? 'Move to right' : 'Move to left'}
+              onSelect={() => { setLayoutMenuOpen(false); setPanelSide('roleplay', side === 'left' ? 'right' : 'left'); }}
+            />
+            <MenuSeparator />
+            <MenuItem
+              icon={RotateCcw}
+              label="Reset layout"
+              description="Width, side and blocks go back to default."
+              onSelect={() => { setLayoutMenuOpen(false); resetRoleplayLayout(); }}
+            />
+          </Menu>
+          <IconButton icon={CollapseIcon} label="Collapse panel" size="sm" onClick={() => savePanelState(true)} />
         </div>
       </header>
 
@@ -465,98 +578,138 @@ function RoleplayQuickPanel({
             <Button variant="primary" size="sm" icon={Check} onClick={saveClock}>Save time</Button>
           </div>
         </section>
-      ) : (
-        <PanelClock calendar={calendar} clock={clock} onEdit={() => setEditingClock(true)} />
+      ) : !clockHidden && (
+        <div className="relative shrink-0">
+          <PanelClock calendar={calendar} clock={clock} onEdit={() => setEditingClock(true)} />
+          {editingLayout && (
+            <IconButton icon={EyeOff} label="Hide clock" size="sm" onClick={() => setBlock('clock', { hidden: true })} className="absolute right-2 top-1/2 -translate-y-1/2 bg-surface-raised/85" />
+          )}
+        </div>
       )}
 
       <PanelTabs tab={tab} onChange={setTab} inventoryCount={inventory.length} />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-2 custom-scrollbar">
+      {/* Floats over the panel's foot, so entering edit mode moves nothing; the list gains room
+          at its end instead, so its last block can scroll clear of the bar. */}
+      {editingLayout && (
+        <div className="absolute inset-x-0 bottom-0 z-30 border-t border-accent/25 bg-surface-raised shadow-overlay">
+          <div className="flex items-center justify-between gap-2 bg-accent/[0.08] py-2.5 pl-4 pr-3">
+            <span className="text-xs font-medium text-accent">Drag blocks or use their menu</span>
+            <span className="flex items-center gap-1.5">
+              <Button variant="subtle" size="sm" onClick={resetRoleplayBlocks}>Reset</Button>
+              <Button variant="primary" size="sm" onClick={() => setEditingLayout(false)}>Done</Button>
+            </span>
+          </div>
+        </div>
+      )}
+
+      <div onDragOver={acceptBlockDrop} onDrop={dropBlock} className={`min-h-0 flex-1 overflow-y-auto px-3 pt-2 custom-scrollbar ${editingLayout ? 'pb-16' : 'pb-4'}`}>
         {tab === 'scene' ? (
-          <div className="space-y-5">
-            <section>
-              <LocationHero
-                locationId={scene.locationId}
-                locationName={names.get(scene.locationId)}
-                locationOptions={locationOptions}
-                onChangeLocation={locationId => saveScene({ locationId: locationId || null })}
-                background={background}
-                inheritedFrom={background?.inherited ? (names.get(background.sourceLocationId) || 'a parent location') : null}
-                onChooseBackground={() => backgroundInputRef.current?.click()}
-                onRemoveBackground={removeBackground}
-              />
-              <input ref={backgroundInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={uploadBackground} />
-            </section>
-
-            <section>
-              <SectionHead title="In scene">
-                <span className="flex items-center gap-1">
-                  <Button variant="subtle" size="sm" icon={Flag} loading={closingScene} onClick={closeScene} data-tooltip="End the scene here and weigh what it earned: experience, attributes and skills.">End scene</Button>
-                  <Button variant="subtle" size="sm" icon={Plus} aria-expanded={addingCharacter} onClick={() => setAddingCharacter(value => !value)}>Add</Button>
-                </span>
-              </SectionHead>
-              {addingCharacter && (
-                <div className="mb-2 animate-rise-in">
-                  <SearchableSelect
-                    value=""
-                    onChange={addCharacter}
-                    onClose={() => setAddingCharacter(false)}
-                    options={actorOptions.map(option => presentIds.has(option.id) || option.id === settings.playerEntityId
-                      ? { ...option, disabled: true, disabledLabel: 'In scene' }
-                      : option)}
-                    placeholder="Add a character"
-                    searchPlaceholder="Search characters"
-                    ariaLabel="Add a character to the scene"
-                    searchInTrigger
-                    autoOpen
+          <div className={editingLayout ? 'space-y-3' : 'space-y-5'}>
+            {blocksOfTab(layout, 'scene').map(({ id }) => sceneBlock(id, {
+              location: (
+                <section>
+                  <LocationHero
+                    locationId={scene.locationId}
+                    locationName={names.get(scene.locationId)}
+                    locationOptions={locationOptions}
+                    onChangeLocation={locationId => saveScene({ locationId: locationId || null })}
+                    background={background}
+                    inheritedFrom={background?.inherited ? (names.get(background.sourceLocationId) || 'a parent location') : null}
+                    onChooseBackground={() => backgroundInputRef.current?.click()}
+                    onRemoveBackground={removeBackground}
                   />
-                </div>
-              )}
-              {player
-                ? (
-                  <>
-                    <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} resources={vitals.resources.get(player.id) || []} progress={vitals.progress?.entityId === player.id ? vitals.progress : null} />
-                    {conditions.enabled && <div className="px-1 pb-1 pt-2">{conditionChips(player.id)}</div>}
-                  </>
-                )
-                : <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">Choose who you play in Roleplay settings.</p>}
-              {participants.length > 0 && <CastGroup presence="participating" count={participants.length}>{participants.map(castRow)}</CastGroup>}
-              {nearby.length > 0 && <CastGroup presence="nearby" count={nearby.length}>{nearby.map(castRow)}</CastGroup>}
-              {!otherCharacters.length && player && <p className="px-2 pt-3 text-center text-xs text-text-disabled">No one else is here.</p>}
-            </section>
-
-            {recentTurns.length > 0 && (
-              <section>
-                <SectionHead title="Recent changes" />
-                <ol className="relative">
-                  {visibleTurns.map((turn, index) => (
-                    <RecentTurn
-                      key={turn.key}
-                      turn={turn}
-                      last={index === visibleTurns.length - 1}
-                      names={names}
-                      definitions={definitions}
-                      open={expandedTurnId === turn.key}
-                      onToggle={() => setExpandedTurnId(current => current === turn.key ? null : turn.key)}
-                      onResolve={resolveRecentChange}
-                      resolvingChangeId={resolvingChangeId}
-                    />
-                  ))}
-                </ol>
-                {recentTurns.length > RECENT_TURN_LIMIT && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllTurns(value => !value)}
-                    className="ml-8 mt-1.5 rounded-md px-1 text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                  >
-                    {showAllTurns ? 'Show fewer' : 'Show all turns'}
-                  </button>
-                )}
-              </section>
-            )}
+                  <input ref={backgroundInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={uploadBackground} />
+                </section>
+              ),
+              'in-scene': (
+                <section>
+                  <SectionHead title="In scene">
+                    <span className="flex items-center gap-1">
+                      <Button variant="subtle" size="sm" icon={Flag} loading={closingScene} onClick={closeScene} data-tooltip="End the scene here and weigh what it earned: experience, attributes and skills.">End scene</Button>
+                      <Button variant="subtle" size="sm" icon={Plus} aria-expanded={addingCharacter} onClick={() => setAddingCharacter(value => !value)}>Add</Button>
+                    </span>
+                  </SectionHead>
+                  {addingCharacter && (
+                    <div className="mb-2 animate-rise-in">
+                      <SearchableSelect
+                        value=""
+                        onChange={addCharacter}
+                        onClose={() => setAddingCharacter(false)}
+                        options={actorOptions.map(option => presentIds.has(option.id) || option.id === settings.playerEntityId
+                          ? { ...option, disabled: true, disabledLabel: 'In scene' }
+                          : option)}
+                        placeholder="Add a character"
+                        searchPlaceholder="Search characters"
+                        ariaLabel="Add a character to the scene"
+                        searchInTrigger
+                        autoOpen
+                      />
+                    </div>
+                  )}
+                  {player
+                    ? (
+                      <>
+                        <PlayerCard entity={player} typeLabel={typeLabels.get(player.type)} resources={vitals.resources.get(player.id) || []} progress={vitals.progress?.entityId === player.id ? vitals.progress : null} />
+                        {conditions.enabled && <div className="px-1 pb-1 pt-2">{conditionChips(player.id)}</div>}
+                      </>
+                    )
+                    : <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">Choose who you play in Roleplay settings.</p>}
+                  {participants.length > 0 && <CastGroup presence="participating" count={participants.length}>{participants.map(castRow)}</CastGroup>}
+                  {nearby.length > 0 && <CastGroup presence="nearby" count={nearby.length}>{nearby.map(castRow)}</CastGroup>}
+                  {!otherCharacters.length && player && <p className="px-2 pt-3 text-center text-xs text-text-disabled">No one else is here.</p>}
+                </section>
+              ),
+              'recent-changes': (recentTurns.length > 0 || editingLayout) && (
+                <section>
+                  <SectionHead title="Recent changes" />
+                  <ol className="relative">
+                    {visibleTurns.map((turn, index) => (
+                      <RecentTurn
+                        key={turn.key}
+                        turn={turn}
+                        last={index === visibleTurns.length - 1}
+                        names={names}
+                        definitions={definitions}
+                        open={expandedTurnId === turn.key}
+                        onToggle={() => setExpandedTurnId(current => current === turn.key ? null : turn.key)}
+                        onResolve={resolveRecentChange}
+                        resolvingChangeId={resolvingChangeId}
+                      />
+                    ))}
+                  </ol>
+                  {recentTurns.length > RECENT_TURN_LIMIT && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllTurns(value => !value)}
+                      className="ml-8 mt-1.5 rounded-md px-1 text-xs font-semibold text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      {showAllTurns ? 'Show fewer' : 'Show all turns'}
+                    </button>
+                  )}
+                </section>
+              ),
+            }[id], id !== 'location'))}
           </div>
         ) : (
-          <InventoryTab player={player} inventory={inventory} onToggle={toggleEquipped} onTransfer={setTransfer} />
+          <InventoryTab
+            player={player}
+            inventory={inventory}
+            onToggle={toggleEquipped}
+            onTransfer={setTransfer}
+            order={blocksOfTab(layout, 'inventory').map(block => block.id)}
+            renderBlock={blockRenderer('inventory')}
+          />
+        )}
+        {editingLayout && hiddenBlocks.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-border-subtle pt-3">
+            <span className="mr-1 text-xs text-text-subtle">Hidden</span>
+            {hiddenBlocks.map(block => (
+              <Button key={block.id} variant="ghost" size="sm" icon={Eye} aria-label={`Show ${blockLabel(block.id)}`} onClick={() => setBlock(block.id, { hidden: false })}>
+                {blockLabel(block.id)}
+              </Button>
+            ))}
+          </div>
         )}
       </div>
 

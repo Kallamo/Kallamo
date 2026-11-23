@@ -35,6 +35,10 @@ import { useFirstVisitTour, useTour } from '../features/onboarding/GuidedTour';
 import { showsTourExample, tourStage } from '../features/onboarding/tours';
 import ExampleChip from '../features/onboarding/ExampleChip';
 import LIGHTHOUSE from '../../shared/lighthouse-sample.json';
+import { getCachedUiState, saveUiState } from '../features/chat/workspace-presentation';
+import { usePanelWidth } from '../features/layout/usePanelWidth';
+import { CENTER_MIN } from '../features/layout/layout-model';
+import PanelResizeHandle from './ui/PanelResizeHandle';
 
 const noop = () => {};
 const roughTokens = text => Math.ceil(String(text).length / 4);
@@ -716,10 +720,11 @@ export default function ChatMemoryView({
   const chatProfiles = writingProfiles.filter(p => activeProfileIds.includes(p.id));
 
   // Collapsed sections are remembered per chat, next to the rest of its layout state.
-  const [collapsedSections, setCollapsedSections] = useState({});
+  const { width: railWidth, handle: railHandle } = usePanelWidth('memory', { side: 'right', centerMin: CENTER_MIN.memory });
+  const [collapsedSections, setCollapsedSections] = useState(() => getCachedUiState(chat?.id, 'memory-sections')?.collapsed || {});
   useEffect(() => {
-    setCollapsedSections({});
-    if (!chat?.id || !electronAPI?.getWorkspaceUiState) return;
+    // Only when the preload missed: the sections then settle once the read lands.
+    if (!chat?.id || !electronAPI?.getWorkspaceUiState || getCachedUiState(chat.id, 'memory-sections') !== undefined) return;
     let active = true;
     electronAPI.getWorkspaceUiState(chat.id, 'memory-sections')
       .then(state => { if (active && state?.value?.collapsed) setCollapsedSections(state.value.collapsed); })
@@ -729,7 +734,7 @@ export default function ChatMemoryView({
   const toggleSection = (mode, open) => {
     const next = { ...collapsedSections, [mode]: !open };
     setCollapsedSections(next);
-    electronAPI?.setWorkspaceUiState?.(chat.id, 'memory-sections', { collapsed: next });
+    if (electronAPI) saveUiState(electronAPI, chat.id, 'memory-sections', { collapsed: next });
   };
 
   const handleToggleProfileScope = async (block, profileId) => {
@@ -1564,7 +1569,9 @@ export default function ChatMemoryView({
         />
       </div>
 
-      <aside className="glass-rail w-full md:w-80 shrink-0 border-l border-border-subtle flex flex-col gap-8 overflow-y-auto custom-scrollbar px-6 py-7">
+      <div style={{ '--memory-rail-width': `${railWidth}px` }} className="relative flex w-full md:w-[var(--memory-rail-width)] shrink-0">
+      <PanelResizeHandle label="Resize Memory panel" {...railHandle} className="hidden md:block" />
+      <aside className="glass-rail w-full border-l border-border-subtle flex flex-col gap-8 overflow-y-auto custom-scrollbar px-6 py-7">
         <section data-tour="mem-world-index" className="flex flex-col gap-2.5">
           <span className={`self-start ${sectionLabel}`}>World index</span>
           <p className="text-sm leading-relaxed text-text-muted">Tags memories by character, faction and item so the AI can recall them by name.</p>
@@ -1698,6 +1705,7 @@ export default function ChatMemoryView({
           )}
         </section>
       </aside>
+      </div>
 
       {editorOpen && (
         <Modal onClose={() => !savingSnippet && setEditorOpen(false)} size="wide" showClose={false} closeOnOverlay={false} className="h-[85vh] max-h-[44rem] !bg-surface-panel">

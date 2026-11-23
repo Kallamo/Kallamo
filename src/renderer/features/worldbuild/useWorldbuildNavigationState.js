@@ -1,41 +1,32 @@
 import { useEffect, useState } from 'react';
-import { DEFAULT_SIDEBAR_WIDTH } from './useSidebarWidth';
+import { getCachedUiState, saveUiState } from '../chat/workspace-presentation';
 
 const NAVIGATION_SCOPE = 'worldbuild-navigation';
 
-// Layout the person chose, kept across restarts: the sidebar width and which places are expanded.
-// Which sheet was open belongs to the visit instead (see worldbuildViewCache).
-export function useWorldbuildNavigationState({ workspaceId, electronAPI, sidebarWidth, updateSidebarWidth }) {
-  const [expandedLocations, setExpandedLocations] = useState({});
-  const [isNavigationStateReady, setNavigationStateReady] = useState(false);
+// Which places are expanded, kept per workspace across restarts. It is preloaded when the
+// workspace opens, so the tree mounts already expanded. Which sheet was open belongs to the
+// visit instead (see worldbuildViewCache); the sidebar width lives in the app layout.
+export function useWorldbuildNavigationState({ workspaceId, electronAPI }) {
+  const [expandedLocations, setExpandedLocations] = useState(() => getCachedUiState(workspaceId, NAVIGATION_SCOPE)?.expandedLocations || {});
+  const [isNavigationStateReady, setNavigationStateReady] = useState(() => getCachedUiState(workspaceId, NAVIGATION_SCOPE) !== undefined);
 
+  // Only when the preload missed: read late rather than overwrite what was saved.
   useEffect(() => {
+    if (isNavigationStateReady || !workspaceId) return undefined;
     let cancelled = false;
-    setNavigationStateReady(false);
-    setExpandedLocations({});
-
-    if (!workspaceId) return undefined;
-
     electronAPI.getWorkspaceUiState(workspaceId, NAVIGATION_SCOPE)
-      .then((response) => {
-        if (cancelled) return;
-        const state = response?.value || {};
-        setExpandedLocations(state.expandedLocations || {});
-        updateSidebarWidth(Number(state.sidebarWidth) || DEFAULT_SIDEBAR_WIDTH);
-      })
+      .then((response) => { if (!cancelled) setExpandedLocations(response?.value?.expandedLocations || {}); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setNavigationStateReady(true); });
-
     return () => { cancelled = true; };
-  }, [workspaceId, electronAPI, updateSidebarWidth]);
+  }, [workspaceId, electronAPI, isNavigationStateReady]);
 
   useEffect(() => {
     if (!isNavigationStateReady || !workspaceId) return;
-    electronAPI.setWorkspaceUiState(workspaceId, NAVIGATION_SCOPE, {
-      expandedLocations,
-      sidebarWidth,
-    }).catch(() => {});
-  }, [isNavigationStateReady, workspaceId, expandedLocations, sidebarWidth, electronAPI]);
+    const saved = getCachedUiState(workspaceId, NAVIGATION_SCOPE);
+    if (saved?.expandedLocations === expandedLocations) return;
+    saveUiState(electronAPI, workspaceId, NAVIGATION_SCOPE, { ...saved, expandedLocations });
+  }, [isNavigationStateReady, workspaceId, expandedLocations, electronAPI]);
 
   return { expandedLocations, setExpandedLocations, isNavigationStateReady };
 }

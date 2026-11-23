@@ -15,6 +15,7 @@ import ChatMessageItem, { isImage, isVideo } from '../features/chat/components/C
 import GenerationBubble from '../features/chat/components/GenerationBubble';
 import ContextMeter from '../features/chat/components/ContextMeter';
 import ReplyTargetPicker from '../features/chat/components/ReplyTargetPicker';
+import { BLOCK_DRAG_TYPE } from '../features/roleplay/RoleplayLayoutBlock';
 import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
 import StoryIntro from '../features/onboarding/StoryIntro';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
@@ -907,7 +908,10 @@ export default function ChatWorkspaceView() {
     }
   };
 
+  // Moving a Roleplay panel block is a drag too; only files are this view's to take.
+  const isLayoutDrag = e => Array.from(e.dataTransfer?.types || []).includes(BLOCK_DRAG_TYPE);
   const handleDragEnter = (e) => {
+    if (isLayoutDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     const types = e.dataTransfer.types;
@@ -921,6 +925,7 @@ export default function ChatWorkspaceView() {
   };
 
   const handleDragOver = (e) => {
+    if (isLayoutDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     const types = e.dataTransfer.types;
@@ -933,6 +938,7 @@ export default function ChatWorkspaceView() {
   };
 
   const handleDragLeave = (e) => {
+    if (isLayoutDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     const types = e.dataTransfer.types;
@@ -946,6 +952,7 @@ export default function ChatWorkspaceView() {
   };
 
   const handleDrop = (e) => {
+    if (isLayoutDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -1132,9 +1139,10 @@ export default function ChatWorkspaceView() {
           </div>
         </div>
 
-        {/* The chat stays mounted while another tab is open, so returning is instant and
-            keeps the reading position. The other tabs mount on demand. */}
-        <div className={`flex-1 min-h-0 flex-col relative overflow-hidden ${isChatVisible ? 'flex' : 'hidden'}`}>
+        {/* The chat stays mounted and laid out under another tab, so returning to it needs no
+            layout of the whole thread. The other tabs mount on demand over it. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+        <div inert={!isChatVisible || undefined} className={`flex flex-1 min-h-0 flex-col relative overflow-hidden ${isChatVisible ? '' : 'chat-parked'}`}>
           <div
             ref={messageContainerRef}
             onClick={handleContainerClick}
@@ -1303,6 +1311,7 @@ export default function ChatWorkspaceView() {
         </div>
 
         {!isChatVisible && (
+          <div className="absolute inset-0 z-10 flex flex-col">
           <Suspense fallback={<div className="flex-1" />}>
             {activeSubView === 'memory' ? (
               <ChatMemoryView
@@ -1344,7 +1353,9 @@ export default function ChatWorkspaceView() {
               />
             )}
           </Suspense>
+          </div>
         )}
+        </div>
 
       </div>
 

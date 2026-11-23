@@ -33,8 +33,11 @@ import ImportWorldbuildModal, { ImportWorldbuildDone } from '../features/worldbu
 import CreateWithAiModal, { CreateWithAiDone } from '../features/worldbuild/CreateWithAiModal';
 import { buildLocationTree } from '../features/worldbuild/locationTree';
 import EntityPickerButton from '../features/worldbuild/EntityPickerButton';
-import { useSidebarWidth } from '../features/worldbuild/useSidebarWidth';
+import { usePanelWidth } from '../features/layout/usePanelWidth';
+import { CENTER_MIN } from '../features/layout/layout-model';
+import PanelResizeHandle from './ui/PanelResizeHandle';
 import { useWorldbuildNavigationState } from '../features/worldbuild/useWorldbuildNavigationState';
+import { saveUiState } from '../features/chat/workspace-presentation';
 import { useScrollRestore } from '../features/worldbuild/useScrollRestore';
 import WorldbuildCustomFields, { fieldsForSection, isFilledValue, isLongField } from '../features/worldbuild/WorldbuildCustomFields';
 import WorldbuildKnowledgeTab from '../features/worldbuild/WorldbuildKnowledgeTab';
@@ -53,13 +56,13 @@ import WorldbuildEntitySkills from '../features/worldbuild/WorldbuildEntitySkill
 import { describeSkillChange, skillChangeItems } from '../features/roleplay/changeKinds';
 import { displayNativeValue, displayProposalValue } from '../features/worldbuild/reviewDisplay';
 import {
-  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, meta, TYPES,
+  ABUNDANCE_HELP, CREATURE_NATURES, DISPOSITION, entityMeta, fieldLabel, ITEM_TYPES, itemMeta, itemTypeHint, meta, TYPES,
   GENDERS, RARITY, RELATIONSHIP_LABELS, STATUS, THREAT, TYPE_ORDER, LOCATION_SIZE_OPTIONS, locationSizeIcon, sortLocationsForPresence,
 } from '../features/worldbuild/worldbuildConfig';
 import { isInvertedNesting, locationSizeGuide, locationSizeLabel, locationSizeOf, locationSizeRank } from '../../shared/location-sizes';
 import SegmentedControl from './ui/SegmentedControl';
 import SelectMenu from './ui/SelectMenu';
-import { normalizeTemplateSections, sheetTabs as sheetTabsFor, tabLabel } from '../features/worldbuild/worldbuildSections';
+import { LOOSE_FIELDS_SECTION, normalizeTemplateSections, sheetTabs as sheetTabsFor, tabLabel } from '../features/worldbuild/worldbuildSections';
 import { FieldEye, SpoilerCover, SpoilerRow, SpoilerScope, SpoilerText, SpoilerTextArea } from '../features/worldbuild/Spoilers';
 import { hiddenFields, withFieldHidden } from '../../shared/spoilers';
 import { workspaceCovered } from '../utils/workspaceCovered';
@@ -691,7 +694,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       const chain = [];
       for (let id = folderId; id && !chain.includes(id); id = parentOf.get(id)) chain.push(id);
       const expandedFolderIds = [...new Set([...(current?.state?.expandedFolderIds || []), ...chain])];
-      await electronAPI.setWritingDeskState?.(workspaceId, { expandedFolderIds, lastDocumentId: documentId });
+      await saveUiState(electronAPI, workspaceId, 'writing-desk', { expandedFolderIds, lastDocumentId: documentId });
     } catch { /* the event below still opens it when the desk is mounted */ }
     window.dispatchEvent(new CustomEvent('writing-desk-open-document', { detail: { workspaceId, documentId, folderId } }));
     setActiveWorkspaceView('writing');
@@ -744,6 +747,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [deleteImpact, setDeleteImpact] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [fieldDefinitions, setFieldDefinitions] = useState([]);
+  const [fieldsVersion, setFieldsVersion] = useState(0);
   const [reviewCounts, setReviewCounts] = useState(() => cachedRegistry?.reviewCounts || {});
   const [subjectReview, setSubjectReview] = useState({ proposals: [] });
   const [reviewKind, setReviewKind] = useState('entity');
@@ -754,7 +758,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const reviewMenuRef = useRef(null);
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
   const [openCreateSections, setOpenCreateSections] = useState(() => new Set());
-  const { sidebarWidth, updateSidebarWidth, startSidebarResize, handleSidebarResizeKey } = useSidebarWidth();
+  const { width: sidebarWidth, handle: sidebarHandle } = usePanelWidth('worldbuild', { side: 'left', centerMin: CENTER_MIN.worldbuild });
   const portraits = usePortraits(workspaceId, electronAPI);
   // Ctrl K (or Cmd K) jumps to the search, as in the rest of the app's lists.
   const searchRef = useRef(null);
@@ -898,8 +902,6 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   } = useWorldbuildNavigationState({
     workspaceId,
     electronAPI,
-    sidebarWidth,
-    updateSidebarWidth,
   });
 
   const isNew = !selected?.id;
@@ -1020,6 +1022,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         worldClock: calendarRes?.clock || null,
         nameReview: registryCache.get(workspaceId)?.nameReview || new Map()
       };
+      // A visit opens on the cached registry; when the fresh read matches it, the list is not
+      // rebuilt a second time.
+      const previous = registryCache.get(workspaceId);
+      const sameEntities = previous && JSON.stringify(previous.entities) === JSON.stringify(registry.entities);
+      const sameLinks = previous && JSON.stringify(previous.insideLinks) === JSON.stringify(registry.insideLinks);
+      if (sameEntities) registry.entities = previous.entities;
+      if (sameLinks) registry.insideLinks = previous.insideLinks;
       registryCache.set(workspaceId, registry);
       setEntities(registry.entities);
       setInsideLinks(registry.insideLinks);
@@ -1102,7 +1111,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     electronAPI.listWorldbuildFieldDefinitions(workspaceId, selected.type)
       .then(result => setFieldDefinitions(result?.fields || []))
       .catch(() => setFieldDefinitions([]));
-  }, [electronAPI, selected?.type, workspaceId]);
+  }, [electronAPI, selected?.type, workspaceId, fieldsVersion]);
   const loadSubjectReview = useCallback(async () => {
     if (!workspaceId || !selected?.id || !electronAPI.getWorldbuildSubjectReview) {
       setSubjectReview({ proposals: [] });
@@ -1258,8 +1267,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         for (const [relType, targets] of Object.entries(drafts)) {
           for (const toId of targets) await electronAPI.setEntityLink({ workspaceId, fromId: id, relType, toId, single: false });
         }
-        setSelected(s => ({ ...s, id, status: r.entity.status, draftLinks: undefined }));
-        if (Object.keys(drafts).length) await loadRelations({ ...selected, id });
+        // The main fills template defaults and the default race on create, so the sheet takes what was stored.
+        setSelected(s => ({ ...s, id, status: r.entity.status, data: r.entity.data || s.data, draftLinks: undefined }));
+        await loadRelations({ ...selected, id });
       }
       await load();
       await loadEnrichErrors();
@@ -1268,6 +1278,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     finally { setSaving(false); }
   };
 
+  // A changed field re-reads its definitions at once; converted or cleared values reach the open sheet too.
+  const refreshAfterFieldChange = async (typeId, { valuesChanged }) => {
+    setFieldsVersion(version => version + 1);
+    if (!valuesChanged) return;
+    await load();
+    if (!selected?.id || selected.type !== typeId || editingSection) return;
+    const fresh = await electronAPI.getEntity(selected.id);
+    if (fresh?.entity) await openEntity(fresh.entity, { preserveTab: true });
+  };
   const saveSection = async () => { const id = await persist(); if (id) setEditingSection(null); };
   const cancelSection = async () => { const cur = entities.find(e => e.id === selected.id); if (cur) await openEntity(cur); setEditingSection(null); };
   useEffect(() => {
@@ -1878,7 +1897,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 id: itemType,
                 label: itemType,
                 icon: itemMeta(itemType).icon,
-                description: itemType === 'Resource' ? 'Natural resources and creature drops' : undefined,
+                description: itemTypeHint(itemType),
               }))}
               placeholder="Choose a category…"
               searchPlaceholder="Filter item categories…"
@@ -2230,7 +2249,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   // Template sections are ordinary sections with no native fields of their own.
   const templateSection = (id, title) => ({ key: id, title, icon: Braces, scalar: true, custom: true, view: null, edit: null });
   const customizeSections = (source) => {
-    const loose = charTab === 'data' && customFieldsIn('custom-fields').length ? [templateSection('custom-fields', 'More details')] : [];
+    const loose = charTab === 'data' && customFieldsIn(LOOSE_FIELDS_SECTION.id).length ? [templateSection(LOOSE_FIELDS_SECTION.id, LOOSE_FIELDS_SECTION.label)] : [];
     if (!templateSections.length) return [...source, ...loose];
     const positions = new Map(templateSections.map((section, index) => [section.id, index]));
     const custom = charTab === 'data' ? templateSections.filter(section => section.kind === 'custom' && !section.hidden).map(section => templateSection(section.id, section.label)) : [];
@@ -2574,9 +2593,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           workspaceId={workspaceId}
           api={electronAPI}
           templates={templates}
+          entities={entities}
           showToast={showToast}
           onClose={() => setShowTemplateManager(false)}
           onSaved={(template) => setTemplates(current => [...current.filter(item => item.typeId !== template.typeId), template])}
+          onFieldsChanged={refreshAfterFieldChange}
         />
       )}
       {mergeDialog && selected?.id && (
@@ -2604,8 +2625,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       )}
       <div style={{ '--worldbuild-sidebar-width': `${sidebarWidth}px` }} className="ws-rail relative w-full lg:w-[var(--worldbuild-sidebar-width)] shrink-0 flex flex-col h-full overflow-visible border-r border-border-subtle/40 bg-surface-canvas/35 backdrop-blur-md">
         {/* The whole right edge resizes; no floating handle over the content. */}
-        <div role="separator" aria-orientation="vertical" aria-label="Resize Worldbuild sidebar" tabIndex={0} onPointerDown={startSidebarResize} onKeyDown={handleSidebarResizeKey}
-          className="absolute -right-1 top-0 bottom-0 z-20 hidden w-2 cursor-col-resize transition-colors hover:bg-accent/25 focus-visible:bg-accent/40 focus-visible:outline-none lg:block" />
+        <PanelResizeHandle label="Resize Worldbuild sidebar" {...sidebarHandle} className="hidden lg:block" />
         <div className="space-y-3 px-3 pb-1 pt-3.5">
           <div className="flex h-8 items-center gap-1">
             {/* Away from the overview it reads as a button, so there is always a way back. */}
@@ -2745,7 +2765,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               </Menu>
             </div>
           )}
-          <div className="space-y-px pt-1">
+          <div className="wb-list-rows space-y-px pt-1">
             {loading ? <p className="caption py-8 text-center">Loading…</p>
               : filtered.length === 0 ? <p className="caption py-8 text-center">{search.trim() || filterType || reviewFilter ? 'Nothing matches.' : 'Nothing here yet.'}</p>
               : renderSidebarEntities()}
@@ -3110,6 +3130,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                   </div>
                 ) : charTab === 'knowledge' && hasKnowledgeTab ? (
                   <WorldbuildKnowledgeTab
+                    key={fieldsVersion}
                     workspaceId={workspaceId}
                     entity={selected}
                     entities={entities}
