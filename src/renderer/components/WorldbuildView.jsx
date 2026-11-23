@@ -1390,9 +1390,21 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
 
   // The run lives in the main process; on mount the lock is restored from its status.
+  // When the run moves past an entity, its changes are already saved, so the list shows them now.
+  const reloadAfterEntityRef = useRef(null);
+  reloadAfterEntityRef.current = async (finishedId) => {
+    await load();
+    if (selected?.id === finishedId) await refreshSelected(finishedId);
+  };
   useEffect(() => {
     if (!electronAPI.onEnrichEntitiesProgress) return;
-    return electronAPI.onEnrichEntitiesProgress((p) => setEnrichProgress(p));
+    let lastEntityId = null;
+    return electronAPI.onEnrichEntitiesProgress((p) => {
+      setEnrichProgress(p);
+      const finishedId = lastEntityId;
+      lastEntityId = p?.entityId || lastEntityId;
+      if (finishedId && p?.entityId && p.entityId !== finishedId) reloadAfterEntityRef.current(finishedId);
+    });
   }, [electronAPI]);
 
   useEffect(() => {
