@@ -16,8 +16,8 @@ function heldDetail(condition) {
   ].filter(Boolean).join(' ');
 }
 
-/** The conditions someone has now, each removable, and a way to give them one by hand. */
-export default function ConditionChips({ held, catalog, onAdd, onRemove }) {
+/** The conditions someone has now, each removable, and a way to give them one by hand. Read-only, it only lists them. */
+export default function ConditionChips({ held, catalog = [], onAdd, onRemove, readOnly = false }) {
   const [adding, setAdding] = useState(false);
   const heldIds = new Set(held.map(condition => condition.conditionId));
   const options = catalog.map(condition => heldIds.has(condition.id)
@@ -44,21 +44,21 @@ export default function ConditionChips({ held, catalog, onAdd, onRemove }) {
         <span
           key={condition.conditionId}
           data-tooltip={heldDetail(condition) || undefined}
-          className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-full border border-border-subtle bg-surface-canvas/50 pl-2 pr-1 text-[0.6875rem] font-semibold text-text-secondary"
+          className={`inline-flex h-6 max-w-full items-center gap-1.5 rounded-full border border-border-subtle bg-surface-canvas/50 pl-2 ${readOnly ? 'pr-2' : 'pr-1'} text-[0.6875rem] font-semibold text-text-secondary`}
         >
           <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: condition.color }} />
           <span className="truncate">{condition.name}</span>
-          <button
+          {!readOnly && <button
             type="button"
             aria-label={`Remove ${condition.name}`}
             onClick={() => onRemove(condition.conditionId)}
             className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-text-subtle transition-colors hover:bg-tint/[0.08] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <X aria-hidden="true" className="h-3 w-3" />
-          </button>
+          </button>}
         </span>
       ))}
-      {catalog.length > 0 && (
+      {!readOnly && catalog.length > 0 && (
         <button
           type="button"
           onClick={() => setAdding(true)}

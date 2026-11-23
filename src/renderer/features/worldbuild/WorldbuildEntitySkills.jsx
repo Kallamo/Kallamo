@@ -1,16 +1,72 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Award, Check, CornerDownRight, Pencil, Plus, Trash2 } from 'lucide-react';
 import Button from '../../components/ui/Button';
+import CollapsibleSection from '../../components/ui/CollapsibleSection';
 import IconButton from '../../components/ui/IconButton';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import { describeSkillChange, skillChangeItems } from '../roleplay/changeKinds';
 import { FieldEye, SpoilerCover } from './Spoilers';
+
+const CHIP_GAP = 6;
+
+// Chips kept to one line: a hidden copy of the row measures every chip, and what does not
+// fit folds into a "+N" chip. The rest are not named there, since some may be spoilers.
+function OneLineChips({ chips, onMore }) {
+  const wrapRef = useRef(null);
+  const measureRef = useRef(null);
+  const [fit, setFit] = useState(chips.length);
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    const row = measureRef.current;
+    if (!wrap || !row) return undefined;
+    const measure = () => {
+      const widths = [...row.children].map(child => child.getBoundingClientRect().width);
+      const moreWidth = widths.pop() || 0;
+      const available = wrap.getBoundingClientRect().width;
+      let used = 0;
+      let count = 0;
+      for (let index = 0; index < widths.length; index += 1) {
+        const next = used + (count ? CHIP_GAP : 0) + widths[index];
+        const reserve = index < widths.length - 1 ? CHIP_GAP + moreWidth : 0;
+        if (next + reserve > available) break;
+        used = next;
+        count += 1;
+      }
+      setFit(count);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, [chips]);
+  const hidden = chips.length - fit;
+  const more = <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-tint/[0.08] px-2 text-[0.6875rem] font-semibold tabular-nums text-text-secondary">+{Math.max(hidden, chips.length)}</span>;
+  return (
+    <div ref={wrapRef} className="relative flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+      <div ref={measureRef} aria-hidden="true" className="invisible absolute left-0 top-0 flex gap-1.5 whitespace-nowrap">
+        {chips.map(chip => <span key={chip.key} className="shrink-0">{chip.node}</span>)}
+        {more}
+      </div>
+      {chips.slice(0, fit).map(chip => <span key={chip.key} className="shrink-0">{chip.node}</span>)}
+      {hidden > 0 && (
+        <button type="button" onClick={onMore} aria-label={`${hidden} more ${hidden === 1 ? 'skill' : 'skills'}`} className="inline-flex h-6 shrink-0 items-center rounded-full bg-tint/[0.08] px-2 text-[0.6875rem] font-semibold tabular-nums text-text-secondary transition-colors hover:bg-tint/[0.12] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          +{hidden}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// One choice for every sheet, like Roleplay state beside it.
+const OPEN_KEY = 'kallamo.worldbuild.skills';
+const readOpen = () => { try { return localStorage.getItem(OPEN_KEY) === 'open'; } catch { return false; } };
 
 /**
  * A character's skills, drawn as a sheet section while the world uses skills. Edit gives,
  * moves or takes away a skill at once; what the AI wants to change waits here to be approved.
  */
 export default function WorldbuildEntitySkills({ workspaceId, entity, api, showToast }) {
+  const [open, setOpen] = useState(readOpen);
   const [state, setState] = useState(null);
   const [catalog, setCatalog] = useState([]);
   const [ranks, setRanks] = useState([]);
@@ -68,19 +124,45 @@ export default function WorldbuildEntitySkills({ workspaceId, entity, api, showT
   const rankOptions = ranks.map((rank, index) => ({ id: String(index), label: rank }));
   const headerButton = 'inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
-  return (
-    <section className="ws-card overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
-      <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle pl-4 pr-2">
-        <Award className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-        <h2 className="text-sm font-semibold text-text-primary">Skills</h2>
-        {editing && <span className="text-xs text-text-subtle">Editing</span>}
-        <span className="flex-1" />
-        {editing
-          ? <button type="button" onClick={() => { setEditing(false); setAdding(false); }} className={headerButton}><Check className="h-3.5 w-3.5" aria-hidden="true" />Done</button>
-          : <button type="button" onClick={() => setEditing(true)} aria-label="Edit Skills" className={headerButton}>{held.length ? <Pencil className="h-3.5 w-3.5" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}{held.length ? 'Edit' : 'Add'}</button>}
-      </header>
+  const toggleOpen = next => {
+    setOpen(next);
+    try { localStorage.setItem(OPEN_KEY, next ? 'open' : 'closed'); } catch { /* the choice just is not remembered */ }
+  };
+  const summary = (held.length > 0 || pending.length > 0) && (
+    <div className="flex items-center gap-2 border-t border-border-subtle px-4 py-2.5">
+      <OneLineChips onMore={() => toggleOpen(true)} chips={held.map(skill => ({
+        key: skill.skillId,
+        node: (
+          <SpoilerCover field={`skill:${skill.key}`} compact>
+            <span className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-canvas/50 px-2 text-[0.6875rem] font-semibold text-text-secondary">
+              {skill.name}
+              <span className="font-medium text-text-subtle">{skill.rankName}</span>
+            </span>
+          </SpoilerCover>
+        )
+      }))} />
+      {pending.length > 0 && <button type="button" onClick={() => toggleOpen(true)} className="ml-auto inline-flex h-6 shrink-0 items-center rounded-full bg-status-warning/12 px-2.5 text-xs font-semibold text-status-warning transition-colors hover:bg-status-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        {pending.length} to approve
+      </button>}
+    </div>
+  );
 
-      <div className="flex flex-col gap-3 p-4">
+  return (
+    <CollapsibleSection
+      icon={Award}
+      title="Skills"
+      titleCount={held.length}
+      description={editing ? 'Editing' : undefined}
+      open={open || editing}
+      onToggle={toggleOpen}
+      summary={summary}
+      surfaceClassName="ws-card border-border-default bg-surface-panel-muted/60 backdrop-blur-md"
+      actions={editing
+        ? <button type="button" onClick={() => { setEditing(false); setAdding(false); }} className={headerButton}><Check className="h-3.5 w-3.5" aria-hidden="true" />Done</button>
+        : <button type="button" onClick={() => setEditing(true)} aria-label="Edit Skills" className={headerButton}>{held.length ? <Pencil className="h-3.5 w-3.5" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}{held.length ? 'Edit' : 'Add'}</button>}
+    >
+
+      <div className="flex flex-col gap-3 border-t border-border-subtle p-4">
         {held.length > 0 ? (
           <div className="divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface-canvas/40">
             {held.map(skill => (
@@ -141,6 +223,6 @@ export default function WorldbuildEntitySkills({ workspaceId, entity, api, showT
           </div>
         )}
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }

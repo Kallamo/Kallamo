@@ -5,6 +5,8 @@ import Modal from '../../components/ui/Modal';
 import Popover from '../../components/ui/Popover';
 import NumberInput from '../../components/ui/NumberInput';
 import Checkbox from '../../components/ui/Checkbox';
+import CollapsibleSection from '../../components/ui/CollapsibleSection';
+import ConditionChips from '../roleplay/ConditionChips';
 import { meta } from './worldbuildConfig';
 import HistoryList from '../configuration/roleplay/HistoryList';
 import { ReasonInput } from '../configuration/ConfigParts';
@@ -29,8 +31,14 @@ function SheetNumber({ value, onChange, className, ariaLabel, min, max, integer 
   );
 }
 
+// One choice for every sheet: opening the block on one character opens it on the next.
+const OPEN_KEY = 'kallamo.worldbuild.roleplayState';
+const readOpen = () => { try { return localStorage.getItem(OPEN_KEY) === 'open'; } catch { return false; } };
+
 /** What the AI wants to change waits here and in Narrative State, and can be approved without editing. */
 export default function WorldbuildRoleplayResources({ workspaceId, entity, entities = [], api, showToast, onOpen }) {
+  const [open, setOpen] = useState(readOpen);
+  const [conditions, setConditions] = useState({ enabled: false, catalog: [], active: [] });
   const [resources, setResources] = useState([]);
   const [progress, setProgress] = useState(null);
   const [pending, setPending] = useState([]);
@@ -42,12 +50,16 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
 
   const load = useCallback(async () => {
     const request = ++requestRef.current;
-    const [resourceResult, progressResult, config] = await Promise.all([
+    const [resourceResult, progressResult, config, conditionResult] = await Promise.all([
       api.getRoleplayEntityResources?.(workspaceId, entity.id),
       api.getRoleplayEntityProgress?.(workspaceId, entity.id),
-      api.getRoleplayConfiguration?.(workspaceId)
+      api.getRoleplayConfiguration?.(workspaceId),
+      api.listRoleplayEntityConditions?.(workspaceId, entity.id).catch(() => null)
     ]);
     if (request !== requestRef.current) return;
+    setConditions(conditionResult?.success
+      ? { enabled: Boolean(conditionResult.enabled), catalog: conditionResult.catalog || [], active: conditionResult.active || [] }
+      : { enabled: false, catalog: [], active: [] });
     setResources(resourceResult?.resources || []);
     setProgress(progressResult?.success ? progressResult.progress : null);
     setDefinitions(config?.definitions || []);
@@ -72,20 +84,30 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
   }, [api, load, workspaceId]);
 
   const progresses = Boolean(progress?.progresses);
-  if (!resources.length && !progresses) return null;
+  if (!resources.length && !progresses && !conditions.enabled) return null;
 
   const levels = progresses && progress.mode === 'levels';
   const editing = Boolean(draft);
   const announce = () => window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
 
-  const startEdit = () => setDraft({
+  const toggleOpen = next => {
+    setOpen(next);
+    try { localStorage.setItem(OPEN_KEY, next ? 'open' : 'closed'); } catch { /* the choice just is not remembered */ }
+  };
+  const setCondition = async (conditionId, active) => {
+    const result = await api.setRoleplayEntityCondition(workspaceId, entity.id, conditionId, active);
+    if (!result?.success) return showToast(result?.error || 'Could not change the condition.', 'error');
+    await load();
+    announce();
+  };
+  const startEdit = () => { setOpen(true); setDraft({
     level: progress?.level ?? 1,
     xp: progress?.xp ?? 0,
     attributes: Object.fromEntries((progress?.attributes || []).map(item => [item.traitId, item.value])),
     resources: Object.fromEntries(resources.map(item => [item.definitionId, item.current])),
     adjustments: Object.fromEntries(resources.map(item => [item.definitionId, item.parts.adjustment || ''])),
     reasons: {}
-  });
+  }); };
   const setPart = (part, key, value) => setDraft(current => ({ ...current, [part]: { ...current[part], [key]: value } }));
 
   // Only what changed is written, so an untouched number keeps its race bonus and history quiet.
@@ -140,22 +162,53 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
   const colors = new Map(definitions.map(definition => [definition.id, definition.color]));
   const headerButton = 'inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-semibold text-text-muted transition-colors hover:bg-surface-hover/60 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
-  return (
-    <section className="ws-card overflow-hidden rounded-card border border-border-default bg-surface-panel-muted/60 backdrop-blur-md">
-      <header className="flex min-h-11 items-center gap-2.5 border-b border-border-subtle pl-4 pr-2">
-        <Activity className="h-4 w-4 shrink-0 text-text-muted" aria-hidden="true" />
-        <h2 className="text-sm font-semibold text-text-primary">Roleplay state</h2>
-        {editing ? <span className="text-xs text-text-subtle">Editing</span> : throughLabel && <span className="hidden truncate text-xs text-text-subtle sm:inline">{throughLabel}</span>}
-        <span className="flex-1" />
-        {!editing && (
-          <>
-            <button type="button" onClick={openHistory} className={headerButton}><History className="h-3.5 w-3.5" aria-hidden="true" />History</button>
-            <button type="button" onClick={startEdit} aria-label="Edit Roleplay state" className={headerButton}><Pencil className="h-3.5 w-3.5" aria-hidden="true" />Edit</button>
-          </>
-        )}
-      </header>
+  const heldConditions = conditions.active.filter(condition => condition.entityId === entity.id);
+  const summaryParts = [
+    levels && <span key="level" className="font-semibold text-entity-event">Level {progress.level}</span>,
+    ...resources.map(resource => {
+      const full = resource.current >= resource.maximum;
+      // A resource below its maximum is what the reader needs to notice; full ones step back.
+      return (
+        <span key={resource.definitionId} className={`inline-flex items-center gap-1.5 whitespace-nowrap ${full ? 'text-text-subtle' : 'font-medium text-text-primary'}`}>
+          <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-[0.1875rem] ${full ? 'opacity-50' : ''}`} style={{ backgroundColor: resource.color }} />
+          {resource.name} <span className="tabular-nums">{format(resource.current)}/{format(resource.maximum)}</span>
+        </span>
+      );
+    })
+  ].filter(Boolean);
+  const summary = (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-border-subtle px-4 py-2.5 text-[0.8125rem]">
+      {summaryParts.flatMap((part, index) => index ? [<span key={`dot-${index}`} aria-hidden="true" className="text-text-disabled">·</span>, part] : [part])}
+      {heldConditions.length > 0 && <ConditionChips held={heldConditions} readOnly />}
+      {pending.length > 0 && (
+        <button type="button" onClick={() => toggleOpen(true)} className="ml-auto inline-flex h-6 shrink-0 items-center rounded-full bg-status-warning/12 px-2.5 text-xs font-semibold text-status-warning transition-colors hover:bg-status-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          {pending.length} to approve
+        </button>
+      )}
+      {!summaryParts.length && !heldConditions.length && !pending.length && <span className="text-text-subtle">No conditions</span>}
+    </div>
+  );
 
-      <div className="flex flex-col gap-4 p-4">
+  return (
+    <>
+    <CollapsibleSection
+      icon={Activity}
+      toneClass="text-text-primary"
+      title="Roleplay state"
+      description={editing ? 'Editing' : throughLabel}
+      open={open || editing}
+      onToggle={toggleOpen}
+      summary={summary}
+      surfaceClassName="ws-card border-border-default bg-surface-panel-muted/60 backdrop-blur-md"
+      actions={!editing && (
+        <>
+          <button type="button" onClick={openHistory} className={headerButton}><History className="h-3.5 w-3.5" aria-hidden="true" />History</button>
+          <button type="button" onClick={startEdit} aria-label="Edit Roleplay state" className={headerButton}><Pencil className="h-3.5 w-3.5" aria-hidden="true" />Edit</button>
+        </>
+      )}
+    >
+
+      <div className="flex flex-col gap-4 border-t border-border-subtle p-4">
         {levels && (
           <div className="flex items-center gap-4 rounded-card border border-entity-event/25 bg-entity-event/[0.07] p-3.5">
             <div className="flex w-14 flex-col items-center gap-1">
@@ -274,16 +327,23 @@ export default function WorldbuildRoleplayResources({ workspaceId, entity, entit
             <p className="text-xs text-text-subtle">The same change waits in Narrative State. With Automatic it applies at once and shows in History.</p>
           </div>
         )}
-      </div>
 
-      {history && (
-        <Modal title={`${entity.canonicalName}: history`} icon={History} iconClassName="text-text-secondary" onClose={() => setHistory(null)} size="xl">
-          <div className="max-h-[70vh] overflow-y-auto px-5 py-4 custom-scrollbar">
-            <HistoryList entries={history} colors={colors} />
+        {!editing && conditions.enabled && (heldConditions.length > 0 || conditions.catalog.length > 0) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-[0.8125rem] font-semibold text-text-muted">Conditions</span>
+            <ConditionChips held={heldConditions} catalog={conditions.catalog} onAdd={id => setCondition(id, true)} onRemove={id => setCondition(id, false)} />
           </div>
-        </Modal>
-      )}
-    </section>
+        )}
+      </div>
+    </CollapsibleSection>
+    {history && (
+      <Modal title={`${entity.canonicalName}: history`} icon={History} iconClassName="text-text-secondary" onClose={() => setHistory(null)} size="xl">
+        <div className="max-h-[70vh] overflow-y-auto px-5 py-4 custom-scrollbar">
+          <HistoryList entries={history} colors={colors} />
+        </div>
+      </Modal>
+    )}
+    </>
   );
 }
 
