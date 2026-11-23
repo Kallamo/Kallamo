@@ -109,7 +109,7 @@ export default function Modal({
       onMouseDown={(e) => {
         if (closeOnOverlay && e.target === e.currentTarget) onClose?.();
       }}
-      className={`fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto overscroll-contain titlebar-nodrag select-none p-4 ${
+      className={`fixed inset-0 z-[80] flex justify-center overflow-y-auto overscroll-contain titlebar-nodrag select-none p-4 ${
         isBlurEnabled ? 'bg-surface-overlay backdrop-blur-sm' : 'bg-surface-canvas'
       }`}
     >
@@ -120,7 +120,7 @@ export default function Modal({
         aria-labelledby={title ? generatedTitleId : undefined}
         tabIndex={-1}
         onKeyDown={keepFocusInside}
-        className={`w-full ${SIZES[size] || SIZES.sm} bg-surface-canvas border border-border-default rounded-card shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
+        className={`my-auto w-full ${SIZES[size] || SIZES.sm} bg-surface-canvas border border-border-default rounded-card shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
       >
         {title && (
           <div className="relative z-10 shrink-0 flex items-center justify-between gap-3 min-h-14 px-5 bg-surface-panel/60 border-b border-border-subtle">

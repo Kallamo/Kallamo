@@ -71,8 +71,9 @@ export default function EntityCreationDialog({ value, updatePolicy, onSave, onCl
       subtitle="New people, things and places that show up in a scene. Review puts them in the story at once and waits for you before they join Worldbuild."
       onClose={onClose}
       size="xl"
+      className="max-h-[calc(100vh-2rem)]"
     >
-      <div className="flex flex-col gap-4.5 px-6 py-5">
+      <div className="flex min-h-0 flex-1 flex-col gap-4.5 overflow-y-auto overscroll-contain custom-scrollbar px-6 py-5">
         {CREATION_GROUPS.map(group => (
           <div key={group.label}>
             <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold text-text-muted">
@@ -97,7 +98,7 @@ export default function EntityCreationDialog({ value, updatePolicy, onSave, onCl
           {updatePolicy === 'review' && ' While changes are set to Review everything, Automatic ones wait for you too.'}
         </p>
       </div>
-      <div className="flex items-center gap-2 border-t border-border-subtle px-6 py-3.5">
+      <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-6 py-3.5">
         <Button variant="subtle" size="sm" onClick={reset}>Reset to defaults</Button>
         <span className="flex-1" />
         <Button variant="primary" onClick={onClose} autoFocus>Done</Button>
