@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import {
   Backpack, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clapperboard, Gamepad2, HandHelping, Image as ImageIcon, Loader2, MapPin,
-  MoreHorizontal, PanelLeftOpen, PanelRightOpen, Pencil, Search, Swords, Trash2, X
+  MoreHorizontal, PanelLeftOpen, PanelRightOpen, Pencil, RefreshCw, Search, Swords, Trash2, X
 } from 'lucide-react';
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../components/ui/Menu';
 import Popover from '../../components/ui/Popover';
@@ -29,11 +29,19 @@ export function shortDate(calendar, clock) {
   return `${clock.day ?? ''} ${month.slice(0, 3)}`.trim();
 }
 
-export function RoleplayStatus({ processing, pendingCount }) {
+export function RoleplayStatus({ processing, pendingCount, stale = false }) {
   if (processing) {
     return (
       <span aria-hidden="true" className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent">
         <span className="inline-flex animate-spin motion-reduce:animate-none"><Loader2 className="h-4 w-4" /></span>
+      </span>
+    );
+  }
+  // A kept reply Narrative State has not read yet.
+  if (stale) {
+    return (
+      <span aria-hidden="true" className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent">
+        <RefreshCw className="h-4 w-4" />
       </span>
     );
   }
@@ -67,7 +75,7 @@ export function Avatar({ entity, player = false, size = 'md' }) {
 }
 
 /** The collapsed panel: a slim rail that keeps the scene in view beside the chat. */
-export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, progress, locationName, locationType, inventoryCount, onOpen, side = 'right' }) {
+export function RoleplayRail({ statusLabel, processing, pendingCount, stale = false, onUpdate, calendar, clock, player, others, presenceOf, typeLabels, resourcesOf, progress, locationName, locationType, inventoryCount, onOpen, side = 'right' }) {
   const tipSide = side === 'right' ? 'left' : 'right';
   const OpenIcon = side === 'right' ? PanelRightOpen : PanelLeftOpen;
   const portraits = useContext(PortraitContext);
@@ -123,11 +131,19 @@ export function RoleplayRail({ statusLabel, processing, pendingCount, calendar, 
           <OpenIcon aria-hidden="true" className="h-[1.125rem] w-[1.125rem]" />
         </button>
       </Tooltip>
-      <Tooltip side={tipSide} content={<span className="font-medium text-text-primary">Roleplay · {statusLabel}</span>}>
-        <span tabIndex={0} className="flex h-6 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-          <RoleplayStatus processing={processing} pendingCount={pendingCount} /><span className="sr-only">{statusLabel}</span>
-        </span>
-      </Tooltip>
+      {stale && !processing ? (
+        <Tooltip side={tipSide} content={<span className="font-medium text-text-primary">Update Narrative State with the reply you kept</span>}>
+          <button type="button" onClick={onUpdate} aria-label="Update Narrative State" className={`${railButton} h-8 w-8`}>
+            <RoleplayStatus stale />
+          </button>
+        </Tooltip>
+      ) : (
+        <Tooltip side={tipSide} content={<span className="font-medium text-text-primary">Roleplay · {statusLabel}</span>}>
+          <span tabIndex={0} className="flex h-6 items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <RoleplayStatus processing={processing} pendingCount={pendingCount} /><span className="sr-only">{statusLabel}</span>
+          </span>
+        </Tooltip>
+      )}
       {separator}
       <Tooltip
         side={tipSide}

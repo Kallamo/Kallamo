@@ -313,6 +313,8 @@ export function useChatSession({ api, setChats, setCurrentView }) {
         if (oldAlternative) await api.deleteMessage(lastMessage.id);
         const messages = await refreshGeneratedChat(activeChatId, response);
         await saveAlternative(oldAlternative, messages);
+        // The kept reply now waits for Narrative State; the Roleplay panel offers to read it.
+        window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId: activeChatId } }));
       }
     } catch (error) {
       console.error('RegenerateMessage error:', error);
@@ -411,6 +413,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       const deferred = await api.deferNarrativeStateTurn?.(activeChatId, updatedMessage.id);
       if (deferred?.success) updatedMessage.debugNotice = deferred.debugNotice;
       setActiveMessages(previous => previous.map(item => item.id === messageId ? updatedMessage : item));
+      window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId: activeChatId } }));
     } catch (error) {
       console.error('Error switching alternative response:', error);
     }

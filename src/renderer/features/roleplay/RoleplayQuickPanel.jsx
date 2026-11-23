@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight, Backpack, Check, ChevronRight, Clock3, Eye, EyeOff, Flag, Move, PanelLeftClose, PanelRightClose,
-  PanelsLeftBottom, PanelsRightBottom, Plus, RotateCcw, Settings2, X
+  PanelsLeftBottom, PanelsRightBottom, Plus, RefreshCw, RotateCcw, Settings2, X
 } from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Modal from '../../components/ui/Modal';
@@ -87,6 +87,8 @@ function RoleplayQuickPanel({
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const layoutMenuRef = useRef(null);
   const [blockDrag, setBlockDrag] = useState(null); // { id, overId, after } while a block is dragged
+  const [pendingTurn, setPendingTurn] = useState(null);
+  const [readingTurn, setReadingTurn] = useState(false);
 
   const load = useCallback(async () => {
     const configurationPromise = api.getRoleplayConfiguration(workspaceId);
@@ -145,6 +147,7 @@ function RoleplayQuickPanel({
       ...(configuration.entityChanges || []),
       ...(configuration.narrativeEvents || [])
     ].filter(change => change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting').length);
+    setPendingTurn(configuration.pendingNarrativeTurn || null);
     setConditions(configuration.conditions || { enabled: false, catalog: [], active: [] });
     setInventory(inventoryResult?.success ? inventoryResult.inventory || [] : []);
     setVitals(vitalsResult || EMPTY_VITALS);
@@ -230,9 +233,25 @@ function RoleplayQuickPanel({
       const presenceOrder = Number(!scene.participantIds?.includes(left.id)) - Number(!scene.participantIds?.includes(right.id));
       return presenceOrder || left.canonicalName.localeCompare(right.canonicalName);
     });
-  const roleplayStatusLabel = narrativeStateProcessing
+  const processing = narrativeStateProcessing || readingTurn;
+  const stale = Boolean(pendingTurn) && !processing;
+  // Same action as Update now in Configuration: read the kept reply without waiting for the next turn.
+  const updateNarrativeState = async () => {
+    if (!pendingTurn || readingTurn) return;
+    setReadingTurn(true);
+    try {
+      const result = await api.reprocessNarrativeStateTurn(workspaceId, pendingTurn.originId);
+      if (!result?.success) return showToast(result?.error || 'Could not read the turn again.', 'error');
+      window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
+    } finally {
+      setReadingTurn(false);
+    }
+  };
+  const roleplayStatusLabel = processing
     ? 'Updating Narrative State'
-    : pendingCount > 0
+    : stale
+      ? "The reply you kept isn't read yet"
+      : pendingCount > 0
       ? `${pendingCount} ${pendingCount === 1 ? 'change' : 'changes'} to review`
       : 'Active';
   const savePanelState = async nextCollapsed => {
@@ -423,8 +442,10 @@ function RoleplayQuickPanel({
     return (
       <RoleplayRail
         statusLabel={roleplayStatusLabel}
-        processing={narrativeStateProcessing}
+        processing={processing}
         pendingCount={pendingCount}
+        stale={stale}
+        onUpdate={updateNarrativeState}
         calendar={calendar}
         clock={clock}
         player={player}
@@ -526,15 +547,16 @@ function RoleplayQuickPanel({
       <PanelResizeHandle label="Resize Roleplay panel" {...resizeHandle} />
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle pl-4 pr-3">
         <div className="flex min-w-0 items-center gap-2.5 text-accent">
-          <RoleplayStatus processing={narrativeStateProcessing} pendingCount={pendingCount} />
+          <RoleplayStatus processing={processing} pendingCount={pendingCount} stale={stale} />
           <span className="min-w-0">
             <span className="block text-xs font-bold uppercase tracking-[0.16em]">Roleplay</span>
-            {(narrativeStateProcessing || pendingCount > 0) && (
+            {(processing || stale || pendingCount > 0) && (
               <span className="mt-0.5 block truncate text-[0.6875rem] font-medium text-text-subtle">{roleplayStatusLabel}</span>
             )}
           </span>
         </div>
         <div className="flex items-center gap-0.5">
+          {stale && <IconButton icon={RefreshCw} label="Update Narrative State with the reply you kept" size="sm" tone="accent" onClick={updateNarrativeState} />}
           <IconButton icon={Settings2} label="Roleplay settings" size="sm" onClick={openConfiguration} />
           <IconButton
             ref={layoutMenuRef}
