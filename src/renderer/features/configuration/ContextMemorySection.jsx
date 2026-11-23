@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react';
-import { MemoryGlyph } from '../../components/ui/glyphs';
+import { AlertTriangle, Drama, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { MemoryGlyph, WorkspaceGlyph } from '../../components/ui/glyphs';
+import SegmentedControl from '../../components/ui/SegmentedControl';
 import Button from '../../components/ui/Button';
 import IconButton from '../../components/ui/IconButton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
@@ -8,7 +9,7 @@ import { Menu, MenuItem, MenuSeparator } from '../../components/ui/Menu';
 import payloadBudgetContract from '../../../shared/payload-budget.json';
 import { selectActiveMessages, selectArchivableMessages, coverageStats } from '../chat/archive-coverage';
 import { estimateMessageTokens } from '../chat/message-content';
-import { ConfigSection, SettingsList, SwitchRow, Track, UnitNumberField, formatNumber } from './ConfigParts';
+import { ConfigSection, SettingsList, ShareSlider, SwitchRow, Track, UnitNumberField, formatNumber } from './ConfigParts';
 
 const SUMMARY_PREVIEW = 4;
 
@@ -23,9 +24,20 @@ const parseBlocks = value => {
   }
 };
 
-export default function ContextMemorySection({ sectionRef, activeChat, handleSaveChat, electronAPI, refreshChats, showToast, activeMessages, onTriggerSummarize }) {
+// Summaries belong to one conversation; notes and files to both.
+const ownSummary = (block, thread) => (block.thread === 'roleplay') === (thread === 'roleplay');
+
+export default function ContextMemorySection({ sectionRef, activeChat, handleSaveChat, electronAPI, refreshChats, showToast, activeMessages, onTriggerSummarize, roleplayEnabled = false }) {
   const [maxContext, setMaxContext] = useState(payloadBudgetContract.defaultMaxPayloadTokens);
   const [archiveThreshold, setArchiveThreshold] = useState(60000);
+  // Which conversation the archive settings below are about. Without roleplay there is only the Chat.
+  const [chosenThread, setChosenThread] = useState('roleplay');
+  const thread = roleplayEnabled ? chosenThread : 'chat';
+  const threadState = thread === 'roleplay'
+    ? (activeChat.roleplayThread || {})
+    : { autoSummarize: activeChat.autoSummarize, archiveThreshold: activeChat.archiveThreshold };
+  const [roleplayShare, setRoleplayShare] = useState(30);
+  useEffect(() => setRoleplayShare(Number(activeChat.chatRoleplayShare) || 30), [activeChat.id, activeChat.chatRoleplayShare]);
   const [archiveMessages, setArchiveMessages] = useState([]);
   const [showAll, setShowAll] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
@@ -38,14 +50,14 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
 
   useEffect(() => {
     setMaxContext(Number(activeChat.maxContext) > 0 ? Number(activeChat.maxContext) : payloadBudgetContract.defaultMaxPayloadTokens);
-    setArchiveThreshold(Number(activeChat.archiveThreshold ?? 60000) || 60000);
-  }, [activeChat.id, activeChat.maxContext, activeChat.archiveThreshold]);
+    setArchiveThreshold(Number(threadState.archiveThreshold ?? 60000) || 60000);
+  }, [activeChat.id, activeChat.maxContext, threadState.archiveThreshold, thread]);
 
   useEffect(() => {
     let cancelled = false;
-    electronAPI.getChatMessages(activeChat.id).then(messages => { if (!cancelled) setArchiveMessages(messages || []); });
+    electronAPI.getChatMessages(activeChat.id, thread).then(messages => { if (!cancelled) setArchiveMessages(messages || []); });
     return () => { cancelled = true; };
-  }, [activeChat.id, activeMessages, electronAPI]);
+  }, [activeChat.id, activeMessages, electronAPI, thread]);
 
   // The finishing pass runs after the archive window closes, so this is where it reports itself.
   useEffect(() => {
@@ -56,11 +68,18 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
     });
   }, [activeChat.id, electronAPI]);
 
-  const blocks = parseBlocks(activeChat.memoryBlocks);
+  const blocks = parseBlocks(activeChat.memoryBlocks).filter(block => block && (block.type !== 'summarized' || ownSummary(block, thread)));
   const summaries = blocks.filter(block => block.type !== 'manual').slice().reverse();
   const visibleSummaries = showAll ? summaries : summaries.slice(0, SUMMARY_PREVIEW);
 
   const save = patch => handleSaveChat({ ...activeChat, ...patch });
+  // The Chat's archive settings live on the workspace row; the Roleplay's in its own state.
+  const saveThread = async patch => {
+    if (thread === 'chat') return save(patch);
+    const result = await electronAPI.setThreadState(activeChat.id, 'roleplay', patch);
+    if (!result?.success) showToast(result?.error || 'Could not save.', 'error');
+    await refreshChats?.(activeChat.id);
+  };
   const commitMaxContext = () => {
     const value = Math.min(payloadBudgetContract.maximumMaxPayloadTokens, Math.max(payloadBudgetContract.minimumMaxPayloadTokens, Math.floor(Number(maxContext) || payloadBudgetContract.defaultMaxPayloadTokens)));
     setMaxContext(value);
@@ -69,23 +88,23 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
   const commitThreshold = () => {
     const value = Math.max(1000, Math.floor(Number(archiveThreshold) || 60000));
     setArchiveThreshold(value);
-    if (value !== Number(activeChat.archiveThreshold)) save({ archiveThreshold: value });
+    if (value !== Number(threadState.archiveThreshold)) saveThread({ archiveThreshold: value });
   };
 
-  const active = selectActiveMessages(archiveMessages, activeChat.memoryBlocks);
+  const active = selectActiveMessages(archiveMessages, blocks);
   const tokensUsed = active.reduce((total, message) => total + estimateMessageTokens(message.content), 0);
-  const stats = coverageStats(archiveMessages, activeChat.memoryBlocks);
+  const stats = coverageStats(archiveMessages, blocks);
   const percentage = Math.min(100, (tokensUsed / Math.max(1, archiveThreshold)) * 100);
   const meterColor = percentage >= 95 ? 'var(--color-status-danger)' : percentage >= 75 ? 'var(--color-status-warning)' : 'var(--app-accent)';
 
   const summarizeNow = () => {
-    if (!selectArchivableMessages(archiveMessages, activeChat.memoryBlocks).length) {
+    if (!selectArchivableMessages(archiveMessages, blocks).length) {
       showToast(stats.active > 0
         ? 'Only the most recent messages are left, and those stay active for continuity.'
         : 'Every message is already archived or dropped.', 'info');
       return;
     }
-    onTriggerSummarize?.();
+    onTriggerSummarize?.(thread);
   };
 
   const run = async (work, failure) => {
@@ -100,7 +119,7 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
   };
 
   const resetSummaries = () => run(async () => {
-    const result = await electronAPI.resetChatSummaries(activeChat.id);
+    const result = await electronAPI.resetChatSummaries(activeChat.id, thread);
     if (!result?.success) throw new Error(result?.error);
     await refreshChats?.(activeChat.id);
     const parts = [];
@@ -176,6 +195,57 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
           onCommit={commitMaxContext}
           help="Everything sent on one request. Retrieved context and older history are trimmed to fit. A smaller limit on the API connection wins."
         />
+      </div>
+
+      {roleplayEnabled && (
+        <>
+          <h3 className="mb-2.5 mt-7 text-[0.8125rem] font-semibold text-text-muted">Roleplay history in the Chat</h3>
+          <SettingsList>
+            <SwitchRow
+              label="Send roleplay history to the Chat"
+              description="The Chat sees what happened in the story. It never writes to it."
+              checked={activeChat.chatReadsRoleplay !== 0}
+              onChange={checked => save({ chatReadsRoleplay: checked ? 1 : 0 })}
+            />
+            {activeChat.chatReadsRoleplay !== 0 && (
+              <>
+                <ShareSlider
+                  label="History room in the Chat"
+                  value={roleplayShare}
+                  summary={`${roleplayShare}% roleplay · ${100 - roleplayShare}% this chat`}
+                  leftLabel="Less roleplay"
+                  rightLabel="More roleplay"
+                  help="Of the room left for history on each Chat request. Unused roleplay room goes back to the Chat's own messages."
+                  onChange={setRoleplayShare}
+                  onCommit={() => { if (roleplayShare !== Number(activeChat.chatRoleplayShare)) save({ chatRoleplayShare: roleplayShare }); }}
+                />
+                <SwitchRow
+                  label="Include roleplay summaries"
+                  description="Archived chapters of the story, read before the recent turns."
+                  checked={activeChat.chatRoleplaySummaries !== 0}
+                  onChange={checked => save({ chatRoleplaySummaries: checked ? 1 : 0 })}
+                />
+              </>
+            )}
+          </SettingsList>
+        </>
+      )}
+
+      <div className="mb-3 mt-7 flex flex-wrap items-center gap-3">
+        <h3 className="flex-1 text-[0.8125rem] font-semibold text-text-muted">Archive</h3>
+        {roleplayEnabled && (
+          <SegmentedControl
+            label="Conversation"
+            value={thread}
+            onChange={setChosenThread}
+            options={[
+              { value: 'chat', label: 'Chat', icon: WorkspaceGlyph },
+              { value: 'roleplay', label: 'Roleplay', icon: Drama }
+            ]}
+          />
+        )}
+      </div>
+      <div className="grid gap-6 md:grid-cols-2">
         <UnitNumberField
           label="Archive threshold"
           unit="tokens"
@@ -184,13 +254,13 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
           step={1000}
           onChange={setArchiveThreshold}
           onCommit={commitThreshold}
-          help="When the active conversation reaches this size, older messages are ready to be summarized."
+          help={thread === 'roleplay' ? 'When the Roleplay reaches this size, older turns are ready to be summarized.' : 'When the active conversation reaches this size, older messages are ready to be summarized.'}
         />
       </div>
 
       <div className="mt-5 rounded-card border border-border-subtle bg-surface-inset p-4">
         <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-          <span className="text-[0.8125rem] font-semibold text-text-secondary">Active conversation</span>
+          <span className="text-[0.8125rem] font-semibold text-text-secondary">{roleplayEnabled ? (thread === 'roleplay' ? 'Active roleplay' : 'Active chat') : 'Active conversation'}</span>
           <span className="flex-1 text-xs tabular-nums text-text-subtle">{active.length} {active.length === 1 ? 'message' : 'messages'}</span>
           <span className="text-[0.8125rem] tabular-nums text-text-muted"><b className="font-semibold text-text-primary">{formatNumber(tokensUsed)}</b> of {formatNumber(archiveThreshold)} tokens</span>
         </div>
@@ -209,9 +279,9 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
       <SettingsList className="mt-3">
         <SwitchRow
           label="Summarize automatically"
-          description="Archive older messages on their own when the threshold is reached."
-          checked={activeChat.autoSummarize === 1}
-          onChange={checked => save({ autoSummarize: checked ? 1 : 0 })}
+          description={thread === 'roleplay' ? 'Archive older turns on their own when the threshold is reached.' : 'Archive older messages on their own when the threshold is reached.'}
+          checked={threadState.autoSummarize === 1}
+          onChange={checked => saveThread({ autoSummarize: checked ? 1 : 0 })}
         />
         <SwitchRow
           label="Context meter in the message box"

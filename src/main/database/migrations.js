@@ -1,6 +1,7 @@
 const { releaseOrphanedEntityReferences } = require('../features/worldbuild/entity-references');
 const { orphanWorkspaceIds, purgeWorkspace } = require('../features/workspace/workspace-ownership');
 const { releaseMissingDocuments } = require('../features/workspace/document-ownership');
+const { splitConversationThreads } = require('./thread-migration');
 
 /** Predicates that name a moment the live scene already carries, never durable canon. */
 const SCENE_PREDICATE_LIST = [
@@ -1831,6 +1832,12 @@ const MIGRATIONS = [
         PRIMARY KEY (workspace_id, part, local_id)
       );
     `)
+  },
+  {
+    // The Chat and the Roleplay become two conversations of one workspace. Campaigns from the 2.0
+    // beta are recognized by the marks their replies left and move to the Roleplay whole.
+    id: 'conversation_threads_v1',
+    up: (db) => { splitConversationThreads(db); }
   }
 ];
 

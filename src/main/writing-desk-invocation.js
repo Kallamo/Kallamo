@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const db = require('./database');
-const { selectActiveMessages } = require('./features/chat/archive-coverage');
+const { selectActiveMessages, parseMemoryBlocks } = require('./features/chat/archive-coverage');
+const { readHistorySettings, threadSummaryBlocks, readThreadMessages, threadOfBlock } = require('./features/chat/threads');
+const { loadThreadHistory, renderHistorySlice } = require('./features/chat/history-slice');
 const { sendApiRequest, getReservedOutputTokens, resolvePayloadLimit } = require('./features/llm/llm.service');
 const {
     PAYLOAD_BUDGET_CONTRACT,
@@ -159,7 +161,7 @@ function loadDirectives(workspaceId) {
 }
 
 // Query = selection + intermediate prompt. Results are budget items, fitted by score.
-async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery, queryVector, threshold }) {
+async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery, queryVector, threshold, readsArchiveOf = () => true }) {
     const items = [];
     const add = (section, results) => {
         for (const r of results || []) {
@@ -174,7 +176,14 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
     } catch (e) { }
     try {
         // Enable the tag boost, as the chat path does.
-        add(SECTIONS.memory, await executeHybridSearch(retrievalQuery, workspaceId, 'chat_memory', threshold, 5, true));
+        // Notes always; a summary only when its conversation is one the Desk is set to read.
+        const blocks = new Map(parseMemoryBlocks(db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(workspaceId)?.memoryBlocks)
+            .filter(block => block && block.id).map(block => [block.id, block]));
+        const memory = await executeHybridSearch(retrievalQuery, workspaceId, 'chat_memory', threshold, 5, true);
+        add(SECTIONS.memory, (memory || []).filter(result => {
+            const block = blocks.get(result.memoryBlockId);
+            return !block || block.type !== 'summarized' || readsArchiveOf(threadOfBlock(block));
+        }));
     } catch (e) { }
     try {
         const siblingIds = db.prepare(
@@ -196,11 +205,9 @@ async function gatherRag({ profileId, workspaceId, currentDocId, retrievalQuery,
 function loadActiveChatWindow(workspaceId) {
     try {
         const chat = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(workspaceId);
-        const messages = db.prepare(
-            'SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt'
-        ).all(workspaceId);
+        const messages = readThreadMessages(db, workspaceId, 'chat', 'id, role, content, excluded');
         // Same live-history rule as the chat; reasoning never goes back to a model.
-        return selectActiveMessages(messages, chat && chat.memoryBlocks)
+        return selectActiveMessages(messages, threadSummaryBlocks(parseMemoryBlocks(chat && chat.memoryBlocks), 'chat'))
             .map(m => ({ role: m.role, content: stripReasoning(m.content) }));
     } catch (e) {
         return [];
@@ -227,11 +234,17 @@ async function runWritingDeskInvocation({
     if (!profile) throw new Error(`Writing profile not found: ${profileId}`);
 
     const channel = resultChannel || 'replacement';
-    const chatRow = db.prepare('SELECT wdContextWindow, wdUseChatHistory, maxContext FROM chats WHERE id = ?').get(workspaceId);
+    const chatRow = db.prepare(`
+        SELECT wdContextWindow, wdUseChatHistory, maxContext, wdHistorySource, wdHistoryShare, wdHistorySplit, wdHistorySummaries
+        FROM chats WHERE id = ?
+    `).get(workspaceId);
     const readingSize = (chatRow && chatRow.wdContextWindow) || DEFAULT_CONTEXT_WINDOW;
-    // Default on: the workspace chat rides as history. Off (per-workspace toggle) drops
-    // it, the biggest lever against the chat's language/topic bleeding into edits.
-    const useChatHistory = !chatRow || chatRow.wdUseChatHistory !== 0;
+    // Which conversations the Desk reads is a workspace setting. Turning history off is the
+    // biggest lever against a conversation's language or topic bleeding into edits.
+    const historySettings = readHistorySettings(chatRow);
+    const readsChat = ['chat', 'both'].includes(historySettings.deskSource);
+    const readsRoleplay = ['roleplay', 'both'].includes(historySettings.deskSource);
+    const readsArchiveOf = thread => historySettings.deskSummaries && (thread === 'roleplay' ? readsRoleplay : readsChat);
     const workspaceLimit = normalizeMaxApiPayload(chatRow && chatRow.maxContext);
     const payload = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, model: profile.model, maxPayloadTokens: workspaceLimit });
     const { selOpen, selClose, outOpen, outClose } = makeFence();
@@ -282,7 +295,7 @@ async function runWritingDeskInvocation({
     const chapterTokens = countTokens(contextText);
 
     const ragItems = await gatherRag({
-        profileId: profile.id, workspaceId, currentDocId: documentId, retrievalQuery, queryVector, threshold
+        profileId: profile.id, workspaceId, currentDocId: documentId, retrievalQuery, queryVector, threshold, readsArchiveOf
     });
     for (const chunk of farChunks) {
         ragItems.push({ section: SECTIONS.chapter, text: chunk.text, tier: 0, score: Number(chunk.fusionScore ?? chunk.score) || 0 });
@@ -320,15 +333,58 @@ async function runWritingDeskInvocation({
         breakdown: { fixed: coreTokens + chapterTokens, retrieved: packedRag.usedTokens, history: 0 }
     });
 
-    // The workspace chat rides as a recent window, never the whole conversation: at
-    // most the reading size, and never more than the payload limit leaves.
+    // History gets its share or what the chapter and notes left unused, whichever is more, capped by
+    // the payload limit. The Roleplay goes in as system reference text; the Chat as recent messages.
     let activeWindow = [];
-    if (useChatHistory) {
-        const historyBudget = Math.min(readingSize, getAvailableHistoryTokens(budgetInput));
-        activeWindow = selectRecentWithinBudget(loadActiveChatWindow(workspaceId), historyBudget, {
-            estimate: countTokens,
-            overhead: PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens
-        }).selected.map(({ message, text }) => ({ role: message.role, content: text }));
+    let historyRead = null;
+    if (readsChat || readsRoleplay) {
+        const unusedReading = readingSize - maxTokens - BUDGET_MARGIN - coreTokens - chapterTokens - packedRag.usedTokens;
+        const historyRoom = Math.max(0, Math.min(
+            getAvailableHistoryTokens(budgetInput),
+            Math.max(Math.floor(readingSize * historySettings.deskShare / 100), unusedReading)
+        ));
+        const roleplayRoom = readsRoleplay ? (readsChat ? Math.floor(historyRoom * historySettings.deskRoleplaySplit / 100) : historyRoom) : 0;
+        historyRead = { room: historyRoom, roleplay: null, chatSummaries: null, chatMessages: 0 };
+        let spent = 0;
+        const addReference = (slice) => {
+            if (!slice.text) return;
+            systemPrompt += `\n\n${slice.text}`;
+            spent += slice.tokens;
+        };
+        if (roleplayRoom > 0) {
+            const slice = renderHistorySlice({
+                history: loadThreadHistory(db, workspaceId, 'roleplay'),
+                room: roleplayRoom,
+                includeSummaries: historySettings.deskSummaries,
+                estimate: countTokens,
+                strip: stripReasoning,
+                heading: 'THE ROLEPLAY (reference)'
+            });
+            addReference(slice);
+            historyRead.roleplay = { tokens: slice.tokens, messages: slice.messages, summaries: slice.summaries };
+        }
+        if (readsChat) {
+            if (historySettings.deskSummaries) {
+                const chatHistory = loadThreadHistory(db, workspaceId, 'chat');
+                const slice = renderHistorySlice({
+                    history: { messages: [], summaries: chatHistory.summaries },
+                    room: Math.floor((historyRoom - roleplayRoom) * 0.35),
+                    estimate: countTokens,
+                    heading: 'EARLIER IN THE CHAT (reference)'
+                });
+                addReference(slice);
+                historyRead.chatSummaries = { tokens: slice.tokens, summaries: slice.summaries };
+            }
+            const windowBudget = Math.max(0, Math.min(
+                historyRoom - spent,
+                getAvailableHistoryTokens({ ...budgetInput, systemPrompt })
+            ));
+            activeWindow = selectRecentWithinBudget(loadActiveChatWindow(workspaceId), windowBudget, {
+                estimate: countTokens,
+                overhead: PAYLOAD_BUDGET_CONTRACT.messageOverheadTokens
+            }).selected.map(({ message, text }) => ({ role: message.role, content: text }));
+            historyRead.chatMessages = activeWindow.length;
+        }
     }
 
     const callApi = (budget, prompt = newPrompt) => sendApiRequest({
@@ -370,7 +426,8 @@ async function runWritingDeskInvocation({
             history: activeWindow.reduce((sum, message) => sum + countTokens(message.content || ''), 0)
         },
         limit: { payload: payload.limit, source: payload.source, output: maxTokens, outputCap: MAXTOKENS_CAP },
-        retrieval
+        retrieval,
+        historyRead: historyRead ? { source: historySettings.deskSource, ...historyRead } : null
     });
 
     let reply = await call('first', maxTokens);

@@ -18,7 +18,7 @@ const LIGHT_DEBUG_NOTICE = `CASE WHEN length(debugNotice) > ${LIGHT_DEBUG_FROM} 
     '$.legacyText', '…'
   ), '$.omitted', json('true'))
   ELSE debugNotice END`;
-const PAGE_COLUMNS = `id, chatId, role, content, aiName, aiColor, ${LIGHT_DEBUG_NOTICE} AS debugNotice,
+const PAGE_COLUMNS = `id, chatId, thread, role, content, aiName, aiColor, ${LIGHT_DEBUG_NOTICE} AS debugNotice,
   attachedFiles, alternatives, excluded, createdAt, last_modified`;
 
 function normalizeMessage(row) {
@@ -28,23 +28,24 @@ function normalizeMessage(row) {
   };
 }
 
-function getMessagePage(db, { chatId, before }) {
+function getMessagePage(db, { chatId, before, thread }) {
+  const conversation = thread === 'roleplay' ? 'roleplay' : 'chat';
   const cursor = before && Number.isFinite(before.createdAt) && typeof before.id === 'string'
     ? before
     : null;
   const query = cursor
     ? `SELECT ${PAGE_COLUMNS} FROM messages
-       WHERE chatId = ?
+       WHERE chatId = ? AND thread = ?
          AND (createdAt < ? OR (createdAt = ? AND id < ?))
        ORDER BY createdAt DESC, id DESC
        LIMIT ?`
     : `SELECT ${PAGE_COLUMNS} FROM messages
-       WHERE chatId = ?
+       WHERE chatId = ? AND thread = ?
        ORDER BY createdAt DESC, id DESC
        LIMIT ?`;
   const params = cursor
-    ? [chatId, cursor.createdAt, cursor.createdAt, cursor.id, CHAT_MESSAGE_PAGE_SIZE + 1]
-    : [chatId, CHAT_MESSAGE_PAGE_SIZE + 1];
+    ? [chatId, conversation, cursor.createdAt, cursor.createdAt, cursor.id, CHAT_MESSAGE_PAGE_SIZE + 1]
+    : [chatId, conversation, CHAT_MESSAGE_PAGE_SIZE + 1];
   const rows = db.prepare(query).all(...params);
   const hasMore = rows.length > CHAT_MESSAGE_PAGE_SIZE;
   const messages = rows.slice(0, CHAT_MESSAGE_PAGE_SIZE).reverse().map(normalizeMessage);

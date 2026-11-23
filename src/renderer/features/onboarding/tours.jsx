@@ -314,7 +314,7 @@ const ownCharacter = {
       } : {
         width: '26.25rem', nextLabel: 'Close the guide',
         title: 'Create your character first',
-        body: <P>The story starts once their sheet exists. Press Create, choose Character and fill in the sheet, then choose them in the Workspace tab.</P>,
+        body: <P>The story starts once their sheet exists. Press Create, choose Character and fill in the sheet, then choose them in the Roleplay tab.</P>,
       },
     ];
   },
@@ -494,7 +494,7 @@ const memory = {
       width: '26.25rem', nextLabel: 'Show me around',
       title: 'This is what the AI remembers',
       body: <>
-        <P>Memory holds what the AI knows in this workspace beyond the conversation itself: your notes, your files and the history of the chat.</P>
+        <P>Memory holds what the AI knows in this workspace beyond the conversation itself: your notes, your files and the history of the chat and the roleplay.</P>
         <P>It comes in three kinds, and each reaches the AI differently. A few examples will appear to show them, and leave when the tour ends.</P>
       </>,
     },
@@ -518,7 +518,7 @@ const memory = {
       target: 'mem-history', placement: 'top', width: '22.5rem',
       title: 'History',
       body: <>
-        <P>As the chat grows, older messages are archived and summarized. The AI searches these summaries when the story reaches back to them.</P>
+        <P>As the chat and the roleplay grow, older messages are archived and summarized, each in its own history. The AI searches these summaries when a conversation reaches back to them.</P>
         <P>There is nothing to manage here: summaries appear on their own.</P>
       </>,
     },
@@ -567,4 +567,19 @@ const memory = {
   ],
 };
 
-export const TOURS = { setup, 'own-character': ownCharacter, worldbuild, writing, memory };
+// Shown once, the first time a workspace has both conversations.
+const threads = {
+  where: 'Workspace',
+  steps: () => [
+    {
+      target: 'workspace-tabs', placement: 'bottom', width: '25rem', nextLabel: 'Got it', back: false,
+      title: 'Two conversations',
+      body: <>
+        <P><B>Roleplay</B> is the story. The narrator, the scene and the Narrative State live here.</P>
+        <P><B>Chat</B> is for talking with the AI outside the story: plan, ask about the world, get a recap. Nothing said there enters the Roleplay.</P>
+      </>,
+    },
+  ],
+};
+
+export const TOURS = { setup, 'own-character': ownCharacter, worldbuild, writing, memory, threads };

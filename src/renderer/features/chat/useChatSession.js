@@ -51,8 +51,19 @@ function buildAlternatives(oldAlternative, newMessage) {
   return { activeIndex: list.length - 1, list };
 }
 
+const THREADS = ['chat', 'roleplay'];
+const threadKey = (chatId, thread) => `${chatId}\u0000${thread}`;
+
 export function useChatSession({ api, setChats, setCurrentView }) {
   const [activeChatId, setActiveChatId] = useState(null);
+  // The workspace's two conversations share this session; the one on screen is the active thread.
+  // Each keeps its last page here, so switching tabs shows it at once while it is read again.
+  const [activeThread, setActiveThread] = useState('chat');
+  const activeThreadRef = useRef('chat');
+  const activeChatIdRef = useRef(null);
+  activeChatIdRef.current = activeChatId;
+  const threadCacheRef = useRef(new Map());
+  const loadSeqRef = useRef(0);
   const [activeMessages, setActiveMessages] = useState([]);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [oldestMessageCursor, setOldestMessageCursor] = useState(null);
@@ -116,20 +127,55 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     setActiveMessages(previous => previous.map(item => item.id === messageId ? { ...item, debugNotice } : item));
   }), [api, activeChatId]);
 
-  const loadLatestChatMessages = async (chatId) => {
-    const page = await api.getChatMessagePage({ chatId });
-    setActiveMessages(previous => reconcileMessages(previous, page.messages));
-    setHasOlderMessages(page.hasMore);
-    setOldestMessageCursor(page.oldestCursor);
+  // A read for another workspace or conversation lands in the cache, never on screen.
+  const isShown = (chatId, thread) => chatId === activeChatIdRef.current && thread === activeThreadRef.current;
+
+  const loadLatestChatMessages = async (chatId, thread = activeThreadRef.current) => {
+    const seq = ++loadSeqRef.current;
+    const page = await api.getChatMessagePage({ chatId, thread });
+    const cached = threadCacheRef.current.get(threadKey(chatId, thread));
+    threadCacheRef.current.set(threadKey(chatId, thread), {
+      messages: reconcileMessages(cached?.messages || [], page.messages),
+      hasMore: page.hasMore,
+      cursor: page.oldestCursor
+    });
+    if (isShown(chatId, thread) && seq === loadSeqRef.current) {
+      setActiveMessages(previous => reconcileMessages(previous, page.messages));
+      setHasOlderMessages(page.hasMore);
+      setOldestMessageCursor(page.oldestCursor);
+    }
     return page.messages;
   };
+
+  // Keeps what is on screen for the conversation being left, then shows the other one.
+  const selectThread = (thread) => {
+    const next = THREADS.includes(thread) ? thread : 'chat';
+    if (next === activeThreadRef.current) return;
+    const chatId = activeChatIdRef.current;
+    if (chatId) {
+      threadCacheRef.current.set(threadKey(chatId, activeThreadRef.current), {
+        messages: activeMessages, hasMore: hasOlderMessages, cursor: oldestMessageCursor
+      });
+    }
+    activeThreadRef.current = next;
+    setActiveThread(next);
+    const cached = chatId ? threadCacheRef.current.get(threadKey(chatId, next)) : null;
+    setActiveMessages(cached?.messages || []);
+    setHasOlderMessages(Boolean(cached?.hasMore));
+    setOldestMessageCursor(cached?.cursor || null);
+    setLastGeneratedMessageId(null);
+    if (chatId) loadLatestChatMessages(chatId, next).catch(error => console.error('Failed to load the conversation:', error));
+  };
+
+  // After messages move between the conversations, neither kept page is current any more.
+  const forgetThreadCache = () => threadCacheRef.current.clear();
 
   const loadOlderChatMessages = async () => {
     if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
 
     setIsLoadingOlderMessages(true);
     try {
-      const page = await api.getChatMessagePage({ chatId: activeChatId, before: oldestMessageCursor });
+      const page = await api.getChatMessagePage({ chatId: activeChatId, before: oldestMessageCursor, thread: activeThreadRef.current });
       setActiveMessages(previous => [...page.messages, ...previous]);
       setHasOlderMessages(page.hasMore);
       setOldestMessageCursor(page.oldestCursor);
@@ -148,7 +194,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       let hasMore = hasOlderMessages;
 
       while (hasMore) {
-        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor });
+        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor, thread: activeThreadRef.current });
         olderMessages.unshift(...page.messages);
         cursor = page.oldestCursor;
         hasMore = page.hasMore;
@@ -171,7 +217,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       let cursor = oldestMessageCursor;
       let hasMore = hasOlderMessages;
       while (hasMore && !olderMessages.some(message => message.id === messageId)) {
-        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor });
+        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor, thread: activeThreadRef.current });
         olderMessages.unshift(...page.messages);
         cursor = page.oldestCursor;
         hasMore = page.hasMore;
@@ -184,11 +230,20 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     }
   };
 
-  const handleSelectChat = async (chatId) => {
+  // Opens a workspace on the given conversation, or on the one already chosen for it.
+  const handleSelectChat = async (chatId, { thread } = {}) => {
     perfStart('workspace-open');
+    const opening = THREADS.includes(thread) ? thread : activeThreadRef.current;
+    threadCacheRef.current.clear();
+    activeChatIdRef.current = chatId;
+    activeThreadRef.current = opening;
+    setActiveThread(opening);
+    setActiveMessages([]);
+    setHasOlderMessages(false);
+    setOldestMessageCursor(null);
     setActiveChatId(chatId);
     const [messages] = await Promise.all([
-      loadLatestChatMessages(chatId),
+      loadLatestChatMessages(chatId, opening),
       preloadPresentation(api, chatId),
       preloadUiState(api, chatId, adoptLegacyUiState),
       ChatWorkspaceView.preload().catch(() => undefined)
@@ -227,17 +282,14 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     if (targetId) await loadLatestChatMessages(targetId);
   };
 
-  const refreshGeneratedChat = async (chatId, response) => {
-    const page = await api.getChatMessagePage({ chatId });
+  const refreshGeneratedChat = async (chatId, response, thread = activeThreadRef.current) => {
+    const messages = await loadLatestChatMessages(chatId, thread);
     const chats = await api.getChats();
-    setActiveMessages(previous => reconcileMessages(previous, page.messages));
-    setHasOlderMessages(page.hasMore);
-    setOldestMessageCursor(page.oldestCursor);
-    if (response.aiMsgId && !response.streamed) setLastGeneratedMessageId(response.aiMsgId);
+    if (isShown(chatId, thread) && response.aiMsgId && !response.streamed) setLastGeneratedMessageId(response.aiMsgId);
     setChats(chats);
     setIsGenerating(false);
     setGenerationProgress(null);
-    return page.messages;
+    return messages;
   };
 
   const saveAlternative = async (oldAlternative, messages) => {
@@ -247,16 +299,18 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
     newMessage.alternatives = JSON.stringify(buildAlternatives(oldAlternative, newMessage));
     await api.saveMessage(newMessage);
-    return loadLatestChatMessages(activeChatId);
+    return loadLatestChatMessages(activeChatId, newMessage.thread || activeThreadRef.current);
   };
 
   const handleSendMessage = async (content, selectedProfileOrWorkflowId, attachedFiles = []) => {
     if (!activeChatId || !selectedProfileOrWorkflowId || (!content.trim() && attachedFiles.length === 0)) return;
     const requestId = ++generationRequestRef.current;
+    const thread = activeThreadRef.current;
 
     const userMsg = {
       id: `msg_${Math.random().toString(36).substr(2, 9)}`,
       chatId: activeChatId,
+      thread,
       role: 'user',
       content,
       aiName: '',
@@ -269,16 +323,17 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     await api.saveMessage(userMsg);
     setActiveMessages(previous => [...previous, userMsg]);
     setIsGenerating(true);
-    setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
+    setGenerationProgress({ chatId: activeChatId, thread, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
     try {
       const response = await api.sendMessage({
         chatId: activeChatId,
+        thread,
         messageContent: content,
         targetId: selectedProfileOrWorkflowId,
         attachedFiles
       });
-      if (response?.success) await refreshGeneratedChat(activeChatId, response);
+      if (response?.success) await refreshGeneratedChat(activeChatId, response, thread);
     } catch (error) {
       console.error('SendMessage error:', error);
     } finally {
@@ -298,12 +353,14 @@ export function useChatSession({ api, setChats, setCurrentView }) {
 
     const lastMessage = activeMessages.find(message => message.id === messageId) || activeMessages.at(-1);
     const oldAlternative = getAlternativeData(lastMessage);
+    const thread = activeThreadRef.current;
     setIsGenerating(true);
-    setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
+    setGenerationProgress({ chatId: activeChatId, thread, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
     try {
       const response = await api.sendMessage({
         chatId: activeChatId,
+        thread,
         messageContent: lastUserMessage.content,
         targetId: selectedProfileOrWorkflowId,
         regenerateMessageId: oldAlternative ? lastMessage.id : null
@@ -311,7 +368,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       // The previous reply is only replaced once a new one was actually saved.
       if (response?.success && response.aiMsgId) {
         if (oldAlternative) await api.deleteMessage(lastMessage.id);
-        const messages = await refreshGeneratedChat(activeChatId, response);
+        const messages = await refreshGeneratedChat(activeChatId, response, thread);
         await saveAlternative(oldAlternative, messages);
         // The kept reply now waits for Narrative State; the Roleplay panel offers to read it.
         window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId: activeChatId } }));
@@ -339,14 +396,16 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       ? currentMessage.attachedFiles
       : JSON.parse(currentMessage?.attachedFiles || '[]');
     const updatedMessages = activeMessages.map(message => message.id === messageId ? { ...message, content: newText } : message);
+    const thread = activeThreadRef.current;
 
     setActiveMessages(updatedMessages.slice(0, userMessageIndex + 1));
     setIsGenerating(true);
-    setGenerationProgress({ chatId: activeChatId, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
+    setGenerationProgress({ chatId: activeChatId, thread, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
     try {
       const response = await api.sendMessage({
         chatId: activeChatId,
+        thread,
         messageContent: newText,
         targetId: selectedProfileOrWorkflowId,
         attachedFiles,
@@ -359,7 +418,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       for (const message of activeMessages.slice(userMessageIndex + 1)) {
         await api.deleteMessage(message.id);
       }
-      const messages = await refreshGeneratedChat(activeChatId, response);
+      const messages = await refreshGeneratedChat(activeChatId, response, thread);
       await saveAlternative(oldAlternative, messages);
     } catch (error) {
       console.error('EditUserMessage generation error:', error);
@@ -429,6 +488,9 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   return {
     activeChatId,
     setActiveChatId,
+    activeThread,
+    selectThread,
+    forgetThreadCache,
     activeMessages,
     setActiveMessages,
     hasOlderMessages,

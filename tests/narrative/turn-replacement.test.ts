@@ -33,7 +33,7 @@ describe('replacing a narrative turn', () => {
         id TEXT PRIMARY KEY, workspaceId TEXT, fromId TEXT, relType TEXT, toId TEXT, label TEXT,
         metadata_json TEXT, createdAt INTEGER
       );
-      CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER);
+      CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER, thread TEXT NOT NULL DEFAULT 'roleplay');
     `);
     runDatabaseMigrations(db);
     for (const [id, type] of [['nora', 'Characters'], ['lantern', 'Items'], ['dock', 'Locations'], ['pier', 'Locations']]) {
@@ -172,9 +172,9 @@ describe('the reply waiting for Narrative State', () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), 'kallamo-pending-turn-'));
     db = openTestDatabase(join(directory, 'pending.db'));
-    db.exec('CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER);');
+    db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER, thread TEXT NOT NULL DEFAULT 'roleplay');");
     runDatabaseMigrations(db);
-    const insert = db.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)');
+    const insert = db.prepare('INSERT INTO messages (id, chatId, role, content, createdAt) VALUES (?, ?, ?, ?, ?)');
     insert.run('user-1', WS, 'user', 'Go.', 1);
     insert.run('reply-1', WS, 'ai', 'Went.', 2);
     insert.run('user-2', WS, 'user', 'Again.', 3);

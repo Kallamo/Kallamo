@@ -13,11 +13,11 @@ function chatDb(blocks: any[], replies: Array<{ id: string; notice?: any }>, job
   const db = openTestDatabase(':memory:');
   db.exec(`
     CREATE TABLE chats (id TEXT PRIMARY KEY, memoryBlocks TEXT);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, debugNotice TEXT);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, debugNotice TEXT, thread TEXT NOT NULL DEFAULT 'roleplay');
     CREATE TABLE narrative_story_jobs (workspace_id TEXT, origin_id TEXT, status TEXT, error_message TEXT);
   `);
   db.prepare('INSERT INTO chats VALUES (?, ?)').run('chat', JSON.stringify(blocks));
-  for (const reply of replies) db.prepare("INSERT INTO messages VALUES (?, 'chat', 'ai', ?)").run(reply.id, reply.notice ? JSON.stringify(reply.notice) : null);
+  for (const reply of replies) db.prepare("INSERT INTO messages (id, chatId, role, debugNotice) VALUES (?, 'chat', 'ai', ?)").run(reply.id, reply.notice ? JSON.stringify(reply.notice) : null);
   for (const job of jobs) db.prepare("INSERT INTO narrative_story_jobs VALUES ('chat', ?, ?, ?)").run(job.id, job.status, job.error ?? null);
   return db;
 }

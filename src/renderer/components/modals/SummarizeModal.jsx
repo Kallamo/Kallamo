@@ -21,7 +21,7 @@ const STAGE_LABELS = {
   tagging: 'Tagging entities'
 };
 
-function progressLabel(progress) {
+export function progressLabel(progress) {
   if (!progress) return 'Archiving...';
   const label = STAGE_LABELS[progress.stage] || 'Archiving';
   if (progress.total > 1) return `${label} ${progress.done}/${progress.total}`;
@@ -32,6 +32,7 @@ export default function SummarizeModal({
   isOpen,
   onClose,
   chatId,
+  thread = 'chat',
   electronAPI,
   nextSummaryNumber = 1,
   onConfirm,
@@ -56,7 +57,7 @@ export default function SummarizeModal({
       setLoading(true);
       setLoadError('');
       try {
-        const overview = await electronAPI.getArchiveOverview(chatId);
+        const overview = await electronAPI.getArchiveOverview(chatId, thread);
         if (cancelled) return;
         if (!overview?.success) {
           setLoadError(overview?.error || 'Could not read this workspace history.');
@@ -88,7 +89,7 @@ export default function SummarizeModal({
     })();
 
     return () => { cancelled = true; };
-  }, [isOpen, chatId, electronAPI]);
+  }, [isOpen, chatId, thread, electronAPI]);
 
 
   const visibleList = useMemo(

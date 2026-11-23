@@ -22,8 +22,13 @@ const {
   rebuildSummaryBlock,
   resetSummaries,
   setMessagesExcluded,
-  archiveTokenTotals
+  archiveTokenTotals,
+  moveMessagesToThread,
+  planThreadMove
 } = require('./features/chat/archive-store');
+const { expandStoryMove } = require('./features/chat/thread-move');
+const { normalizeThread, threadSummaryBlocks, readThreadState, writeThreadState, messageThread, clampShare, DESK_SOURCES } = require('./features/chat/threads');
+const { parseMemoryBlocks } = require('./features/chat/archive-coverage');
 const { selectActiveMessages, selectArchivableMessages, coverageStats } = require('./features/chat/archive-coverage');
 const { registerWorkspaceStateIpc } = require('./features/workspace-state/workspace-state');
 const { createWorldbuildDataService } = require('./features/worldbuild/worldbuild-data');
@@ -2486,9 +2491,31 @@ ipcMain.handle('set-wd-last-channel', async (event, { workspaceId, channel }) =>
 });
 
 // An id that no longer exists falls back to the first active profile.
-ipcMain.handle('set-chat-last-target', async (event, { chatId, targetId }) => {
-  db.prepare('UPDATE chats SET lastTargetId = ? WHERE id = ?').run(targetId || null, chatId);
+ipcMain.handle('set-chat-last-target', async (event, { chatId, targetId, thread }) => {
+  writeThreadState(db, chatId, thread, { lastTargetId: targetId || null });
   return { success: true };
+});
+
+// Archive settings and reply target of one conversation. The Chat's also travel on the chat row.
+ipcMain.handle('get-thread-state', async (event, { chatId, thread }) => {
+  try {
+    return { success: true, state: readThreadState(db, chatId, thread) };
+  } catch (e) {
+    console.error('Error reading conversation state:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-thread-state', async (event, { chatId, thread, patch }) => {
+  try {
+    const allowed = {};
+    if (patch && 'autoSummarize' in patch) allowed.autoSummarize = patch.autoSummarize ? 1 : 0;
+    if (patch && 'archiveThreshold' in patch) allowed.archiveThreshold = Math.max(1000, Math.floor(Number(patch.archiveThreshold) || 60000));
+    return { success: true, state: writeThreadState(db, chatId, thread, allowed) };
+  } catch (e) {
+    console.error('Error saving conversation state:', e);
+    return { success: false, error: e.message };
+  }
 });
 
 ipcMain.handle('get-pending-suggestion-ids', async (event, { workspaceId }) => {
@@ -3827,11 +3854,14 @@ ipcMain.handle('get-chats', async () => {
     const building = pendingWorkspaceIds(db);
     if (building.size) rows.splice(0, rows.length, ...rows.filter(row => !building.has(row.id)));
     // The home screen previews each workspace's latest AI reply.
+    // A roleplay workspace previews where its story stopped, not the talk beside it.
     const lastReply = db.prepare(`
       SELECT aiName, aiColor, content, createdAt FROM messages
-      WHERE chatId = ? AND role != 'user' ORDER BY createdAt DESC LIMIT 1
+      WHERE chatId = ? AND thread = ? AND role != 'user' ORDER BY createdAt DESC LIMIT 1
     `);
     const locationName = db.prepare('SELECT canonicalName FROM entities WHERE id = ? AND workspaceId = ?');
+    // Kept with the mode off too, so the Chat can say the story is still there.
+    const roleplayCount = db.prepare("SELECT COUNT(*) AS count FROM messages WHERE chatId = ? AND thread = 'roleplay'");
     // Where a roleplay stopped: the scene's location, its background and the story clock.
     const roleplayScene = (workspaceId) => {
       try {
@@ -3857,8 +3887,10 @@ ipcMain.handle('get-chats', async () => {
       ...r,
       experienceMode: r.experienceMode === 'roleplay' ? 'roleplay' : 'standard',
       roleplayScene: r.experienceMode === 'roleplay' ? roleplayScene(r.id) : null,
+      roleplayThread: r.experienceMode === 'roleplay' ? readThreadState(db, r.id, 'roleplay') : null,
+      roleplayMessageCount: roleplayCount.get(r.id).count,
       lastReply: (() => {
-        const reply = lastReply.get(r.id);
+        const reply = lastReply.get(r.id, r.experienceMode === 'roleplay' ? 'roleplay' : 'chat') || lastReply.get(r.id, 'chat');
         return reply ? { aiName: reply.aiName, aiColor: reply.aiColor, excerpt: replyExcerpt(reply.content), createdAt: reply.createdAt } : null;
       })(),
       activeProfiles: JSON.parse(r.activeProfiles || '[]'),
@@ -4630,7 +4662,9 @@ ipcMain.handle('save-chat', async (event, chat) => {
           archiveThreshold = ?, activeProfiles = ?, activeWorkflows = ?,
           backgroundImage = ?, backdropOpacity = ?, userBubbleOpacity = ?, aiBubbleOpacity = ?,
           pinnedFiles = ?, autoSummarize = ?, showContextBar = ?,
-          wdContextWindow = ?, wdLastChannel = ?, wdUseChatHistory = ?, syncToCloud = ?
+          wdContextWindow = ?, wdLastChannel = ?, wdUseChatHistory = ?, syncToCloud = ?,
+          chatReadsRoleplay = ?, chatRoleplayShare = ?, chatRoleplaySummaries = ?,
+          wdHistorySource = ?, wdHistoryShare = ?, wdHistorySplit = ?, wdHistorySummaries = ?
         WHERE id = ?
       `);
 
@@ -4656,6 +4690,13 @@ ipcMain.handle('save-chat', async (event, chat) => {
         chat.wdLastChannel || 'replacement',
         chat.wdUseChatHistory ?? 1,
         newSyncToCloud,
+        chat.chatReadsRoleplay ?? 1,
+        clampShare(chat.chatRoleplayShare, 30),
+        chat.chatRoleplaySummaries ?? 1,
+        DESK_SOURCES.includes(chat.wdHistorySource) ? chat.wdHistorySource : null,
+        clampShare(chat.wdHistoryShare, 25),
+        clampShare(chat.wdHistorySplit, 60),
+        chat.wdHistorySummaries ?? 1,
         chat.id
       );
 
@@ -4859,11 +4900,11 @@ ipcMain.handle('get-chat-files', async (event, chatId) => {
 
 
 // Excludes the debug record: it can be megabytes per older message and this list reloads often.
-ipcMain.handle('get-chat-messages', async (event, chatId) => {
+ipcMain.handle('get-chat-messages', async (event, chatId, thread) => {
   try {
     const rows = db.prepare(
-      'SELECT id, chatId, role, content, aiName, aiColor, attachedFiles, alternatives, excluded, createdAt, last_modified FROM messages WHERE chatId = ? ORDER BY createdAt ASC'
-    ).all(chatId);
+      'SELECT id, chatId, thread, role, content, aiName, aiColor, attachedFiles, alternatives, excluded, createdAt, last_modified FROM messages WHERE chatId = ? AND thread = ? ORDER BY createdAt ASC, id ASC'
+    ).all(chatId, normalizeThread(thread));
     return rows.map(r => ({
       ...r,
       attachedFiles: JSON.parse(r.attachedFiles || '[]')
@@ -5056,9 +5097,9 @@ ipcMain.handle('list-entity-links', async (event, { workspaceId, relType } = {})
   }
 });
 
-ipcMain.handle('get-chat-message-page', async (event, { chatId, before }) => {
+ipcMain.handle('get-chat-message-page', async (event, { chatId, before, thread }) => {
   try {
-    return getMessagePage(db, { chatId, before });
+    return getMessagePage(db, { chatId, before, thread });
   } catch (e) {
     console.error("Error loading chat message page:", e);
     return { messages: [], hasMore: false, oldestCursor: null };
@@ -5077,10 +5118,12 @@ ipcMain.handle('get-message-debug-notice', async (event, messageId) => {
 ipcMain.handle('save-message', async (event, message) => {
   try {
     const insert = db.prepare(`
-      INSERT OR REPLACE INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt, thread)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
+    // A message saved again keeps its conversation unless the caller names one.
+    const thread = message.thread ? normalizeThread(message.thread) : (messageThread(db, message.id) || 'chat');
     insert.run(
       message.id,
       message.chatId,
@@ -5090,7 +5133,8 @@ ipcMain.handle('save-message', async (event, message) => {
       message.aiColor || '',
       debugNoticeToSave(db, message),
       typeof message.attachedFiles === 'string' ? message.attachedFiles : JSON.stringify(message.attachedFiles || []),
-      message.createdAt || Date.now()
+      message.createdAt || Date.now(),
+      thread
     );
     return { success: true };
   } catch (e) {
@@ -5162,7 +5206,9 @@ ipcMain.handle('delete-message', async (event, messageId, deleteAttachedFilesFro
 
 ipcMain.handle('revert-chat-to-message', async (event, { chatId, messageId }) => {
   try {
-    const messages = db.prepare('SELECT id FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+    // Reverting only reaches the conversation the message is in.
+    const thread = messageThread(db, messageId) || 'chat';
+    const messages = db.prepare('SELECT id FROM messages WHERE chatId = ? AND thread = ? ORDER BY createdAt ASC, id ASC').all(chatId, thread);
     const targetIndex = messages.findIndex(m => m.id === messageId);
     if (targetIndex === -1) throw new Error("Message not found in this chat");
 
@@ -5195,21 +5241,24 @@ ipcMain.handle('revert-chat-to-message', async (event, { chatId, messageId }) =>
 
 // What the archive window needs to open: the full history plus which messages
 // are already covered, muted, or held back as recent context.
-ipcMain.handle('get-archive-overview', async (event, { chatId }) => {
+ipcMain.handle('get-archive-overview', async (event, { chatId, thread: requestedThread }) => {
   try {
-    const chat = db.prepare('SELECT memoryBlocks, archiveThreshold FROM chats WHERE id = ?').get(chatId);
+    const thread = normalizeThread(requestedThread);
+    const chat = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
     if (!chat) throw new Error("Chat not found");
 
+    const blocks = threadSummaryBlocks(parseMemoryBlocks(chat.memoryBlocks), thread);
     const messages = db
-      .prepare('SELECT id, role, content, aiName, aiColor, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC')
-      .all(chatId);
-    const archivable = new Set(selectArchivableMessages(messages, chat.memoryBlocks).map(m => m.id));
-    const active = new Set(selectActiveMessages(messages, chat.memoryBlocks).map(m => m.id));
+      .prepare('SELECT id, role, content, aiName, aiColor, excluded, createdAt FROM messages WHERE chatId = ? AND thread = ? ORDER BY createdAt ASC, id ASC')
+      .all(chatId, thread);
+    const archivable = new Set(selectArchivableMessages(messages, blocks).map(m => m.id));
+    const active = new Set(selectActiveMessages(messages, blocks).map(m => m.id));
 
     return {
       success: true,
-      archiveThreshold: chat.archiveThreshold || 60000,
-      stats: coverageStats(messages, chat.memoryBlocks),
+      thread,
+      archiveThreshold: readThreadState(db, chatId, thread).archiveThreshold,
+      stats: coverageStats(messages, blocks),
       messages: messages.map(message => ({
         id: message.id,
         role: message.role,
@@ -5259,9 +5308,9 @@ ipcMain.handle('rebuild-chat-summary', async (event, { chatId, blockId }) => {
   }
 });
 
-ipcMain.handle('reset-chat-summaries', async (event, { chatId }) => {
+ipcMain.handle('reset-chat-summaries', async (event, { chatId, thread }) => {
   try {
-    const result = resetSummaries(db, chatId);
+    const result = resetSummaries(db, chatId, thread);
     return { success: true, ...result };
   } catch (e) {
     console.error("Error resetting chat summaries:", e);
@@ -5297,6 +5346,57 @@ ipcMain.handle('get-archived-message-details', async (event, { chatId, messageId
   }
 });
 
+// What a move between the Chat and the Roleplay would do, for the confirmation to show.
+ipcMain.handle('plan-thread-move', async (event, { chatId, messageIds, toThread }) => {
+  try {
+    const target = normalizeThread(toThread);
+    const scope = expandStoryMove(db, chatId, messageIds, target);
+    const plan = planThreadMove(db, chatId, scope.ids, target);
+    return { success: true, ...plan, takesBack: scope.takeBack.length, addedForStory: scope.added };
+  } catch (e) {
+    console.error('Error planning a conversation move:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('move-messages-to-thread', async (event, { chatId, messageIds, toThread }) => {
+  try {
+    const target = normalizeThread(toThread);
+    const scope = expandStoryMove(db, chatId, messageIds, target);
+    // Newest first, as a revert does, so each turn is taken back over the state the next one left.
+    for (const originId of scope.takeBack) {
+      getNarrativeEntitySystem().invalidateOrigin(chatId, originId, 'deleted');
+      db.prepare('DELETE FROM roleplay_message_frames WHERE workspace_id = ? AND origin_id = ?').run(chatId, originId);
+    }
+    if (scope.takeBack.length) purgeDeadTurns(db, chatId);
+    const result = moveMessagesToThread(db, chatId, scope.ids, target);
+    return { success: true, ...result, takenBack: scope.takeBack.length };
+  } catch (e) {
+    console.error('Error moving messages between conversations:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// After a move: each summary that covers both conversations becomes one per side, reported like Summarize.
+ipcMain.handle('split-mixed-summaries', async (event, { chatId, blockIds, profileId }) => {
+  try {
+    const { splitMixedSummary } = require('./workflow-runner');
+    const results = [];
+    for (const blockId of Array.isArray(blockIds) ? blockIds : []) {
+      results.push(await splitMixedSummary({
+        chatId, blockId, profileId,
+        onProgress: (progress) => {
+          if (!event.sender.isDestroyed()) event.sender.send('summarization-progress', { chatId, ...progress });
+        }
+      }));
+    }
+    return { success: results.every(result => result.success), results };
+  } catch (e) {
+    console.error('Error rebuilding mixed summaries:', e);
+    return { success: false, error: e.message, results: [] };
+  }
+});
+
 ipcMain.handle('set-messages-excluded', async (event, { chatId, messageIds, excluded }) => {
   try {
     const result = setMessagesExcluded(db, chatId, messageIds, excluded);
@@ -5307,11 +5407,11 @@ ipcMain.handle('set-messages-excluded', async (event, { chatId, messageIds, excl
   }
 });
 
-ipcMain.handle('execute-summarization', async (event, { chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId }) => {
+ipcMain.handle('execute-summarization', async (event, { chatId, thread, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId }) => {
   try {
     const { executeSummarizationInternal } = require('./workflow-runner');
     const result = await executeSummarizationInternal({
-      chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId,
+      chatId, thread, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId,
       onProgress: (progress) => {
         if (!event.sender.isDestroyed()) event.sender.send('summarization-progress', { chatId, ...progress });
       }
@@ -5788,9 +5888,9 @@ ipcMain.on('open-migration-backups-folder', () => {
 // --- WORKFLOW GENERATION IPC HANDLERS ---
 const { runWorkflow, cancelGeneration, resolveErrorDeferred, resolveOverflowDeferred } = require('./workflow-runner');
 
-ipcMain.handle('send-message', async (event, { chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId }) => {
+ipcMain.handle('send-message', async (event, { chatId, thread, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId }) => {
   try {
-    return await runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents: event.sender });
+    return await runWorkflow({ chatId, thread, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents: event.sender });
   } catch (error) {
     console.error("Error in send-message IPC handler:", error);
     throw error;

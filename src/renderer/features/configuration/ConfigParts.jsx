@@ -143,3 +143,35 @@ export function formatSigned(value) {
   const rounded = Math.round(number * 100) / 100;
   return `${rounded > 0 ? '+' : rounded < 0 ? '−' : ''}${formatNumber(Math.abs(rounded))}`;
 }
+
+// A share between two readers, kept between 10% and 90% so neither side is ever left with nothing.
+// Saved when the thumb is released, not on every step of a drag.
+export function ShareSlider({ label, value, summary, leftLabel, rightLabel, help, onChange, onCommit, min = 10, max = 90, step = 5 }) {
+  const fill = ((value - min) / (max - min)) * 100;
+  return (
+    <div className="px-4 pb-4 pt-3.5">
+      <label className="block">
+        <span className="flex items-baseline gap-2">
+          <span className="min-w-0 flex-1 text-[0.8125rem] font-semibold text-text-secondary">{label}</span>
+          <span className="shrink-0 text-[0.8125rem] tabular-nums text-text-muted">{summary}</span>
+        </span>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={event => onChange(parseInt(event.target.value, 10))}
+          onPointerUp={onCommit}
+          onKeyUp={onCommit}
+          className="setting-range my-3.5"
+          style={{ '--range-value': `${fill}%` }}
+        />
+      </label>
+      {(leftLabel || rightLabel) && (
+        <div className="flex justify-between text-xs text-text-subtle"><span>{leftLabel}</span><span>{rightLabel}</span></div>
+      )}
+      {help && <p className="mt-2 text-xs leading-relaxed text-text-subtle">{help}</p>}
+    </div>
+  );
+}

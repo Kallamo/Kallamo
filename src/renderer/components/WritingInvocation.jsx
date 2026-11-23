@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Pin } from 'lucide-react';
+import { AlertTriangle, History, Pin } from 'lucide-react';
 import { AiGlyph } from './ui/glyphs';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
@@ -33,7 +33,7 @@ const CHANNELS = [
 
 const countWords = (text) => (String(text || '').match(/\S+/g) || []).length;
 
-export function InvokeModal({ selection, profiles, initialChannel, directivesCount = 0, onSubmit, onClose }) {
+export function InvokeModal({ selection, profiles, initialChannel, directivesCount = 0, historyNote = '', onChangeHistory, onSubmit, onClose }) {
   const [profileId, setProfileId] = useState(profiles[0]?.id || '');
   const [prompt, setPrompt] = useState('');
   const [channel, setChannel] = useState(CHANNELS.some(c => c.value === initialChannel) ? initialChannel : 'replacement');
@@ -114,6 +114,15 @@ export function InvokeModal({ selection, profiles, initialChannel, directivesCou
       </div>
 
       <div className="flex items-center gap-2 border-t border-border-subtle px-5 py-3.5">
+        {historyNote && (
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-text-subtle">
+            <History className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{historyNote}</span>
+            {onChangeHistory && (
+              <button type="button" onClick={onChangeHistory} className="ml-0.5 shrink-0 rounded font-semibold text-text-secondary underline underline-offset-[3px] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Change</button>
+            )}
+          </span>
+        )}
         {directivesCount > 0 && (
           <span className="inline-flex items-center gap-1.5 text-xs text-text-subtle">
             <Pin className="h-3.5 w-3.5" aria-hidden="true" />

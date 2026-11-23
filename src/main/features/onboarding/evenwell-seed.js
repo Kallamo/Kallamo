@@ -227,8 +227,8 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     };
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-        VALUES (@id, @chatId, @role, @content, @aiName, @aiColor, @debugNotice, @attachedFiles, @createdAt)
+        INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt, thread)
+        VALUES (@id, @chatId, @role, @content, @aiName, @aiColor, @debugNotice, @attachedFiles, @createdAt, 'roleplay')
       `).run(message);
       db.prepare('UPDATE chats SET updatedAt = ? WHERE id = ?').run(now, workspaceId);
       // The opening shows the place and hour above it, like every reply after it.

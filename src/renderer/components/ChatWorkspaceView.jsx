@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ArrowDown, ArrowLeft, Paperclip, X, Folder, SlidersHorizontal, Trash2, History } from 'lucide-react';
+import { ArrowDown, ArrowLeft, Paperclip, X, Folder, SlidersHorizontal, Trash2, History, Drama, RefreshCw } from 'lucide-react';
 import { WorkspaceGlyph, WritingGlyph, WorldbuildGlyph, MemoryGlyph } from './ui/glyphs';
 import SummarizeModal from './modals/SummarizeModal';
 import { selectActiveMessages, selectArchivableMessages } from '../features/chat/archive-coverage';
@@ -15,9 +15,13 @@ import ChatMessageItem, { isImage, isVideo } from '../features/chat/components/C
 import GenerationBubble from '../features/chat/components/GenerationBubble';
 import ContextMeter from '../features/chat/components/ContextMeter';
 import ReplyTargetPicker from '../features/chat/components/ReplyTargetPicker';
+import RoleplayHistoryChip from '../features/chat/components/RoleplayHistoryChip';
+import ThreadMoveDialog from '../features/chat/components/ThreadMoveDialog';
+import Button from './ui/Button';
 import { BLOCK_DRAG_TYPE } from '../features/roleplay/RoleplayLayoutBlock';
 import RoleplayQuickPanel from '../features/roleplay/RoleplayQuickPanel';
 import StoryIntro from '../features/onboarding/StoryIntro';
+import { useTour } from '../features/onboarding/GuidedTour';
 import { prepareGenerationSubmission, resolveActiveGenerationTarget } from '../features/chat/generation-target';
 import { holdDeferredFrames, safeParseJson } from '../features/chat/diagnostic-format';
 import { estimateMessageTokens } from '../features/chat/message-content';
@@ -34,6 +38,8 @@ import { useStableCallback } from '../utils/useStableCallback';
 import { perfEndAfterPaint, perfStart } from '../utils/perf';
 import { ChatFilesView, ChatMemoryView, ConfigurationView, WorldbuildView, WritingDeskView, workspaceTabViews } from '../views';
 import { forgetWorldbuildView } from '../features/worldbuild/worldbuildViewCache';
+import { openConfigurationSection } from '../features/configuration/open-section';
+import { firstActiveProfile, moveBetweenThreads, rebuildFailureMessage } from '../features/chat/thread-move-actions';
 
 // Within this distance of the end the reader counts as following the conversation.
 const FOLLOW_LATEST_THRESHOLD_PX = 96;
@@ -42,6 +48,7 @@ const FOLLOW_LATEST_THRESHOLD_PX = 96;
 const ALWAYS_RENDERED_ROWS = 10;
 
 const bubbleAlpha = opacity => opacity / 100;
+const ROLEPLAY_KEPT_LINE = count => `Your roleplay is kept (${count} ${count === 1 ? 'message' : 'messages'}). It comes back when Roleplay mode is on.`;
 
 export default function ChatWorkspaceView() {
   const {
@@ -73,8 +80,16 @@ export default function ChatWorkspaceView() {
     lastGeneratedMessageId,
     setLastGeneratedMessageId,
     setActiveMessages,
-    showToast
+    showToast,
+    activeThread,
+    selectThread,
+    forgetThreadCache,
+    uiFlags,
+    uiFlagsLoaded,
+    dismissHint
   } = useApp();
+  // The Chat and the Roleplay share this view; `thread` is the one on screen.
+  const thread = activeThread === 'roleplay' ? 'roleplay' : 'chat';
 
   const workspaceId = activeChat?.id;
   // Seeded from the preload done while opening, so the first paint has the final layout.
@@ -195,9 +210,12 @@ export default function ChatWorkspaceView() {
       requestState.revision = roleplayFrameRevision;
       requestState.requestedIds = new Set();
     }
+    // The Chat keeps the Roleplay's frames as they are, so coming back shows them without a reread.
+    if (thread !== 'roleplay') return;
     const originIds = activeMessages.filter(message => message.role !== 'user').map(message => message.id);
     if (!originIds.length || !electronAPI.getRoleplayMessageFrames) {
       setRoleplayFrames({});
+      requestState.requestedIds = new Set();
       return;
     }
     const missingOriginIds = originIds.filter(originId => !requestState.requestedIds.has(originId));
@@ -220,7 +238,7 @@ export default function ChatWorkspaceView() {
         missingOriginIds.forEach(originId => currentRequest.requestedIds.delete(originId));
       }
     });
-  }, [activeChat.id, activeMessages, electronAPI, roleplayFrameRevision]);
+  }, [activeChat.id, activeMessages, electronAPI, roleplayFrameRevision, thread]);
 
   const heldRoleplayFrames = useMemo(
     () => holdDeferredFrames(activeMessages, roleplayFrames, { analyzing: backgroundNarrativeIds.has(activeChat.id) }),
@@ -240,6 +258,17 @@ export default function ChatWorkspaceView() {
   const [summarizeModalOpen, setSummarizeModalOpen] = useState(false);
   const [summarizeProgress, setSummarizeProgress] = useState(null); // { stage, done, total }
   const [finishingBlockId, setFinishingBlockId] = useState(null);
+
+  // Coverage reads this conversation's summaries only; notes and files belong to both.
+  const threadMemoryBlocks = useMemo(() => {
+    const blocks = safeParseJson(activeChat?.memoryBlocks, []);
+    return (Array.isArray(blocks) ? blocks : []).filter(block => !block || block.type !== 'summarized'
+      || (block.thread === 'roleplay') === (thread === 'roleplay'));
+  }, [activeChat?.memoryBlocks, thread]);
+  const threadState = thread === 'roleplay'
+    ? (activeChat?.roleplayThread || {})
+    : { autoSummarize: activeChat?.autoSummarize, archiveThreshold: activeChat?.archiveThreshold, lastTargetId: activeChat?.lastTargetId };
+  const autoSummarizeKey = `${activeChat?.id}:${thread}`;
 
   // Counts summaries only, from the highest number used, so a deleted one never hands its number on.
   const nextSummaryNumber = useMemo(() => {
@@ -264,6 +293,7 @@ export default function ChatWorkspaceView() {
   const archiveMessages = useArchiveHistory({
     api: electronAPI,
     chatId: activeChat?.id,
+    thread,
     activeMessages,
     revision: historyRevision,
     memoryBlocks: activeChat?.memoryBlocks
@@ -274,7 +304,7 @@ export default function ChatWorkspaceView() {
     perfStart('tab-switch');
     setActiveWorkspaceView(view);
   }, [setActiveWorkspaceView]);
-  const isChatVisible = activeSubView === 'chat';
+  const isChatVisible = activeSubView === 'chat' || activeSubView === 'roleplay';
   const [worldbuildFocusId, setWorldbuildFocusId] = useState(null); // entity to focus when opening Worldbuild from the text
 
   const openEntityInWorldbuild = (entityId) => {
@@ -501,37 +531,37 @@ export default function ChatWorkspaceView() {
 
   useEffect(() => {
     if (!electronAPI.onTriggerAutoSummarize) return;
-    const unsubscribe = electronAPI.onTriggerAutoSummarize(({ chatId }) => {
-      if (activeChat && activeChat.id === chatId && !dismissedAutoSummarizeChatsRef.current.has(chatId)) {
+    const unsubscribe = electronAPI.onTriggerAutoSummarize(({ chatId, thread: fromThread }) => {
+      if (activeChat && activeChat.id === chatId && (fromThread || 'chat') === thread && !dismissedAutoSummarizeChatsRef.current.has(autoSummarizeKey)) {
         setSummarizeModalOpen(true);
       }
     });
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [activeChat, electronAPI]);
+  }, [activeChat, electronAPI, thread, autoSummarizeKey]);
 
   // Token threshold auto-trigger monitor (runs on frontend when token usage is exceeded)
   useEffect(() => {
     if (
       activeChat
-      && activeChat.autoSummarize === 1
+      && threadState.autoSummarize === 1
       && archiveMessages.length > 0
       && !summarizeModalOpen
-      && !dismissedAutoSummarizeChatsRef.current.has(activeChat.id)
+      && !dismissedAutoSummarizeChatsRef.current.has(autoSummarizeKey)
     ) {
-      const archiveThreshold = activeChat.archiveThreshold || 60000;
-      const activeMsgs = selectActiveMessages(archiveMessages, activeChat.memoryBlocks);
+      const archiveThreshold = threadState.archiveThreshold || 60000;
+      const activeMsgs = selectActiveMessages(archiveMessages, threadMemoryBlocks);
 
       const tokensUsed = activeMsgs.reduce((total, message) => total + estimateMessageTokens(message.content), 0);
 
       // Only nag when the window would actually have something to offer.
-      const archivable = selectArchivableMessages(archiveMessages, activeChat.memoryBlocks);
+      const archivable = selectArchivableMessages(archiveMessages, threadMemoryBlocks);
       if (tokensUsed >= archiveThreshold && archivable.length > 0) {
         setSummarizeModalOpen(true);
       }
     }
-  }, [archiveMessages, activeChat, summarizeModalOpen]);
+  }, [archiveMessages, activeChat, summarizeModalOpen, threadMemoryBlocks, threadState.autoSummarize, threadState.archiveThreshold, autoSummarizeKey]);
 
   // Archiving reports which stage it is in, so a long run can say so instead of
   // looking frozen.
@@ -543,6 +573,8 @@ export default function ChatWorkspaceView() {
     });
   }, [activeChat?.id]);
 
+  // Each conversation remembers its own reply target; a choice made here wins until the chat row catches up.
+  const chosenTargetsRef = useRef(new Map());
   // Restore the last target used, else the first active profile.
   useEffect(() => {
     if (activeChat) {
@@ -552,7 +584,9 @@ export default function ChatWorkspaceView() {
       const validActiveProf = activeProfs.find(id => writingProfiles.some(p => p.id === id));
       const validActiveWf = activeWfs.find(id => workflows.some(w => w.id === id));
 
-      const lastTargetId = activeChat.lastTargetId;
+      const chosen = chosenTargetsRef.current.get(autoSummarizeKey);
+      // The Roleplay starts on what the Chat used when it has nothing of its own yet.
+      const lastTargetId = chosen || threadState.lastTargetId || (thread === 'roleplay' ? activeChat.lastTargetId : null);
       const lastStillValid = lastTargetId &&
         ((activeProfs.includes(lastTargetId) && writingProfiles.some(p => p.id === lastTargetId)) ||
          (activeWfs.includes(lastTargetId) && workflows.some(w => w.id === lastTargetId)));
@@ -567,7 +601,7 @@ export default function ChatWorkspaceView() {
         setSelectedTargetId('');
       }
     }
-  }, [activeChat, writingProfiles, workflows]);
+  }, [activeChat, writingProfiles, workflows, thread, threadState.lastTargetId, autoSummarizeKey]);
 
   const activeProfilesList = safeParseJson(activeChat?.activeProfiles);
   const activeWorkflowsList = safeParseJson(activeChat?.activeWorkflows);
@@ -646,6 +680,85 @@ export default function ChatWorkspaceView() {
   const toggleExcluded = useStableCallback((messageId, excluded) => handleToggleExcluded(messageId, excluded));
   const finishTyping = useStableCallback(() => setLastGeneratedMessageId(null));
 
+  // Moving messages between the Chat and the Roleplay: a menu choice, or a range picked by hand.
+  const moveTo = roleplayWorkspaceId === workspaceId && roleplayMode ? (thread === 'chat' ? 'roleplay' : 'chat') : null;
+  const [moveSelection, setMoveSelection] = useState(null);
+  const [movePlan, setMovePlan] = useState(null);
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [movedNotice, setMovedNotice] = useState(null);
+  useEffect(() => { setMoveSelection(null); setMovePlan(null); }, [activeChat.id, thread]);
+  useEffect(() => { setMovedNotice(null); }, [activeChat.id]);
+
+  const openMovePlan = async messageIds => {
+    if (!moveTo || !messageIds.length) return;
+    const plan = await electronAPI.planThreadMove({ chatId: activeChat.id, messageIds, toThread: moveTo });
+    if (!plan?.success) {
+      showToast(plan?.error || 'Could not prepare the move.', 'error');
+      return;
+    }
+    if (!plan.moving.length) return;
+    setMovePlan({ ...plan, requested: messageIds });
+  };
+  const requestMove = useStableCallback((messageId, scope) => {
+    const index = activeMessages.findIndex(message => message.id === messageId);
+    if (index < 0) return;
+    if (scope === 'choose') setMoveSelection(new Set([messageId]));
+    else openMovePlan(scope === 'after' ? activeMessages.slice(index).map(message => message.id) : [messageId]);
+  });
+  const countFrom = useStableCallback(messageId => {
+    const index = activeMessages.findIndex(message => message.id === messageId);
+    return index < 0 ? 1 : activeMessages.length - index;
+  });
+  const toggleMoveSelection = messageId => setMoveSelection(current => {
+    const next = new Set(current);
+    if (next.has(messageId)) next.delete(messageId); else next.add(messageId);
+    return next;
+  });
+  const selectEverythingAfter = () => setMoveSelection(current => {
+    const first = activeMessages.findIndex(message => current.has(message.id));
+    return new Set(activeMessages.slice(Math.max(0, first)).map(message => message.id));
+  });
+
+  const confirmMove = async ({ rebuildMixed }) => {
+    if (!movePlan) return;
+    setMoveBusy(true);
+    try {
+      const { result, failed } = await moveBetweenThreads(electronAPI, { chatId: activeChat.id, plan: movePlan, rebuildMixed, profileId: firstActiveProfile(activeChat) });
+      if (!result?.success) {
+        showToast(result?.error || 'Could not move the messages.', 'error');
+        return;
+      }
+      const moved = new Set(movePlan.moving);
+      setActiveMessages(previous => previous.filter(message => !moved.has(message.id)));
+      forgetThreadCache?.();
+      setMovePlan(null);
+      setMoveSelection(null);
+      setHistoryRevision(revision => revision + 1);
+      if (result.takenBack) window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId: activeChat.id } }));
+      if (movePlan.target === 'roleplay') setMovedNotice({ count: result.moved });
+      if (failed.length) showToast(rebuildFailureMessage(failed), 'error');
+      else showToast(`${result.moved} ${result.moved === 1 ? 'message' : 'messages'} moved to the ${movePlan.target === 'roleplay' ? 'Roleplay' : 'Chat'}.`, 'success');
+      await refreshChats(activeChat.id);
+    } catch (error) {
+      console.error('Failed to move messages:', error);
+      showToast('Could not move the messages.', 'error');
+    } finally {
+      setMoveBusy(false);
+    }
+  };
+
+  // Moved story has no Narrative State yet; Update entities can read it and suggest changes.
+  const runUpdateEntities = async () => {
+    setMovedNotice(null);
+    try {
+      const result = await electronAPI.enrichEntities?.(activeChat.id, { mode: 'update' });
+      if (result && result.success === false) showToast(`Update failed: ${result.error || 'unknown error'}`, 'error');
+      else showToast('Update entities is reading the story. Its suggestions appear in Worldbuild.', 'info');
+    } catch (error) {
+      showToast(`Update failed: ${error.message}`, 'error');
+    }
+  };
+
   const messageActions = useMemo(() => ({
     copyText,
     startEdit: messageId => setEditingMessageId(messageId),
@@ -658,11 +771,30 @@ export default function ChatWorkspaceView() {
     finishTyping,
     requestDelete: messageId => setConfirmDeleteData({ type: 'delete_msg', messageId }),
     requestRevert: messageId => setConfirmDeleteData({ type: 'revert_chat', messageId }),
-    requestArchive: () => setSummarizeModalOpen(true)
-  }), [copyText, saveUserEdit, saveAiEdit, regenerate, switchAlternative, toggleExcluded, finishTyping]);
+    requestArchive: () => setSummarizeModalOpen(true),
+    requestMove,
+    countFrom
+  }), [copyText, saveUserEdit, saveAiEdit, regenerate, switchAlternative, toggleExcluded, finishTyping, requestMove, countFrom]);
 
   const isCurrentRoleplayMode = roleplayWorkspaceId === workspaceId && roleplayMode;
-  const effectiveBackground = isCurrentRoleplayMode && isChatVisible && roleplayBackground?.imagePath
+  // The first time a workspace shows both conversations, a short tip says what each is for.
+  const [storyIntroActive, setStoryIntroActive] = useState(false);
+  const { tour: runningTour, startTour } = useTour();
+  useEffect(() => {
+    if (!uiFlagsLoaded || uiFlags.threadsTipSeen || !isCurrentRoleplayMode || !isChatVisible || storyIntroActive || runningTour) return undefined;
+    const timer = setTimeout(() => { dismissHint('threadsTipSeen'); startTour('threads'); }, 700);
+    return () => clearTimeout(timer);
+  }, [uiFlagsLoaded, uiFlags.threadsTipSeen, isCurrentRoleplayMode, isChatVisible, storyIntroActive, runningTour, dismissHint, startTour]);
+
+  // Turning the mode off hides the Roleplay; its messages stay and come back when it is on again.
+  useEffect(() => {
+    if (roleplayWorkspaceId !== workspaceId || roleplayMode || thread !== 'roleplay') return;
+    if (activeSubView === 'roleplay') setActiveSubView('chat');
+    else selectThread('chat');
+  }, [roleplayWorkspaceId, workspaceId, roleplayMode, thread, activeSubView, setActiveSubView, selectThread]);
+  // The narrator's rail, scene art and frames belong to the Roleplay tab alone.
+  const isRoleplayVisible = isCurrentRoleplayMode && isChatVisible && thread === 'roleplay';
+  const effectiveBackground = isRoleplayVisible && roleplayBackground?.imagePath
     ? roleplayBackground.imagePath
     : activeChat?.backgroundImage;
   const hasBg = Boolean(effectiveBackground && effectiveBackground.trim() !== '');
@@ -706,6 +838,7 @@ export default function ChatWorkspaceView() {
         ...(isDocumentMode ? { padding: '1.25rem', borderRadius: '0.75rem' } : blurStyle(aiAlpha))
       },
       entityNames,
+      moveTo,
       flags: {
         tokenDebug: Boolean(advanced.tokenDebug),
         ragDebug: Boolean(advanced.ragDebug),
@@ -713,14 +846,14 @@ export default function ChatWorkspaceView() {
         narrativeStateDebug: Boolean(advanced.narrativeStateDebug)
       }
     };
-  }, [entityNames, fontSize, isDocumentMode, softBlur, hasBg, userBubbleOpacity, aiBubbleOpacity, advanced.tokenDebug, advanced.ragDebug, advanced.agenticDebug, advanced.narrativeStateDebug]);
+  }, [entityNames, moveTo, fontSize, isDocumentMode, softBlur, hasBg, userBubbleOpacity, aiBubbleOpacity, advanced.tokenDebug, advanced.ragDebug, advanced.agenticDebug, advanced.narrativeStateDebug]);
 
   const lastUserMessageId = useMemo(() => activeMessages.findLast(m => m.role === 'user')?.id, [activeMessages]);
   const lastAiMessage = useMemo(() => activeMessages.findLast(m => m.role === 'ai'), [activeMessages]);
 
   // Active context usage bar (optional, shown at the top of the chat)
-  const ctxTokens = useMemo(() => selectActiveMessages(archiveMessages, activeChat?.memoryBlocks)
-    .reduce((total, message) => total + estimateMessageTokens(message.content), 0), [archiveMessages, activeChat?.memoryBlocks]);
+  const ctxTokens = useMemo(() => selectActiveMessages(archiveMessages, threadMemoryBlocks)
+    .reduce((total, message) => total + estimateMessageTokens(message.content), 0), [archiveMessages, threadMemoryBlocks]);
 
   // Find in chat searches the whole history, not just the rendered page, and paints its
   // matches with CSS highlights so the rendered markdown and dialogue colours stay untouched.
@@ -860,6 +993,7 @@ export default function ChatWorkspaceView() {
 
       const result = await electronAPI.executeSummarization({
         chatId: activeChat.id,
+        thread,
         messageIds,
         excludedMessageIds,
         customTitle,
@@ -870,7 +1004,7 @@ export default function ChatWorkspaceView() {
         // History is stored; recap and tags finish in the background.
         await refreshChats(activeChat.id);
         setHistoryRevision(rev => rev + 1);
-        dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
+        dismissedAutoSummarizeChatsRef.current.delete(autoSummarizeKey);
         setSummarizeModalOpen(false);
         if (result.blockId) finalizeSummaryBlock(activeChat.id, result.blockId);
       } else {
@@ -1041,7 +1175,7 @@ export default function ChatWorkspaceView() {
     backgroundRepeat: 'no-repeat'
   } : {};
 
-  const ctxThreshold = activeChat.archiveThreshold || 60000;
+  const ctxThreshold = threadState.archiveThreshold || 60000;
 
   const generatingColor = writingProfiles.find(profile => profile.name === generationProgress?.profileName)?.color;
   // The player's name for "You as …": the frame after each message records who was played,
@@ -1054,7 +1188,7 @@ export default function ChatWorkspaceView() {
     return null;
   })();
   const playerNameAt = index => {
-    if (!isCurrentRoleplayMode) return undefined;
+    if (!isCurrentRoleplayMode || thread !== 'roleplay') return undefined;
     const next = activeMessages[index + 1];
     const frame = next && next.role !== 'user' ? (roleplayFrames[next.id] || heldRoleplayFrames[next.id]) : null;
     return frame?.start?.playerName || roleplayPlayerName || latestPlayerName || undefined;
@@ -1070,7 +1204,7 @@ export default function ChatWorkspaceView() {
     >
       {hasBg && <div style={bgStyle} className="absolute inset-0 z-0" />}
       {hasBg && <div style={backdropStyle} className="absolute inset-0 z-0" />}
-      {roleplayMode && <StoryIntro workspaceId={activeChat.id} visible={isChatVisible} />}
+      {roleplayMode && <StoryIntro workspaceId={activeChat.id} visible={isRoleplayVisible} onActiveChange={setStoryIntroActive} />}
 
       <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
         {isDragging && (
@@ -1096,9 +1230,10 @@ export default function ChatWorkspaceView() {
             </h2>
           </div>
 
-          <nav aria-label="Workspace areas" className="ws-well flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">
+          <nav aria-label="Workspace areas" data-tour="workspace-tabs" className="ws-well flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">
             {[
-              ['chat', 'Workspace', WorkspaceGlyph],
+              ['chat', 'Chat', WorkspaceGlyph],
+              ...(isCurrentRoleplayMode ? [['roleplay', 'Roleplay', Drama]] : []),
               ['writing', 'Writing', WritingGlyph],
               ['worldbuild', 'Worldbuild', WorldbuildGlyph],
               ['memory', 'Memory', MemoryGlyph],
@@ -1107,6 +1242,7 @@ export default function ChatWorkspaceView() {
               <button
                 key={id}
                 type="button"
+                data-tour={id === 'roleplay' ? 'workspace-roleplay-tab' : undefined}
                 onClick={() => setActiveSubView(id)}
                 onMouseEnter={() => workspaceTabViews[id]?.preload()}
                 aria-current={activeSubView === id ? 'page' : undefined}
@@ -1170,7 +1306,42 @@ export default function ChatWorkspaceView() {
                   </button>
                 </div>
               )}
-              {activeMessages.map((msg, index) => (
+              {thread === 'chat' && isCurrentRoleplayMode && !activeMessages.length && !isGenerating && (
+                <div className="flex min-h-[40vh] flex-col items-center justify-center px-6 text-center select-none">
+                  {/* The same backing as the message hints keeps it legible over a background. */}
+                  <div className="chat-hint flex flex-col items-center gap-2.5 rounded-card px-5 py-4">
+                    <span className="flex h-11 w-11 items-center justify-center rounded-control bg-tint/5"><WorkspaceGlyph aria-hidden="true" className="h-5 w-5 text-text-muted" /></span>
+                    <span className="text-[0.9375rem] font-semibold text-text-primary">Talk with the AI outside the story</span>
+                    <span className="max-w-sm text-sm leading-relaxed text-text-secondary">Plan a scene, check the world or ask for a recap. Nothing said here enters the Roleplay.</span>
+                  </div>
+                </div>
+              )}
+              {thread === 'chat' && !isCurrentRoleplayMode && activeChat.roleplayMessageCount > 0 && (
+                <p className="chat-hint mx-auto flex w-fit max-w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-text-secondary select-none">
+                  <Drama aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted" />
+                  {ROLEPLAY_KEPT_LINE(activeChat.roleplayMessageCount)}
+                </p>
+              )}
+              {activeMessages.map((msg, index) => moveSelection ? (
+                <div key={msg.id} className="flex items-start gap-3.5">
+                  <span className="mt-1.5 shrink-0">
+                    <Checkbox size="sm" checked={moveSelection.has(msg.id)} onChange={() => toggleMoveSelection(msg.id)} ariaLabel="Select message" />
+                  </span>
+                  <div className={`min-w-0 flex-1 rounded-surface transition-shadow ${moveSelection.has(msg.id) ? 'ring-2 ring-accent/45' : ''}`}>
+                    <ChatMessageItem
+                      message={msg}
+                      isEditing={false}
+                      isLastUser={false}
+                      isLastAi={false}
+                      isTyping={false}
+                      frame={msg.role === 'user' ? undefined : (roleplayFrames[msg.id] || heldRoleplayFrames[msg.id])}
+                      playerName={msg.role === 'user' ? playerNameAt(index) : undefined}
+                      view={messageView}
+                      actions={messageActions}
+                    />
+                  </div>
+                </div>
+              ) : (
                 <ChatMessageItem
                   key={msg.id}
                   deferRender={index < activeMessages.length - ALWAYS_RENDERED_ROWS}
@@ -1186,7 +1357,7 @@ export default function ChatWorkspaceView() {
                 />
               ))}
 
-              {isGenerating && generationProgress && (
+              {isGenerating && generationProgress && (generationProgress.thread || thread) === thread && (
                 <GenerationBubble
                   progress={generationProgress}
                   color={generatingColor}
@@ -1268,7 +1439,40 @@ export default function ChatWorkspaceView() {
                 </div>
               )}
 
-              <div className="ws-composer glass-panel glass-dense rounded-[1.125rem] border border-border-default py-2.5 pl-4 pr-2.5 shadow-overlay transition-colors focus-within:border-accent/50">
+              {moveSelection && (
+                <div className="mx-auto flex w-fit max-w-full flex-wrap items-center justify-center gap-3 rounded-card border border-border-default bg-surface-panel/95 py-2 pl-4 pr-2 shadow-overlay backdrop-blur-md animate-in slide-in-from-bottom duration-200">
+                  <span className="text-sm font-semibold tabular-nums text-text-primary">{moveSelection.size} selected</span>
+                  <span className="h-4 w-px bg-border-default" aria-hidden="true" />
+                  <button type="button" onClick={selectEverythingAfter} className="rounded px-1 text-sm text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Everything after</button>
+                  <button type="button" onClick={() => setMoveSelection(new Set())} className="rounded px-1 text-sm text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Clear</button>
+                  <Button variant="ghost" size="sm" onClick={() => setMoveSelection(null)}>Cancel</Button>
+                  <Button size="sm" icon={moveTo === 'roleplay' ? Drama : WorkspaceGlyph} disabled={!moveSelection.size} onClick={() => openMovePlan(activeMessages.filter(message => moveSelection.has(message.id)).map(message => message.id))}>
+                    Move to {moveTo === 'roleplay' ? 'Roleplay' : 'Chat'}
+                  </Button>
+                </div>
+              )}
+              {/* Sits over the composer, where the person is when the move lands, in either conversation. */}
+              {movedNotice && !moveSelection && (
+                <div role="status" className="mb-3 overflow-hidden rounded-card bg-surface-panel/95 shadow-overlay backdrop-blur-md animate-rise-in">
+                  <div className="flex items-center gap-3 rounded-card border border-status-info/30 bg-status-info/[0.08] py-3 pl-4 pr-3">
+                    <Drama aria-hidden="true" className="h-4 w-4 shrink-0 text-status-info" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-text-primary">{movedNotice.count} {movedNotice.count === 1 ? 'message' : 'messages'} moved to the Roleplay</span>
+                      <span className="mt-0.5 block text-xs leading-relaxed text-text-muted">They are story now, but sheets and Narrative State don't know them yet. Update entities can read them and suggest changes.</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={runUpdateEntities}
+                      className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control border border-status-info/45 bg-status-info/15 px-2.5 text-xs font-semibold text-text-primary transition-colors hover:bg-status-info/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      <RefreshCw aria-hidden="true" className="h-3.5 w-3.5 text-status-info" />
+                      Update entities
+                    </button>
+                    <IconButton icon={X} label="Dismiss" size="sm" onClick={() => setMovedNotice(null)} />
+                  </div>
+                </div>
+              )}
+              <div className={`ws-composer glass-panel glass-dense rounded-[1.125rem] border border-border-default py-2.5 pl-4 pr-2.5 shadow-overlay transition-colors focus-within:border-accent/50 ${moveSelection ? 'hidden' : ''}`}>
                 <input
                   type="file"
                   multiple
@@ -1289,6 +1493,17 @@ export default function ChatWorkspaceView() {
                   leading={(
                     <>
                       <IconButton icon={Paperclip} label="Attach files" size="sm" onClick={() => fileInputRef.current?.click()} />
+                      {thread === 'chat' && isCurrentRoleplayMode && (
+                        <RoleplayHistoryChip
+                          enabled={activeChat.chatReadsRoleplay !== 0}
+                          share={activeChat.chatRoleplayShare || 30}
+                          onToggle={checked => handleSaveChat({ ...activeChat, chatReadsRoleplay: checked ? 1 : 0 })}
+                          onOpenSettings={() => {
+                            setActiveSubView('configuration');
+                            openConfigurationSection('context');
+                          }}
+                        />
+                      )}
                       {activeChat.showContextBar === 1 && <ContextMeter tokens={ctxTokens} threshold={ctxThreshold} />}
                     </>
                   )}
@@ -1299,7 +1514,8 @@ export default function ChatWorkspaceView() {
                       selectedId={selectedTarget?.id}
                       onSelect={id => {
                         setSelectedTargetId(id);
-                        electronAPI.setChatLastTarget(activeChat.id, id);
+                        chosenTargetsRef.current.set(autoSummarizeKey, id);
+                        electronAPI.setChatLastTarget(activeChat.id, id, thread);
                       }}
                       onManage={() => setActiveSubView('configuration')}
                     />
@@ -1337,8 +1553,11 @@ export default function ChatWorkspaceView() {
               />
             ) : activeSubView === 'configuration' ? (
               <ConfigurationView
-                onTriggerSummarize={() => {
-                  dismissedAutoSummarizeChatsRef.current.delete(activeChat.id);
+                onTriggerSummarize={target => {
+                  // Summarizing from Configuration archives the conversation chosen there.
+                  const next = target === 'roleplay' ? 'roleplay' : 'chat';
+                  if (next !== thread) selectThread(next);
+                  dismissedAutoSummarizeChatsRef.current.delete(`${activeChat.id}:${next}`);
                   setSummarizeModalOpen(true);
                 }}
               />
@@ -1360,14 +1579,14 @@ export default function ChatWorkspaceView() {
       </div>
 
       {isCurrentRoleplayMode && (
-        <div className={isChatVisible ? 'contents' : 'hidden'}>
+        <div className={isRoleplayVisible ? 'contents' : 'hidden'}>
           <RoleplayQuickPanel
             key={activeChat.id}
             workspaceId={activeChat.id}
             api={electronAPI}
             showToast={showToast}
             initialCollapsed={roleplayPanelCollapsed}
-            visible={isChatVisible}
+            visible={isRoleplayVisible}
             narrativeStateProcessing={backgroundNarrativeIds.has(activeChat.id) || (isGenerating && generationProgress?.chatId === activeChat.id && generationProgress?.phase === 'narrative-state')}
             onBackgroundChange={handleRoleplayBackgroundChange}
             onCollapsedChange={handleRoleplayPanelCollapsedChange}
@@ -1426,17 +1645,22 @@ export default function ChatWorkspaceView() {
       <SummarizeModal
         isOpen={summarizeModalOpen}
         onClose={() => {
-          dismissedAutoSummarizeChatsRef.current.add(activeChat.id);
+          dismissedAutoSummarizeChatsRef.current.add(autoSummarizeKey);
           setSummarizeModalOpen(false);
         }}
         chatId={activeChat.id}
-        workspaceName={activeChat.title}
+        thread={thread}
+        workspaceName={thread === 'roleplay' ? `${activeChat.title} · Roleplay` : activeChat.title}
         electronAPI={electronAPI}
         nextSummaryNumber={nextSummaryNumber}
         onConfirm={handleExecuteSummarization}
         isVectorizing={isVectorizing}
         progress={summarizeProgress}
       />
+
+      {movePlan && (
+        <ThreadMoveDialog chatId={activeChat.id} plan={movePlan} busy={moveBusy} onConfirm={confirmMove} onClose={() => setMovePlan(null)} />
+      )}
 
       <FilePreviewModal
         file={previewFile}

@@ -11,7 +11,8 @@ function setup() {
   db = openTestDatabase(':memory:');
   db.exec(`CREATE TABLE messages (
     id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, aiName TEXT, aiColor TEXT, debugNotice TEXT,
-    attachedFiles TEXT, createdAt INTEGER, last_modified INTEGER, alternatives TEXT, excluded INTEGER DEFAULT 0
+    attachedFiles TEXT, createdAt INTEGER, last_modified INTEGER, alternatives TEXT, excluded INTEGER DEFAULT 0,
+    thread TEXT NOT NULL DEFAULT 'chat'
   )`);
   const insert = db.prepare('INSERT INTO messages (id, chatId, role, content, debugNotice, attachedFiles, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)');
   return (id: string, debugNotice: unknown, createdAt: number) => insert.run(id, 'chat', 'ai', `reply ${id}`, typeof debugNotice === 'string' ? debugNotice : JSON.stringify(debugNotice), '[]', createdAt);

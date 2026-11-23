@@ -33,7 +33,7 @@ function readAnalyzedReplies(db, workspaceId) {
     SELECT origin_id AS id, status, error_message AS error FROM narrative_story_jobs WHERE workspace_id = ?
   `).all(workspaceId).map(row => [row.id, row]));
   const analyzed = new Set();
-  for (const row of db.prepare("SELECT id, debugNotice FROM messages WHERE chatId = ? AND role = 'ai'").all(workspaceId)) {
+  for (const row of db.prepare("SELECT id, debugNotice FROM messages WHERE chatId = ? AND thread = 'roleplay' AND role = 'ai'").all(workspaceId)) {
     const job = jobs.get(row.id);
     if (job) {
       if (job.status === 'completed' || (job.status === 'skipped' && !job.error)) analyzed.add(row.id);

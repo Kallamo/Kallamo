@@ -24,6 +24,7 @@ const WORKSPACE_OWNED_COLUMNS = [
   { table: 'entity_sheet_edits', column: 'workspace_id' },
   { table: 'workspace_ui_state', column: 'workspaceId' },
   { table: 'workspace_experience_modes', column: 'workspace_id' },
+  { table: 'workspace_threads', column: 'workspace_id' },
   { table: 'world_index_runs', column: 'chatId' },
   { table: 'worldbuild_field_definitions', column: 'workspace_id' },
   { table: 'worldbuild_entity_templates', column: 'workspace_id' },

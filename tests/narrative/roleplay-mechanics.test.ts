@@ -33,7 +33,8 @@ describe('Roleplay mechanics: rest, conditions and scene growth', () => {
         toId TEXT, label TEXT, metadata_json TEXT, createdAt INTEGER
       );
       CREATE TABLE messages (
-        id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER, excluded INTEGER DEFAULT 0
+        id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER, excluded INTEGER DEFAULT 0,
+        thread TEXT NOT NULL DEFAULT 'roleplay'
       );
     `);
     const insert = db.prepare('INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES (?, ?, ?, ?, ?, ?)');

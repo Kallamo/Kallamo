@@ -52,7 +52,7 @@ const applyDialogueColor = (iface = {}) => {
 
 export const AppProvider = ({ children }) => {
   const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'library', 'chat'
-  const [activeWorkspaceView, setActiveWorkspaceView] = useState('chat');
+  const [activeWorkspaceView, setWorkspaceViewState] = useState('chat');
   const [chats, setChats] = useState([]);
   // False until the first chats and profiles arrive; the window is revealed only after that.
   const [dataReady, setDataReady] = useState(false);
@@ -82,6 +82,13 @@ export const AppProvider = ({ children }) => {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorData, setErrorData] = useState(null);
   const chatSession = useChatSession({ api, setChats, setCurrentView });
+  // The Chat and Roleplay tabs show the same session; switching between them switches its conversation.
+  const selectThreadRef = useRef(chatSession.selectThread);
+  selectThreadRef.current = chatSession.selectThread;
+  const setActiveWorkspaceView = useCallback(view => {
+    if (view === 'chat' || view === 'roleplay') selectThreadRef.current(view);
+    setWorkspaceViewState(view);
+  }, []);
   const {
     activeChatId,
     setIsGenerating,

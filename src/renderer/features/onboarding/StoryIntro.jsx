@@ -13,7 +13,7 @@ const ICONS = { knife: Slice, coins: Coins, book: BookOpen, shield: Shield, guit
 const PAGES = ['intro', 'world', 'pick'];
 
 // The first visit to a seeded story: what the Narrative State does, the world, then who to play.
-export default function StoryIntro({ workspaceId, visible }) {
+export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
   const app = useApp();
   const { electronAPI, setActiveWorkspaceView } = app;
   const { startTour } = useTour();
@@ -47,7 +47,10 @@ export default function StoryIntro({ workspaceId, visible }) {
     return () => { active = false; };
   }, [visible, workspaceId, electronAPI]);
 
-  if (!story || story.stage === 'playing' || !visible) return null;
+  const active = Boolean(story && story.stage !== 'playing' && visible);
+  // Other first-time guides wait while the story's own introduction is open.
+  useEffect(() => { onActiveChange?.(active); }, [active, onActiveChange]);
+  if (!active) return null;
 
   const options = [...story.cast, { ...story.newcomer, newcomer: true }];
   const current = options[Math.min(pick, options.length - 1)];

@@ -6,6 +6,9 @@ const { sendApiRequestStream } = require('./features/llm/llm.stream');
 const { applyGenerationHistory, resolveWorkspaceGenerationTarget } = require('./features/chat/generation-target');
 const { selectActiveMessages, selectArchivableMessages, coveredMessageIds, parseMemoryBlocks } = require('./features/chat/archive-coverage');
 const { syncSummarizedIndex, setMessagesExcluded, readMemoryBlocks } = require('./features/chat/archive-store');
+const { replaceMixedSummary } = require('./features/chat/mixed-summary');
+const { normalizeThread, threadOfBlock, threadSummaryBlocks, readThreadState, readHistorySettings } = require('./features/chat/threads');
+const { loadThreadHistory, renderHistorySlice } = require('./features/chat/history-slice');
 const {
     filterWorkspaceKnowledgeResults,
     filterWorkspaceMemoryResults,
@@ -182,6 +185,7 @@ function sendRunEvent(webContents, channel, run, payload) {
     webContents.send(channel, {
         ...payload,
         chatId: run?.chatId ?? payload.chatId,
+        thread: run?.thread ?? payload.thread,
         runId: run?.id ?? payload.runId
     });
 }
@@ -397,11 +401,11 @@ function isPromptCacheEnabled() {
 
 // Start-to-start spacing of the chat's recent turns, oldest first. Read from the stored
 // messages so the pace survives a restart.
-function recentTurnGaps(chatId) {
+function recentTurnGaps(chatId, thread) {
     const times = db.prepare(`
-        SELECT createdAt FROM messages WHERE chatId = ? AND role = 'user'
+        SELECT createdAt FROM messages WHERE chatId = ? AND thread = ? AND role = 'user'
         ORDER BY createdAt DESC LIMIT 12
-    `).all(chatId).map(row => Number(row.createdAt)).reverse();
+    `).all(chatId, thread).map(row => Number(row.createdAt)).reverse();
     return times.slice(1).map((time, index) => time - times[index]);
 }
 
@@ -452,7 +456,9 @@ function runNarrativeStateInBackground(chatId, webContents, task) {
     return run;
 }
 
-async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents }) {
+async function runWorkflow({ chatId, thread: requestedThread, messageContent, targetId, attachedFiles, historyEdit, regenerateMessageId, webContents }) {
+    // The conversation decides the path: only the Roleplay runs the narrative pipeline.
+    const thread = normalizeThread(requestedThread);
     let resolvedTarget;
     try {
         resolvedTarget = resolveWorkspaceGenerationTarget(db, chatId, targetId);
@@ -477,6 +483,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
     const currentRun = {
         id: crypto.randomUUID(),
         chatId,
+        thread,
         isCancelled: false,
         controller: controller
     };
@@ -485,7 +492,18 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
     let turnReplacementId = null;
 
     try {
-        const chat = resolvedTarget.chat;
+        const workspaceRow = resolvedTarget.chat;
+        const historySettings = readHistorySettings(workspaceRow);
+        const workspaceIsRoleplay = isRoleplayWorkspace(chatId);
+        // Each conversation reads the workspace's notes and files and its own summaries; the Chat may
+        // also search the Roleplay's archive when it is set to read the story.
+        const readsRoleplayArchive = thread === 'chat' && workspaceIsRoleplay && historySettings.chatReadsRoleplay && historySettings.chatRoleplaySummaries;
+        const chat = workspaceRow && {
+            ...workspaceRow,
+            memoryBlocks: JSON.stringify(parseMemoryBlocks(workspaceRow.memoryBlocks).filter(block => block?.type !== 'summarized'
+                || threadOfBlock(block) === thread
+                || (readsRoleplayArchive && threadOfBlock(block) === 'roleplay')))
+        };
         let steps = [];
         let totalSteps = 1;
 
@@ -625,7 +643,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         }
 
         try {
-            const userMsg = db.prepare("SELECT * FROM messages WHERE chatId = ? AND role = 'user' ORDER BY createdAt DESC LIMIT 1").get(chatId);
+            const userMsg = db.prepare("SELECT * FROM messages WHERE chatId = ? AND thread = ? AND role = 'user' ORDER BY createdAt DESC LIMIT 1").get(chatId, thread);
             if (!historyEdit && userMsg && updatedAttachedFiles.length > 0) {
                 db.prepare('UPDATE messages SET attachedFiles = ? WHERE id = ?').run(JSON.stringify(updatedAttachedFiles), userMsg.id);
             }
@@ -639,15 +657,15 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         const debugSettings = readAdvancedSettings();
 
         // The debug record is not read here: on older messages it can be very large.
-        const persistedMessages = db.prepare('SELECT id, role, content, attachedFiles, excluded, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
+        const persistedMessages = db.prepare('SELECT id, role, content, attachedFiles, excluded, createdAt FROM messages WHERE chatId = ? AND thread = ? ORDER BY createdAt ASC, id ASC').all(chatId, thread);
         const messages = applyGenerationHistory(persistedMessages, { historyEdit, regenerateMessageId });
         // Live history is whatever no summary covers and the user has not muted,
         // so a gap left by a deleted summary comes back on its own.
-        const activeMessages = selectActiveMessages(messages, chat?.memoryBlocks);
+        const activeMessages = selectActiveMessages(messages, threadSummaryBlocks(parseMemoryBlocks(workspaceRow?.memoryBlocks), thread));
 
         // In a roleplay, the replaced replies are reverted before anything reads the story
         // state, and the turn before them catches up if it was never analyzed.
-        const roleplayTurns = isRoleplayWorkspace(chatId);
+        const roleplayTurns = thread === 'roleplay' && workspaceIsRoleplay;
         if (narrativeStateRuns.has(chatId)) {
             sendRunEvent(webContents, 'workflow-progress', currentRun, {
                 step: 1,
@@ -671,6 +689,11 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             // A regeneration holds it: the story is being rewound under it.
             if (!replacedIds.length) runQueuedNarrativeStories(chatId);
         }
+
+        // The Chat of a roleplay workspace reads a share of the story's history, when set to.
+        const besideRoleplay = thread === 'chat' && workspaceIsRoleplay;
+        const roleplayHistory = besideRoleplay && historySettings.chatReadsRoleplay ? loadThreadHistory(db, chatId, 'roleplay') : null;
+        let roleplaySliceDiagnostic = null;
 
         let currentInput = messageContent;
         let finalOutput = '';
@@ -715,11 +738,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
         const promptCacheEnabled = isPromptCacheEnabled();
         const contextPlacement = getContextPlacement();
         // Measured once per run: every step of a workflow is sent at the same pace.
-        const cacheTtl = promptCacheEnabled ? cacheTtlForPace(recentTurnGaps(chatId)) : '5m';
+        const cacheTtl = promptCacheEnabled ? cacheTtlForPace(recentTurnGaps(chatId, thread)) : '5m';
         // The anchor belongs to the conversation, so every profile in a workflow
         // shares one window. Cooldown state is per profile, since each profile
         // carries a different stable prefix.
-        const historyCacheScopeId = promptCacheEnabled ? chatId : null;
+        // A roleplay workspace's Chat caches apart from its story; any other conversation uses the workspace id.
+        const historyCacheScopeId = promptCacheEnabled ? (workspaceIsRoleplay && thread === 'chat' ? `${chatId}:chat` : chatId) : null;
         // What the provider actually billed, as opposed to what was estimated.
         const measuredCache = {};
         const measuredAgenticCache = {};
@@ -767,10 +791,9 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             // Stable head first, volatile tail after: cache matching is a byte prefix (docs/prompt-cache.md).
             let stableSystemPrompt = profile.systemPrompt || '';
             let volatileSystemPrompt = '';
-            let isRoleplayWorkspace = false;
+            // The narrator's rules, clock and story context belong to the Roleplay alone.
+            const isRoleplayWorkspace = roleplayTurns;
             try {
-                const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
-                isRoleplayWorkspace = getWorkspaceExperienceMode(db, chatId) === 'roleplay';
                 if (isRoleplayWorkspace) {
                     const { getRoleplayGenerationPolicy } = require('../../dist-main/main/features/narrative/roleplay-generation-policy');
                     const generationPolicy = getRoleplayGenerationPolicy();
@@ -778,6 +801,10 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     stableSystemPrompt += `\n\n${generationPolicy}`;
                     volatileSystemPrompt += `\n\n${buildRoleplayTemporalContext(db, chatId)}`;
                     generationPolicyId = `sha256:${crypto.createHash('sha256').update(generationPolicy).digest('hex').slice(0, 16)}`;
+                } else if (besideRoleplay && includeChatContext) {
+                    stableSystemPrompt += `\n\n${CHAT_BESIDE_ROLEPLAY_NOTE}`;
+                    const now = describeRoleplayNow(chatId);
+                    if (now) volatileSystemPrompt += `\n\n${now}`;
                 }
             } catch (error) {
                 console.warn('[Roleplay Context] Could not load the narration policy:', error.message);
@@ -890,6 +917,37 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 ? `\n\n--- ATTACHED FILES FOR CURRENT MESSAGE ---\n${attachmentsContext}\n`
                 : '';
             const stepLimit = resolvePayloadLimit({ apiProfileId: profile.apiProfileId, model: profile.model, maxPayloadTokens: maxContextTokens });
+            // The story's share is taken from the room history would have; what it leaves unused stays with the Chat.
+            if (roleplayHistory && includeChatContext && (i === 0 || includeChatHistory)) {
+                try {
+                    const historyRoom = getAvailableHistoryTokens({
+                        maxPayloadTokens: stepLimit.limit,
+                        configuredPayloadTokens: stepLimit.configured,
+                        tokenRatio: stepLimit.ratio,
+                        limitSource: stepLimit.source,
+                        newPrompt: resolveVariables(currentInput),
+                        attachedImageCount: i === 0 ? attachedImages.length : 0,
+                        outputTokens: getReservedOutputTokens({ maxTokens: profile.maxTokens }),
+                        systemPrompt: resolveVariables(composeSystemPrompt() + attachmentsPayloadContext)
+                    });
+                    const room = Math.floor(Math.max(0, historyRoom) * historySettings.chatRoleplayShare / 100);
+                    const slice = renderHistorySlice({
+                        history: roleplayHistory,
+                        room,
+                        includeSummaries: historySettings.chatRoleplaySummaries,
+                        estimate: estimateTokens,
+                        strip: stripReasoning,
+                        heading: 'THE ROLEPLAY SO FAR (read-only)'
+                    });
+                    if (slice.text) {
+                        contextBlock += `\n\n${slice.text}\n`;
+                        chatKbTokens += slice.tokens;
+                    }
+                    roleplaySliceDiagnostic = { room, tokens: slice.tokens, messages: slice.messages, summaries: slice.summaries };
+                } catch (error) {
+                    console.warn('[Chat] Could not read the roleplay history:', error.message);
+                }
+            }
             const fixedPrompt = resolveVariables(composeSystemPrompt() + attachmentsPayloadContext);
             const fixedTokens = estimateTokens(fixedPrompt);
             // The user message carries the same note now as it will in later history, so the cached prefix holds.
@@ -1326,8 +1384,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                         if (i > 0) {
                             const partialMsgId = 'msg_' + Math.random().toString(36).substr(2, 9);
                             db.prepare(`
-                                INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt, thread)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             `).run(
                                 partialMsgId,
                                 chatId,
@@ -1337,7 +1395,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                                 lastProfileUsed.color,
                                 'interrupted',
                                 JSON.stringify([]),
-                                Date.now()
+                                Date.now(),
+                                thread
                             );
                         }
                         return { success: false, interrupted: true };
@@ -1481,10 +1540,12 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     cache: { main: measuredCache, agentic: measuredAgenticCache }
                 })
             });
+            // What the Chat read of the story, so the reply's diagnostics can show it.
+            if (roleplaySliceDiagnostic) debugObj.roleplaySlice = roleplaySliceDiagnostic;
 
             db.prepare(`
-                INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt, thread)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 aiMsgId,
                 chatId,
@@ -1494,7 +1555,8 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                 lastProfileUsed.color,
                 JSON.stringify(debugObj),
                 JSON.stringify([]),
-                Date.now()
+                Date.now(),
+                thread
             );
 
             db.prepare('UPDATE chats SET updatedAt = ? WHERE id = ?').run(Date.now(), chatId);
@@ -1519,6 +1581,11 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
             }
 
             const profileId = lastProfileUsed.id;
+            // The Chat of a roleplay workspace never writes to the story: no turn, frame, time or resources.
+            if (besideRoleplay) {
+                checkAndAutoSummarize(chatId, profileId, webContents, thread).catch(e => console.error('[Auto-Summarize] error:', e));
+                return { success: true, aiMsgId, streamed: didStreamFinalResponse };
+            }
             // The reply is already saved; the story state catches up without holding the chat.
             runNarrativeStateInBackground(chatId, webContents, async () => {
                 const modelCalls = debugSettings.narrativeStateDebug ? [] : null;
@@ -1587,7 +1654,7 @@ async function runWorkflow({ chatId, messageContent, targetId, attachedFiles, hi
                     }).catch(error => console.error('[Narrative State] Could not refresh the story diagnostics:', error));
                 }
 
-                checkAndAutoSummarize(chatId, profileId).catch(e => {
+                checkAndAutoSummarize(chatId, profileId, webContents, thread).catch(e => {
                     console.error("[Auto-Summarize] error:", e);
                 });
             });
@@ -3656,7 +3723,7 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
     const narrative = db.prepare("SELECT content, createdAt FROM messages WHERE id = ? AND chatId = ? AND role = 'ai'").get(originId, workspaceId);
     const user = narrative ? db.prepare(`
         SELECT content FROM messages
-        WHERE chatId = ? AND role = 'user' AND createdAt <= ?
+        WHERE chatId = ? AND thread = 'roleplay' AND role = 'user' AND createdAt <= ?
         ORDER BY createdAt DESC LIMIT 1
     `).get(workspaceId, narrative.createdAt) : null;
     if (!narrative || !user) {
@@ -4451,6 +4518,35 @@ function narrativeEntitySystem() {
     return new NarrativeEntitySystem(db);
 }
 
+// Where the story stands, for the Chat of a roleplay workspace: place, time and who is there.
+// Read-only reference; the Chat never moves any of it.
+function describeRoleplayNow(workspaceId) {
+    try {
+        const calendarService = require('./features/worldbuild/calendar-service');
+        const { RoleplaySystem } = require('../../dist-main/main/features/narrative/roleplay-system');
+        const scene = new RoleplaySystem(db).getScene(workspaceId) || {};
+        const clock = calendarService.formatClock(calendarService.getCalendar(db, workspaceId), calendarService.getRoleplayClock(db, workspaceId));
+        const nameOf = id => db.prepare('SELECT canonicalName FROM entities WHERE id = ? AND workspaceId = ?').get(id, workspaceId)?.canonicalName;
+        const names = ids => (Array.isArray(ids) ? ids : []).map(nameOf).filter(Boolean);
+        const present = names(scene.participantIds);
+        const nearby = names(scene.nearbyIds);
+        return [
+            '--- WHERE THE ROLEPLAY STANDS (read-only) ---',
+            `Date and time in the story: ${clock.date}, ${clock.time}${clock.weekday ? ` (${clock.weekday})` : ''}`,
+            `Current location: ${nameOf(scene.locationId) || 'not set'}`,
+            ...(present.length ? [`In the scene: ${present.join(', ')}`] : []),
+            ...(nearby.length ? [`Nearby: ${nearby.join(', ')}`] : []),
+            '--- END WHERE THE ROLEPLAY STANDS ---'
+        ].join('\n');
+    } catch (error) {
+        console.warn('[Chat] Could not describe where the roleplay stands:', error.message);
+        return '';
+    }
+}
+
+// The Chat of a roleplay workspace talks about the story without telling it.
+const CHAT_BESIDE_ROLEPLAY_NOTE = 'This workspace also has a roleplay, kept in a separate conversation. What follows is reference only: you are talking with the user outside that story. Do not narrate, continue the scene or speak as its characters unless the user asks for it here.';
+
 function isRoleplayWorkspace(workspaceId) {
     try {
         const { getWorkspaceExperienceMode } = require('../../dist-main/main/features/narrative/mode-orchestration');
@@ -4500,7 +4596,7 @@ async function reprocessNarrativeStateTurn(workspaceId, originId) {
     if (!narrative) throw new Error('Narrative response was not found for this turn.');
     const user = db.prepare(`
         SELECT content FROM messages
-        WHERE chatId = ? AND role = 'user' AND createdAt <= ?
+        WHERE chatId = ? AND thread = 'roleplay' AND role = 'user' AND createdAt <= ?
         ORDER BY createdAt DESC LIMIT 1
     `).get(workspaceId, narrative.createdAt);
     if (!user) throw new Error('User message was not found for this turn.');
@@ -4594,7 +4690,19 @@ async function recordAndSaveNarrativeStory(workspaceId, originId) {
     const calls = [...(parsed.narrativeCalls || []), ...(modelCalls || [])];
     const updated = mergeNarrativeStateDiagnostics(parsed, merged, calls.length ? calls : null);
     db.prepare('UPDATE messages SET debugNotice = ? WHERE id = ? AND chatId = ?').run(JSON.stringify(updated), originId, workspaceId);
+    notifyStoryRecorded(workspaceId, result.changes || []);
     return result;
+}
+
+// The scene pass announces its changes with the reply; the story pass lands later, from any of the
+// queues that run it, so it announces its own to every window.
+function notifyStoryRecorded(workspaceId, changes) {
+    try {
+        const { BrowserWindow } = require('electron');
+        for (const win of BrowserWindow.getAllWindows()) {
+            if (win && !win.isDestroyed()) win.webContents.send('roleplay-resource-changes', { workspaceId, changes, source: 'story' });
+        }
+    } catch (e) { /* no window (headless/tests): nothing to notify */ }
 }
 
 // A failed story pass is shown on its reply with the reason, and whether a later turn tries it again.
@@ -4827,7 +4935,7 @@ function previousTurnCastSignals(workspaceId, originId, actorIds) {
         if (!current) return null;
         const previous = db.prepare(`
             SELECT debugNotice FROM messages
-            WHERE chatId = ? AND role = 'ai' AND createdAt < ?
+            WHERE chatId = ? AND thread = 'roleplay' AND role = 'ai' AND createdAt < ?
             ORDER BY createdAt DESC LIMIT 1
         `).get(workspaceId, current.createdAt);
         const triage = safeParseObject(previous?.debugNotice)?.narrativeState?.triage;
@@ -6985,6 +7093,10 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
     const targets = all.filter(e => e.status !== 'proposed' && (e.data?.aiPolicy || 'review') !== 'locked' && (!only || only.has(e.id)));
     const updateState = createEntityUpdateState(db);
     const runId = updateState.startRun(workspaceId, targets.map(entity => entity.id));
+    // In a roleplay workspace the story is the Roleplay; what was archived from the Chat is talk about it.
+    const talkSummaryIds = new Set(isRoleplayWorkspace(workspaceId)
+        ? threadSummaryBlocks(readMemoryBlocks(db, workspaceId), 'chat').map(block => block.id)
+        : []);
     const taggedWritingChunks = db.prepare(`
         SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt, kc.ownerId, kc.ownerType, kc.ordinal,
           COALESCE(kc.content_hash, '') AS contentHash, 'Writing Desk' AS evidenceSource, 1 AS isTagged
@@ -7000,7 +7112,9 @@ async function enrichEntities(workspaceId, progressCallback = null, { entityIds 
         FROM knowledge_chunks
         WHERE ownerId = ? AND ownerType IN ('chat_kb', 'chat_memory') AND enabled = 1
         ORDER BY createdAt ASC
-    `).all(workspaceId).map(chunk => ({ ...chunk, evidenceSource: 'Memory' }));
+    `).all(workspaceId)
+        .filter(chunk => !talkSummaryIds.has(chunk.memoryBlockId))
+        .map(chunk => ({ ...chunk, evidenceSource: 'Memory' }));
     const importedChunks = db.prepare(`
         SELECT DISTINCT kc.id, kc.text, kc.source, kc.createdAt, kc.ownerId, kc.ownerType, kc.ordinal,
           COALESCE(kc.content_hash, '') AS contentHash, 'Imported source' AS evidenceSource, 1 AS isTagged
@@ -8179,7 +8293,8 @@ function markInterruptedSummaries() {
 
 // Ids are resolved against stored history, so a stale renderer list can't archive
 // a message twice or archive one the user muted.
-async function executeSummarizationInternal({ chatId, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId, onProgress = null }) {
+async function executeSummarizationInternal({ chatId, thread: requestedThread, selectedMessages, messageIds, excludedMessageIds, customTitle, profileId, ignoreBlockIds = [], onProgress = null }) {
+    const thread = normalizeThread(requestedThread);
     const report = (stage, done = 0, total = 0) => {
         if (onProgress) {
             try { onProgress({ stage, done, total }); } catch (e) { /* reporting must never break archiving */ }
@@ -8198,8 +8313,11 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         setMessagesExcluded(db, chatId, excludeIds, true);
     }
 
-    const history = db.prepare('SELECT id, role, content, excluded, aiName, aiColor, createdAt FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
-    const covered = coveredMessageIds(chat.memoryBlocks);
+    // A summary covers one conversation only, so messages from the other one are never archived into it.
+    const history = db.prepare('SELECT id, role, content, excluded, aiName, aiColor, createdAt FROM messages WHERE chatId = ? AND thread = ? ORDER BY createdAt ASC, id ASC').all(chatId, thread);
+    // A summary being replaced still covers its messages until its successors exist.
+    const ignored = new Set(ignoreBlockIds);
+    const covered = coveredMessageIds(threadSummaryBlocks(parseMemoryBlocks(chat.memoryBlocks), thread).filter(block => !ignored.has(block.id)));
     const excludedNow = new Set(excludeIds);
 
     // Chat order, stored content, nothing already covered, nothing just muted.
@@ -8208,7 +8326,7 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         .map(m => ({ id: m.id, role: m.role, content: m.content, aiName: m.aiName || null, aiColor: m.aiColor || null, createdAt: m.createdAt || null }));
 
     if (archiveMessages.length === 0) {
-        const summarizedIndex = syncSummarizedIndex(db, chatId);
+        const summarizedIndex = syncSummarizedIndex(db, chatId, thread);
         const memoryBlocks = readMemoryBlocks(db, chatId);
         return { memoryBlocks, summarizedIndex, archivedMessages: 0, excludedMessages: excludeIds.length };
     }
@@ -8238,13 +8356,14 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
         title,
         summary: '',
         type: 'summarized',
+        ...(thread === 'roleplay' ? { thread } : {}),
         messages: archiveMessages,
         autoTitle: !customTitle,
         recapStatus: SUMMARY_PART.PENDING,
         taggingStatus: SUMMARY_PART.PENDING
     });
     db.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(memoryBlocks), chatId);
-    const summarizedIndex = syncSummarizedIndex(db, chatId);
+    const summarizedIndex = syncSummarizedIndex(db, chatId, thread);
 
     return {
         memoryBlocks,
@@ -8255,15 +8374,26 @@ async function executeSummarizationInternal({ chatId, selectedMessages, messageI
     };
 }
 
-async function checkAndAutoSummarize(chatId, profileId, webContents) {
+// Summarize once per side, then drop the summary that covered both; see mixed-summary.js.
+const splitMixedSummary = ({ chatId, blockId, profileId, onProgress = null }) => replaceMixedSummary({
+    database: db, chatId, blockId, profileId, onProgress,
+    summarize: executeSummarizationInternal,
+    finalize: finalizeSummaryBlock,
+    recapFailed: status => status === SUMMARY_PART.FAILED,
+    describeError: cleanErrorMessage
+});
+
+async function checkAndAutoSummarize(chatId, profileId, webContents, thread = 'chat') {
     try {
-        const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
-        if (!chat || chat.autoSummarize !== 1) return;
+        const chat = db.prepare('SELECT memoryBlocks FROM chats WHERE id = ?').get(chatId);
+        const state = readThreadState(db, chatId, thread);
+        if (!chat || state.autoSummarize !== 1 || !webContents || webContents.isDestroyed()) return;
 
-        const archiveThreshold = chat.archiveThreshold || 60000;
+        const archiveThreshold = state.archiveThreshold || 60000;
+        const blocks = threadSummaryBlocks(parseMemoryBlocks(chat.memoryBlocks), thread);
 
-        const messages = db.prepare('SELECT id, role, content, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC').all(chatId);
-        const activeMessages = selectActiveMessages(messages, chat.memoryBlocks);
+        const messages = db.prepare('SELECT id, role, content, excluded FROM messages WHERE chatId = ? AND thread = ? ORDER BY createdAt ASC, id ASC').all(chatId, normalizeThread(thread));
+        const activeMessages = selectActiveMessages(messages, blocks);
 
         let tokensUsed = 0;
         activeMessages.forEach(m => {
@@ -8272,11 +8402,11 @@ async function checkAndAutoSummarize(chatId, profileId, webContents) {
 
         // Nothing to offer means nagging would be a dead end: everything left is
         // either already archived or inside the reserved recent window.
-        const archivable = selectArchivableMessages(messages, chat.memoryBlocks);
+        const archivable = selectArchivableMessages(messages, blocks);
 
         if (tokensUsed > archiveThreshold && archivable.length > 0) {
             console.log(`[Auto-Summarize] Active tokens (${tokensUsed}) exceed threshold (${archiveThreshold}). Notifying frontend to show selection modal...`);
-            webContents.send('trigger-auto-summarize', { chatId, profileId });
+            webContents.send('trigger-auto-summarize', { chatId, thread: normalizeThread(thread), profileId });
         }
     } catch (e) {
         console.error("Auto-summarization failed:", e);
@@ -9462,6 +9592,7 @@ module.exports = {
     resolveOverflowDeferred,
     executeSummarizationInternal,
     finalizeSummaryBlock,
+    splitMixedSummary,
     markInterruptedSummaries,
     SUMMARY_PART,
     backfillWorldIndex,

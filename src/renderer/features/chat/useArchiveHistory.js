@@ -23,7 +23,7 @@ const cancelIdle = handle => {
 // The complete persisted history, for context estimates and archiving prompts. It is read
 // from disk when the workspace opens or archiving changes older messages; each new reply
 // is merged from the page instead of re-reading the whole chat.
-export function useArchiveHistory({ api, chatId, activeMessages, revision, memoryBlocks }) {
+export function useArchiveHistory({ api, chatId, thread = 'chat', activeMessages, revision, memoryBlocks }) {
   const [history, setHistory] = useState([]);
   const baseRef = useRef(null);
   const activeMessagesRef = useRef(activeMessages);
@@ -37,7 +37,7 @@ export function useArchiveHistory({ api, chatId, activeMessages, revision, memor
     }
     let cancelled = false;
     const handle = scheduleIdle(async () => {
-      const messages = await api.getChatMessages(chatId);
+      const messages = await api.getChatMessages(chatId, thread);
       if (cancelled) return;
       baseRef.current = messages || [];
       setHistory(mergeHistory(baseRef.current, activeMessagesRef.current));
@@ -46,7 +46,7 @@ export function useArchiveHistory({ api, chatId, activeMessages, revision, memor
       cancelled = true;
       cancelIdle(handle);
     };
-  }, [api, chatId, revision, memoryBlocks]);
+  }, [api, chatId, thread, revision, memoryBlocks]);
 
   useEffect(() => {
     if (baseRef.current) setHistory(mergeHistory(baseRef.current, activeMessages));

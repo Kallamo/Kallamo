@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Database, Plus, Trash2, Search, Check, ChevronDown, FileText, Info, X as XIcon, Download, Upload, MapPin, CircleHelp, FileSearch, NotebookPen, Orbit, Pin, Tag, UserRound, UsersRound, Loader2, Pencil, History, ListChecks, RefreshCw, Sparkles, Lightbulb } from 'lucide-react';
+import { Drama, RefreshCw as RebuildIcon, Database, Plus, Trash2, Search, Check, ChevronDown, FileText, Info, X as XIcon, Download, Upload, MapPin, CircleHelp, FileSearch, NotebookPen, Orbit, Pin, Tag, UserRound, UsersRound, Loader2, Pencil, History, ListChecks, RefreshCw, Sparkles, Lightbulb } from 'lucide-react';
 import { DragonIcon, MoneybagIcon, PennantIcon, StopwatchIcon } from './ui/glyphs';
 
 // Entity type -> icon, mirroring the Worldbuild view so a candidate reads the same here.
@@ -30,6 +30,9 @@ import SelectionBar from './ui/SelectionBar';
 import { Menu, MenuItem, MenuNote, MenuSeparator } from './ui/Menu';
 import { formatTokens } from './ui/TokenBadge';
 import MemoryRow from '../features/memory-view/MemoryRow';
+import ThreadMoveDialog from '../features/chat/components/ThreadMoveDialog';
+import { firstActiveProfile, moveBetweenThreads, rebuildFailureMessage } from '../features/chat/thread-move-actions';
+import { WorkspaceGlyph } from './ui/glyphs';
 import SummaryLogModal from '../features/memory-view/SummaryLogModal';
 import { useFirstVisitTour, useTour } from '../features/onboarding/GuidedTour';
 import { showsTourExample, tourStage } from '../features/onboarding/tours';
@@ -77,7 +80,59 @@ export default function ChatMemoryView({
   backgroundImage = null,
   hasBackdrop = false
 }) {
-  const { writingProfiles, settings, refreshChats, showToast, openSettings } = useApp();
+  const { writingProfiles, settings, refreshChats, showToast, openSettings, forgetThreadCache } = useApp();
+  // In a roleplay workspace each summary belongs to the Chat or the Roleplay, and can move between them.
+  const roleplayWorkspace = chat?.experienceMode === 'roleplay';
+  const [summaryMove, setSummaryMove] = useState(null);
+  const [summaryMoveBusy, setSummaryMoveBusy] = useState(false);
+  const summaryThread = block => (block.thread === 'roleplay' ? 'roleplay' : 'chat');
+  const summaryMessageIds = block => (Array.isArray(block.messages) ? block.messages : [])
+    .map(message => (typeof message === 'string' ? message : message?.id)).filter(Boolean);
+  const planSummaryMove = async block => {
+    const toThread = summaryThread(block) === 'roleplay' ? 'chat' : 'roleplay';
+    const plan = await electronAPI.planThreadMove({ chatId: chat.id, messageIds: summaryMessageIds(block), toThread });
+    if (!plan?.success || !plan.moving.length) {
+      showToast(plan?.error || 'The messages of this summary are no longer here.', 'error');
+      return;
+    }
+    setSummaryMove({ ...plan, requested: summaryMessageIds(block) });
+  };
+  const confirmSummaryMove = async ({ rebuildMixed }) => {
+    setSummaryMoveBusy(true);
+    try {
+      const { result, failed } = await moveBetweenThreads(electronAPI, { chatId: chat.id, plan: summaryMove, rebuildMixed, profileId: firstActiveProfile(chat) });
+      if (!result?.success) throw new Error(result?.error || 'Could not move this summary.');
+      forgetThreadCache?.();
+      if (result.takenBack) window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId: chat.id } }));
+      if (failed.length) showToast(rebuildFailureMessage(failed), 'error');
+      else showToast(`Moved to the ${summaryMove.target === 'roleplay' ? 'Roleplay' : 'Chat'} with its ${result.moved} ${result.moved === 1 ? 'message' : 'messages'}.`, 'success');
+      setSummaryMove(null);
+      await refreshChats(chat.id);
+    } catch (error) {
+      showToast(error.message, 'error');
+    } finally {
+      setSummaryMoveBusy(false);
+    }
+  };
+  const requestRebuildSummary = block => setConfirmDialog({
+    title: `Rebuild "${block.title}"?`,
+    message: 'This summary is deleted and the messages it covered return to the conversation, ready to be archived differently. Your other summaries stay exactly as they are.',
+    confirmLabel: 'Rebuild this summary',
+    onConfirm: async () => {
+      const result = await electronAPI.rebuildChatSummary(chat.id, block.id);
+      if (!result?.success) showToast(result?.error || 'Could not rebuild this summary.', 'error');
+      await refreshChats(chat.id);
+    }
+  });
+  const requestDeleteSummary = block => setConfirmDialog({
+    title: `Delete "${block.title}"?`,
+    message: 'The recap and the stored history both go, and every message this summary covered is dropped: it stays in your log but never reaches the AI again.',
+    confirmLabel: 'Delete and drop messages',
+    onConfirm: async () => {
+      await electronAPI.deleteChatKbBlock?.(chat.id, { id: block.id, type: block.type, source: block.title, text: block.summary });
+      await refreshChats(chat.id);
+    }
+  });
   const { tour, startTour } = useTour();
   useFirstVisitTour('memory', 'memoryTourSeen');
   const memoryStage = tourStage(tour, 'memory');
@@ -613,6 +668,9 @@ export default function ChatMemoryView({
     id: b.id,
     dbType: 'snippet',
     type: 'summarized',
+    // The conversation it belongs to and the messages it covers decide its section and its moves.
+    thread: b.thread,
+    messages: b.messages,
     title: b.title,
     summary: b.summary,
     profiles: b.profiles || [],
@@ -1246,6 +1304,25 @@ export default function ChatMemoryView({
     );
   };
 
+  // History of a roleplay workspace reads as two groups, the story first.
+  const renderHistoryGroups = (items) => [
+    ['roleplay', 'Roleplay', Drama],
+    ['chat', 'Chat', WorkspaceGlyph]
+  ].map(([thread, label, Icon]) => {
+    const rows = items.filter(block => summaryThread(block) === thread);
+    if (searchQuery && !rows.length) return null;
+    return (
+      <React.Fragment key={thread}>
+        <div className="flex items-center gap-2 border-t border-border-subtle bg-tint/[0.02] px-4 pb-2 pt-2.5 text-xs font-semibold text-text-muted">
+          <Icon aria-hidden="true" className="h-3.5 w-3.5" />
+          {label}
+          <span className="font-medium tabular-nums text-text-disabled">{rows.length}</span>
+        </div>
+        {rows.length ? rows.map(renderRow) : <p className="px-4 pb-3 pt-1 text-sm text-text-subtle">Nothing archived yet.</p>}
+      </React.Fragment>
+    );
+  });
+
   const renderRow = (block) => {
     if (block.isExample) return renderExampleRow(block);
     const mode = blockMode(block);
@@ -1260,6 +1337,15 @@ export default function ChatMemoryView({
           preview={firstLine(block.summary)}
           tokens={formatTokens(block.tokenCount || 0)}
           onOpen={() => openMemoryBlock(block)}
+          menuItems={roleplayWorkspace ? [
+            summaryThread(block) === 'roleplay'
+              ? { icon: WorkspaceGlyph, label: 'Move to Chat', description: `This summary and the ${plural(summaryMessageIds(block).length, 'message', 'messages')} it covers.`, onSelect: () => planSummaryMove(block) }
+              : { icon: Drama, label: 'Move to Roleplay', description: `This summary and the ${plural(summaryMessageIds(block).length, 'message', 'messages')} it covers.`, onSelect: () => planSummaryMove(block) },
+            'separator',
+            { icon: RebuildIcon, label: 'Rebuild this summary', onSelect: () => requestRebuildSummary(block) },
+            'separator',
+            { icon: Trash2, label: 'Delete', danger: true, onSelect: () => requestDeleteSummary(block) }
+          ] : undefined}
         />
       );
     }
@@ -1551,7 +1637,7 @@ export default function ChatMemoryView({
                     onToggle={(next) => toggleSection(mode, next)}
                   >
                     {items.length > 0
-                      ? items.map(renderRow)
+                      ? (mode === 'history' && roleplayWorkspace && !tourExamples ? renderHistoryGroups(items) : items.map(renderRow))
                       : <p className="border-t border-border-subtle px-4 py-3 text-sm text-text-subtle">{mode === 'history' ? 'Nothing archived yet.' : 'Nothing here yet.'}</p>}
                   </CollapsibleSection>
                   </div>
@@ -2197,6 +2283,10 @@ export default function ChatMemoryView({
           title={kbOpType === 'export' ? 'Exporting the workspace memory' : 'Importing workspace memory'}
           stages={kbOpType === 'export' ? PROGRESS_STAGES.export : PROGRESS_STAGES.kbImport}
         />
+      )}
+
+      {summaryMove && (
+        <ThreadMoveDialog chatId={chat.id} plan={summaryMove} busy={summaryMoveBusy} onConfirm={confirmSummaryMove} onClose={() => setSummaryMove(null)} />
       )}
 
       {confirmDialog && (

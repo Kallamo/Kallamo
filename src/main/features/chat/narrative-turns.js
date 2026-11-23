@@ -26,7 +26,7 @@ function hasTable(db, name) {
 function findPendingNarrativeTurn(db, chatId, excludedIds = []) {
   if (!chatId || !hasTable(db, 'narrative_state_jobs')) return null;
   const excluded = new Set(excludedIds);
-  const latest = db.prepare("SELECT id FROM messages WHERE chatId = ? AND role = 'ai' ORDER BY createdAt DESC, id DESC LIMIT 25")
+  const latest = db.prepare("SELECT id FROM messages WHERE chatId = ? AND thread = 'roleplay' AND role = 'ai' ORDER BY createdAt DESC, id DESC LIMIT 25")
     .all(chatId)
     .find(message => !excluded.has(message.id));
   if (!latest) return null;

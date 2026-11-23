@@ -24,10 +24,12 @@ import { InvokeModal, CHANNEL_LABELS } from './WritingInvocation';
 import WritingFindReplace from './WritingFindReplace';
 import WritingDiagnostics from './WritingDiagnostics';
 import { useApp } from '../context/AppContext';
+import { deskHistoryNote } from '../features/configuration/desk-history';
 import { DecorationSet } from '@tiptap/pm/view';
 import { meta as entityTypeMeta, TYPE_ORDER } from '../features/worldbuild/worldbuildConfig';
 import { locationSizeLabel, locationSizeOf } from '../../shared/location-sizes';
 import { workspaceCovered } from '../utils/workspaceCovered';
+import { openConfigurationSection } from '../features/configuration/open-section';
 import {
   getEditorExtensions, estimatePagesFromWords,
   suggestionKey, buildSuggestionDecorations, suggestionWordDelta,
@@ -683,7 +685,7 @@ export default function WritingEditor({
   chaptersHidden = false, chaptersSide = 'left', onToggleChapters, rightPanel = '', onTogglePanel, notesCount = 0, directivesCount = 0, analysesCount = 0,
   indexingElsewhere = false, indexingProgress = null, onIndexingChange, inWorld = false, onInWorld,
 }) {
-  const { showToast, settings } = useApp();
+  const { showToast, settings, activeChat, setActiveWorkspaceView } = useApp();
   const tokenDebug = Boolean(settings?.advanced?.tokenDebug);
   const ragDebug = Boolean(settings?.advanced?.ragDebug);
   const saveTimer = useRef(null);
@@ -1404,6 +1406,12 @@ export default function WritingEditor({
           profiles={profiles}
           initialChannel={lastChannel}
           directivesCount={directivesCount}
+          historyNote={deskHistoryNote(activeChat)}
+          onChangeHistory={() => {
+            setInvokeData(null);
+            setActiveWorkspaceView('configuration');
+            openConfigurationSection('writing');
+          }}
           onSubmit={submitInvoke}
           onClose={() => setInvokeData(null)}
         />

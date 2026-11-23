@@ -27,7 +27,7 @@ const APP_TABLES = `
   );
   CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, aiName TEXT, aiColor TEXT, debugNotice TEXT,
-    attachedFiles TEXT, createdAt INTEGER
+    attachedFiles TEXT, createdAt INTEGER, thread TEXT NOT NULL DEFAULT 'chat'
   );
   CREATE TABLE IF NOT EXISTS folders (
     id TEXT PRIMARY KEY, workspaceId TEXT NOT NULL, name TEXT NOT NULL, parentId TEXT, position INTEGER, createdAt INTEGER
@@ -160,7 +160,7 @@ describe('the Evenwell onboarding', () => {
     expect(titleOf(onboarding.seed())).toBe('Evenwell 3');
   });
 
-  test('starting as Jasper puts Odris beside him, the room nearby and the opening in the chat', () => {
+  test('starting as Jasper puts Odris beside him, the room nearby and the opening in the Roleplay', () => {
     const { onboarding, scenes, frames, settings } = createOnboarding();
     const workspaceId = onboarding.seed();
     const jasper = onboarding.getStory(workspaceId).cast.find((member: any) => member.name === 'Jasper');
@@ -175,6 +175,8 @@ describe('the Evenwell onboarding', () => {
     expect(scene.nearbyIds).not.toContain(ids.get('Odris'));
     expect(message.content).toBe(story.CAST.find((member: any) => member.name === 'Jasper').opening);
     expect(harness.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE chatId = ?').get(workspaceId)).toEqual({ count: 1 });
+    // The opening belongs to the story, so the Chat starts empty.
+    expect(harness.db.prepare('SELECT thread FROM messages WHERE chatId = ?').get(workspaceId)).toEqual({ thread: 'roleplay' });
     expect(started.stage).toBe('playing');
     expect(frames).toEqual([expect.objectContaining({ originId: message.id, startLocationId: ids.get(story.LOCATION), endLocationId: ids.get(story.LOCATION) })]);
     expect(jasper.look).toMatch(/^Broad-shouldered.*auburn hair.$/);

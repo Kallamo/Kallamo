@@ -7,7 +7,8 @@ export async function beginStory(app, workspaceId, entityId) {
   }
   window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
   window.dispatchEvent(new CustomEvent('onboarding-story-change', { detail: { workspaceId, story: result.story } }));
-  app.setActiveWorkspaceView('chat');
+  // The opening is the first turn of the story, so it plays in the Roleplay.
+  app.setActiveWorkspaceView('roleplay');
   revealOpening(app, workspaceId, result.message);
   return result;
 }
@@ -23,7 +24,7 @@ async function revealOpening(app, workspaceId, message) {
   }
   app.clearStreamDisplay();
   app.setIsGenerating(true);
-  app.setGenerationProgress({ chatId: workspaceId, step: 1, totalSteps: 1, profileName: message.aiName, status: 'Writing' });
+  app.setGenerationProgress({ chatId: workspaceId, thread: 'roleplay', step: 1, totalSteps: 1, profileName: message.aiName, status: 'Writing' });
   app.enqueueStreamDisplay({ contentDelta: text });
   await new Promise(resolve => {
     // A stop or a workspace switch clears the display; that ends the reveal too.

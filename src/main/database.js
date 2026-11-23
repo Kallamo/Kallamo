@@ -684,16 +684,21 @@ try {
 
 // Derived from coverage (features/chat/archive-coverage); kept in sync for older readers and exports.
 try {
-  const { deriveSummarizedIndex } = require('./features/chat/archive-coverage');
+  const { deriveSummarizedIndex, parseMemoryBlocks } = require('./features/chat/archive-coverage');
+  const { threadSummaryBlocks } = require('./features/chat/threads');
   const chatRows = db.prepare('SELECT id, summarizedIndex, memoryBlocks FROM chats').all();
   const updateSummarizedIndex = db.prepare('UPDATE chats SET summarizedIndex = ? WHERE id = ?');
+  // The column says which conversation this index is about, once the split has run.
+  const split = db.prepare('PRAGMA table_info(messages)').all().some(column => column.name === 'thread');
+  const readMessages = db.prepare(split
+    ? "SELECT id, excluded FROM messages WHERE chatId = ? AND thread = 'chat' ORDER BY createdAt ASC, id ASC"
+    : 'SELECT id, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC, id ASC');
 
   for (const chat of chatRows) {
     try {
-      const messages = db
-        .prepare('SELECT id, excluded FROM messages WHERE chatId = ? ORDER BY createdAt ASC, id ASC')
-        .all(chat.id);
-      const repairedIndex = deriveSummarizedIndex(messages, chat.memoryBlocks);
+      const messages = readMessages.all(chat.id);
+      const blocks = split ? threadSummaryBlocks(parseMemoryBlocks(chat.memoryBlocks), 'chat') : chat.memoryBlocks;
+      const repairedIndex = deriveSummarizedIndex(messages, blocks);
 
       if (repairedIndex !== (chat.summarizedIndex || 0)) {
         updateSummarizedIndex.run(repairedIndex, chat.id);
@@ -749,6 +754,7 @@ try {
 
 // Versioned migrations extend the base tables above, so they run once those exist.
 runSchemaStep(() => runDatabaseMigrations(db));
+runSchemaStep(() => require('./database/thread-migration').ensureThreadSchema(db));
 
 // A story file whose workspace is gone (a delete interrupted by a crash) is removed here.
 try {
@@ -1089,8 +1095,8 @@ Rank the problems by how much they break the story, most serious first.
   `);
 
   const insertMessage = db.prepare(`
-    INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, '', '[]', ?)
+    INSERT INTO messages (id, chatId, role, content, aiName, aiColor, debugNotice, attachedFiles, createdAt, thread)
+    VALUES (?, ?, ?, ?, ?, ?, '', '[]', ?, 'chat')
   `);
 
   // A four-message brainstorming exchange (user/AI/user/AI) about this very story, so

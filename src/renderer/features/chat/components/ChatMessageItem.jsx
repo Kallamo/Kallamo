@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Brain, CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, Eye, EyeOff, History, MapPin, MoreHorizontal, Paperclip, Pencil, RotateCw, Trash2 } from 'lucide-react';
-import { Menu, MenuItem, MenuSeparator } from '../../../components/ui/Menu';
+import { AlertTriangle, Brain, CalendarDays, ChevronLeft, ChevronRight, ChevronsDown, Clock3, Copy, Eye, EyeOff, History, ListChecks, MapPin, MessageSquare, MoreHorizontal, Paperclip, Pencil, RotateCw, Trash2 } from 'lucide-react';
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from '../../../components/ui/Menu';
 import Tooltip from '../../../components/ui/Tooltip';
 import MessageMarkdown from './MessageMarkdown';
 import MessageEditor from './MessageEditor';
@@ -190,7 +190,9 @@ function AlternativeSwitcher({ alternatives, onSwitch }) {
   );
 }
 
-function MessageMenu({ message, actions }) {
+const THREAD_NAMES = { chat: 'Chat', roleplay: 'Roleplay' };
+
+function MessageMenu({ message, actions, moveTo }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef(null);
   const excluded = message.excluded === 1;
@@ -221,8 +223,27 @@ function MessageMenu({ message, actions }) {
           description={excluded ? 'The AI reads it again.' : 'Stays in the chat. The AI stops reading it.'}
           onSelect={choose(() => actions.toggleExcluded(message.id, !excluded))}
         />
+        {moveTo && (
+          <>
+            <MenuSeparator />
+            <MenuLabel>Move to {THREAD_NAMES[moveTo]}</MenuLabel>
+            <MenuItem
+              icon={ChevronsDown}
+              label="This and everything after"
+              description={`${actions.countFrom(message.id)} ${actions.countFrom(message.id) === 1 ? 'message' : 'messages'}, in the order they were written.`}
+              onSelect={choose(() => actions.requestMove(message.id, 'after'))}
+            />
+            <MenuItem icon={MessageSquare} label="Only this message" onSelect={choose(() => actions.requestMove(message.id, 'only'))} />
+            <MenuItem
+              icon={ListChecks}
+              label="Choose messages…"
+              description={moveTo === 'roleplay' ? 'Tick the ones that belong to the story.' : 'Tick the ones that were not the story.'}
+              onSelect={choose(() => actions.requestMove(message.id, 'choose'))}
+            />
+          </>
+        )}
         <MenuSeparator />
-        <MenuItem icon={History} label="Revert chat here" description="Deletes every message after this one." danger onSelect={choose(() => actions.requestRevert(message.id))} />
+        <MenuItem icon={History} label={moveTo === 'chat' ? 'Revert roleplay here' : 'Revert chat here'} description="Deletes every message after this one." danger onSelect={choose(() => actions.requestRevert(message.id))} />
         <MenuItem icon={Trash2} label="Delete message" description="Removes it for good." danger onSelect={choose(() => actions.requestDelete(message.id))} />
       </Menu>
     </>
@@ -354,7 +375,7 @@ function UserMessage({ message, isEditing, isLastUser, playerName, view, actions
               {isLastUser && <ActionButton icon={Pencil} label="Edit" onClick={() => actions.startEdit(message.id)} />}
             </>
           )}
-          <MessageMenu message={message} actions={actions} />
+          <MessageMenu message={message} actions={actions} moveTo={view.moveTo} />
         </div>
       )}
     </div>
@@ -461,7 +482,7 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
               </>
             )}
             {alternatives && <AlternativeSwitcher alternatives={alternatives} onSwitch={index => actions.switchAlternative(message.id, index)} />}
-            <MessageMenu message={message} actions={actions} />
+            <MessageMenu message={message} actions={actions} moveTo={view.moveTo} />
           </div>
           {/* Outside the fading row: an older reply shows its cut without a hover. */}
           {contextCut && <ContextCutTag cut={contextCut} onArchive={actions.requestArchive} />}

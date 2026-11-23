@@ -26,6 +26,7 @@ import { conditionChangeItems, describeConditionChange, describeSkillChange, des
 import ConditionChips from './ConditionChips';
 import { describeSpanCheck } from '../chat/frame-format';
 import SEEDED_BY from '../../../shared/seed-provenance.json';
+import { openConfigurationSection } from '../configuration/open-section';
 
 const EMPTY_SCENE = {
   locationId: null,
@@ -426,9 +427,7 @@ function RoleplayQuickPanel({
 
   const openConfiguration = () => {
     onOpenConfiguration();
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      window.dispatchEvent(new CustomEvent('configuration-open-section', { detail: { sectionId: 'roleplay' } }));
-    }));
+    openConfigurationSection('roleplay');
   };
 
   const openPanel = async target => {

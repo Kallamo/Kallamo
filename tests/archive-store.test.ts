@@ -10,8 +10,9 @@ function createDatabase() {
   const database: any = openTestDatabase(':memory:');
 
   database.exec(`
-    CREATE TABLE chats (id TEXT PRIMARY KEY, summarizedIndex INTEGER DEFAULT 0, memoryBlocks TEXT);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER, excluded INTEGER DEFAULT 0);
+    CREATE TABLE chats (id TEXT PRIMARY KEY, summarizedIndex INTEGER DEFAULT 0, memoryBlocks TEXT, autoSummarize INTEGER DEFAULT 0, archiveThreshold INTEGER DEFAULT 60000, lastTargetId TEXT);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, chatId TEXT, role TEXT, content TEXT, createdAt INTEGER, excluded INTEGER DEFAULT 0, thread TEXT NOT NULL DEFAULT 'chat');
+    CREATE TABLE workspace_threads (workspace_id TEXT NOT NULL, thread TEXT NOT NULL, summarized_index INTEGER NOT NULL DEFAULT 0, auto_summarize INTEGER NOT NULL DEFAULT 0, archive_threshold INTEGER NOT NULL DEFAULT 60000, last_target_id TEXT, PRIMARY KEY (workspace_id, thread));
     CREATE TABLE knowledge_chunks (id TEXT PRIMARY KEY, ownerId TEXT, ownerType TEXT, source TEXT, text TEXT, tokenCount INTEGER, memoryBlockId TEXT);
     CREATE TABLE knowledge_chunks_fts (chunkId TEXT, text TEXT);
     CREATE TABLE chunk_tags (chunkId TEXT, tag TEXT, entity TEXT);
@@ -32,9 +33,9 @@ function summaryBlock(id: string, from: number, to: number) {
 }
 
 function seed(database: any) {
-  database.prepare('INSERT INTO chats VALUES (?, ?, ?)').run('c1', 0, '[]');
+  database.prepare('INSERT INTO chats (id, summarizedIndex, memoryBlocks) VALUES (?, ?, ?)').run('c1', 0, '[]');
   for (let i = 1; i <= 90; i += 1) {
-    database.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, 0)').run(`m${i}`, 'c1', 'user', `line ${i}`, i);
+    database.prepare('INSERT INTO messages (id, chatId, role, content, createdAt, excluded) VALUES (?, ?, ?, ?, ?, 0)').run(`m${i}`, 'c1', 'user', `line ${i}`, i);
   }
   const blocks = [summaryBlock('A', 1, 30), summaryBlock('B', 31, 60), summaryBlock('C', 61, 90)];
   database.prepare('UPDATE chats SET memoryBlocks = ? WHERE id = ?').run(JSON.stringify(blocks), 'c1');

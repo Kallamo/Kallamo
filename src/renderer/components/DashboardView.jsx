@@ -78,9 +78,11 @@ export default function DashboardView() {
   const isEmpty = chats.length === 0;
   const showHero = Boolean(!isEmpty && !query && hero);
 
+  // A roleplay workspace opens on its story; the Chat beside it is one tab away.
   const openWorkspace = (chat, view = 'chat') => {
-    setActiveWorkspaceView(view);
-    handleSelectChat(chat.id);
+    const roleplay = chat.experienceMode === 'roleplay';
+    setActiveWorkspaceView(view === 'chat' && roleplay ? 'roleplay' : view);
+    handleSelectChat(chat.id, { thread: roleplay ? 'roleplay' : 'chat' });
   };
   // Begin and the cards open a workspace the same way: a profile that cannot reply is caught first.
   const begin = chat => {

@@ -27,7 +27,7 @@ export class SceneGrowthLedger {
     const start = this.lastSettledBefore(workspaceId, end);
     const rows = this.db.prepare(`
       SELECT id, role, content, createdAt FROM messages
-      WHERE chatId = ? AND createdAt > ? AND createdAt <= ? AND COALESCE(excluded, 0) = 0
+      WHERE chatId = ? AND thread = 'roleplay' AND createdAt > ? AND createdAt <= ? AND COALESCE(excluded, 0) = 0
         AND role IN ('user', 'ai')
       ORDER BY createdAt, id
     `).all(workspaceId, start ?? -1, end) as Array<{ id: string; role: string; content: string; createdAt: number }>;
@@ -51,7 +51,7 @@ export class SceneGrowthLedger {
     const start = this.lastSettledBefore(workspaceId, end);
     return Number((this.db.prepare(`
       SELECT COUNT(*) AS count FROM messages
-      WHERE chatId = ? AND role = 'ai' AND createdAt > ? AND createdAt <= ? AND COALESCE(excluded, 0) = 0
+      WHERE chatId = ? AND thread = 'roleplay' AND role = 'ai' AND createdAt > ? AND createdAt <= ? AND COALESCE(excluded, 0) = 0
     `).get(workspaceId, start ?? -1, end) as { count: number }).count);
   }
 
@@ -72,7 +72,7 @@ export class SceneGrowthLedger {
   /** The latest reply of the workspace, which a scene closed by hand ends with. */
   latestReplyId(workspaceId: string): string | null {
     const row = this.db.prepare(`
-      SELECT id FROM messages WHERE chatId = ? AND role = 'ai' AND COALESCE(excluded, 0) = 0
+      SELECT id FROM messages WHERE chatId = ? AND thread = 'roleplay' AND role = 'ai' AND COALESCE(excluded, 0) = 0
       ORDER BY createdAt DESC, id DESC LIMIT 1
     `).get(workspaceId) as { id: string } | undefined;
     return row?.id ?? null;

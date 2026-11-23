@@ -7,6 +7,7 @@ import ProfilesWorkflowsSection from '../features/configuration/ProfilesWorkflow
 import ContextMemorySection from '../features/configuration/ContextMemorySection';
 import WritingDeskSection from '../features/configuration/WritingDeskSection';
 import AppearanceSection from '../features/configuration/AppearanceSection';
+import { takeConfigurationSection } from '../features/configuration/open-section';
 
 const SECTIONS = [
   { id: 'agents', label: 'Profiles & Workflows', icon: AiGlyph },
@@ -30,6 +31,8 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const [roleplayStatus, setRoleplayStatus] = useState({ enabled: false, pendingCount: 0 });
   const scrollRef = useRef(null);
   const sectionRefs = useRef({});
+  // Waits until the section is on the page: a Roleplay sub-section appears only once the status loads.
+  const [requestedSection, setRequestedSection] = useState(() => takeConfigurationSection());
 
   // Sub-sections exist only while Roleplay is on; the spy order follows the page.
   const order = useMemo(() => SECTIONS.flatMap(section => [
@@ -69,11 +72,21 @@ export default function ConfigurationView({ onTriggerSummarize }) {
     const openSection = event => {
       const sectionId = event.detail?.sectionId;
       if (!sectionId) return;
-      requestAnimationFrame(() => requestAnimationFrame(() => scrollToSection(sectionId)));
+      takeConfigurationSection();
+      setRequestedSection(sectionId);
     };
     window.addEventListener('configuration-open-section', openSection);
     return () => window.removeEventListener('configuration-open-section', openSection);
-  }, [scrollToSection]);
+  }, []);
+
+  useEffect(() => {
+    if (!requestedSection || !sectionRefs.current[requestedSection]) return undefined;
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => {
+      scrollToSection(requestedSection);
+      setRequestedSection(null);
+    }));
+    return () => cancelAnimationFrame(frame);
+  }, [requestedSection, roleplayStatus.enabled, activeChat?.id, scrollToSection]);
 
   if (!activeChat) return null;
 
@@ -117,8 +130,8 @@ export default function ConfigurationView({ onTriggerSummarize }) {
           </header>
 
           <ProfilesWorkflowsSection sectionRef={registerSection('agents')} activeChat={activeChat} writingProfiles={writingProfiles} workflows={workflows} handleSaveChat={handleSaveChat} />
-          <ContextMemorySection sectionRef={registerSection('context')} {...shared} activeMessages={activeMessages} onTriggerSummarize={onTriggerSummarize} />
-          <WritingDeskSection sectionRef={registerSection('writing')} activeChat={activeChat} handleSaveChat={handleSaveChat} />
+          <ContextMemorySection sectionRef={registerSection('context')} {...shared} activeMessages={activeMessages} onTriggerSummarize={onTriggerSummarize} roleplayEnabled={roleplayStatus.enabled} />
+          <WritingDeskSection sectionRef={registerSection('writing')} activeChat={activeChat} handleSaveChat={handleSaveChat} roleplayEnabled={roleplayStatus.enabled} />
           <RoleplayModeSection
             workspaceId={activeChat.id}
             api={electronAPI}
