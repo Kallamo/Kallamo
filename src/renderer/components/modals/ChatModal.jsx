@@ -165,7 +165,7 @@ export default function ChatModal({ chat, draft, onClose }) {
               <span className="caption">Profiles and workflows switched on when it opens. You can change them later in Configuration.</span>
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="overflow-hidden rounded-[0.875rem] border border-border-subtle bg-tint/[0.02]">
+              <div className="overflow-hidden rounded-[0.875rem] border border-border-subtle bg-surface-input">
                 <div className="flex items-center gap-2 px-3 py-2.5">
                   <span className="flex-1 text-xs font-semibold text-text-primary">
                     AI profiles <span className="caption tabular-nums">{activeProfiles.length} on</span>
@@ -219,7 +219,7 @@ export default function ChatModal({ chat, draft, onClose }) {
                 </div>
               </div>
 
-              <div className="self-start overflow-hidden rounded-[0.875rem] border border-border-subtle bg-tint/[0.02]">
+              <div className="self-start overflow-hidden rounded-[0.875rem] border border-border-subtle bg-surface-input">
                 <div className="px-3 py-2.5 text-xs font-semibold text-text-primary">
                   Workflows <span className="caption tabular-nums">{activeWorkflows.length} on</span>
                 </div>

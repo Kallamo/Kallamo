@@ -19,7 +19,7 @@ export function LibraryRail({ tabs, activeTab, onTab, search, onSearch, onBack, 
         <Logo size={26} className="shrink-0" />
         <h1 className="text-[1.375rem] font-extrabold tracking-[-0.02em] text-text-primary">Library</h1>
       </div>
-      <div role="tablist" aria-label="Library sections" className="mt-[1.125rem] flex gap-0.5 rounded-[0.5625rem] bg-tint/[0.04] p-[3px]">
+      <div role="tablist" aria-label="Library sections" className="mt-[1.125rem] flex gap-0.5 rounded-[0.5625rem] border border-border-subtle bg-surface-input p-[3px]">
         {tabs.map(tab => {
           const active = tab.id === activeTab;
           return (

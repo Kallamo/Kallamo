@@ -16,7 +16,7 @@
   --theme-surface-hover: #14282e;
   --theme-surface-overlay: rgb(0 8 11 / 78%);
   /* Depth: pages run from a lifted top to a deep bottom; rails sit a step below the page.
-     Cards on a page sink below it (sunken), and what sits inside a card rises out of it (well). */
+     Each nested surface rises a step (inset, well); fields and controls sit darker inside it. */
   --theme-surface-canvas-lift: #04212b;
   --theme-surface-canvas-mid: #021a22;
   --theme-surface-canvas-deep: #01111a;
@@ -25,7 +25,7 @@
   --theme-surface-rail-bottom: #010e14;
   --theme-surface-raised: #0a222c;
   --theme-surface-raised-low: #061920;
-  --theme-surface-inset: rgb(1 13 18 / 72%);
+  --theme-surface-inset: color-mix(in srgb, var(--theme-tint) 4%, transparent);
   --theme-surface-sunken: var(--theme-surface-rail-top);
   --theme-surface-sunken-low: var(--theme-surface-rail);
   --theme-surface-well: color-mix(in srgb, var(--theme-tint) 3%, transparent);
@@ -354,13 +354,10 @@ textarea, input, [contenteditable], .ProseMirror {
   background: linear-gradient(180deg, var(--theme-surface-rail-top) 0%, var(--theme-surface-rail) 55%, var(--theme-surface-rail-bottom) 100%);
 }
 
-/* A card on a page sits below it. Fields, selects and wells inside it rise out of it
-   instead of going darker still, so they never read as holes in a hole. */
+/* A card on a page sits below it; groups inside it rise out of it, and fields stay darker than both. */
 @utility surface-card {
   background: linear-gradient(180deg, var(--theme-surface-sunken) 0%, var(--theme-surface-sunken-low) 100%);
   box-shadow: inset 0 1px 0 var(--theme-highlight);
-  --theme-surface-input: var(--theme-surface-well);
-  --color-surface-input: var(--theme-surface-well);
   --color-surface-inset: var(--theme-surface-well);
   --theme-border-default: var(--theme-border-well);
   --color-border-default: var(--theme-border-well);
@@ -784,40 +781,56 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* Without background art a workspace sits on the page gradient: rails take the rail gradient,
    panels sink like cards, bars stay clear and the header shares the rails' top. Over art every
    surface shares one transparency and one blur instead (.has-backdrop below), so no panel
-   decides its own. The chat's backdrop opacity still sets how dark the art sits. */
-.glass-panel:not(.has-backdrop *) { @apply surface-card; }
-.glass-rail:not(.has-backdrop *) { @apply surface-rail; }
+   decides its own. The chat's backdrop opacity still sets how dark the art sits.
+   A view that covers the art whole (.opaque-view) keeps the look without it. */
+.glass-panel:is(:not(.has-backdrop *), .opaque-view *) { @apply surface-card; }
+.glass-rail:is(:not(.has-backdrop *), .opaque-view *) { @apply surface-rail; }
 .ws-page:not(.has-backdrop) { @apply surface-page; }
-.ws-card:not(.has-backdrop *) { @apply surface-card; backdrop-filter: none; }
-.ws-rail:not(.has-backdrop *) { @apply surface-rail; backdrop-filter: none; }
-.ws-clear:not(.has-backdrop *) { background: transparent; box-shadow: none; backdrop-filter: none; }
-.ws-head:not(.has-backdrop *) {
+.has-backdrop .opaque-view { @apply surface-page; }
+.ws-card:is(:not(.has-backdrop *), .opaque-view *) { @apply surface-card; backdrop-filter: none; }
+.ws-rail:is(:not(.has-backdrop *), .opaque-view *) { @apply surface-rail; backdrop-filter: none; }
+.ws-clear:is(:not(.has-backdrop *), .opaque-view *) { background: transparent; box-shadow: none; backdrop-filter: none; }
+.ws-head:is(:not(.has-backdrop *), .opaque-view *) {
   background-color: var(--theme-surface-rail-top);
   border-color: color-mix(in srgb, var(--theme-tint) 6%, transparent);
   backdrop-filter: none;
 }
-.ws-well:not(.has-backdrop *) {
+.ws-well:is(:not(.has-backdrop *), .opaque-view *) {
   background-color: color-mix(in srgb, var(--theme-surface-abyss) 55%, transparent);
   border-color: color-mix(in srgb, var(--theme-tint) 8%, transparent);
 }
-.ws-status:not(.has-backdrop *) { background: color-mix(in srgb, var(--theme-surface-canvas-deep) 70%, transparent); box-shadow: none; }
+.ws-status:is(:not(.has-backdrop *), .opaque-view *) { background: color-mix(in srgb, var(--theme-surface-canvas-deep) 70%, transparent); box-shadow: none; }
 /* The composer is the one surface that rises: it is where the next turn is written. */
-.ws-composer:not(.has-backdrop *) {
+.ws-composer:is(:not(.has-backdrop *), .opaque-view *) {
   background: linear-gradient(180deg, var(--theme-surface-raised) 0%, var(--theme-surface-raised-low) 100%);
   box-shadow: inset 0 1px 0 var(--theme-highlight), var(--theme-shadow-overlay);
 }
-.has-backdrop .glass-panel,
-.has-backdrop .glass-rail {
+.has-backdrop .glass-panel:not(.opaque-view *),
+.has-backdrop .glass-rail:not(.opaque-view *) {
   backdrop-filter: blur(20px) saturate(1.15);
   -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
-.has-backdrop .glass-panel { background-color: color-mix(in srgb, var(--theme-surface-panel) 66%, transparent); }
-.has-backdrop .glass-rail { background-color: color-mix(in srgb, var(--theme-surface-sidebar) 62%, transparent); }
+/* Over art, cards and rails keep their depth, see-through so the art still shows. */
+.has-backdrop :is(.glass-panel, .ws-card):not(.opaque-view *) {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--theme-surface-sunken) 66%, transparent) 0%,
+    color-mix(in srgb, var(--theme-surface-sunken-low) 74%, transparent) 100%);
+  box-shadow: inset 0 1px 0 var(--theme-highlight);
+  --color-surface-inset: var(--theme-surface-well);
+  --theme-border-default: var(--theme-border-well);
+  --color-border-default: var(--theme-border-well);
+}
+.has-backdrop :is(.glass-rail, .ws-rail):not(.opaque-view *) {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--theme-surface-rail-top) 70%, transparent) 0%,
+    color-mix(in srgb, var(--theme-surface-rail) 74%, transparent) 55%,
+    color-mix(in srgb, var(--theme-surface-rail-bottom) 82%, transparent) 100%);
+}
 /* Message actions sit straight on the chat background; a light backing keeps them legible over bright art. */
-.has-backdrop .chat-action,
-.has-backdrop .chat-hint { background-color: color-mix(in srgb, var(--theme-surface-canvas) 55%, transparent); }
-.has-backdrop .glass-panel.glass-dense { background-color: color-mix(in srgb, var(--theme-surface-editor) 90%, transparent); }
-.has-backdrop .glass-rail.glass-dense { background-color: color-mix(in srgb, var(--theme-surface-sidebar) 82%, transparent); }
+.has-backdrop .chat-action:not(.opaque-view *),
+.has-backdrop .chat-hint:not(.opaque-view *) { background-color: color-mix(in srgb, var(--theme-surface-canvas) 55%, transparent); }
+.has-backdrop .glass-panel.glass-dense:not(.opaque-view *) { background: color-mix(in srgb, var(--theme-surface-editor) 90%, transparent); }
+.has-backdrop .glass-rail.glass-dense:not(.opaque-view *) { background: color-mix(in srgb, var(--theme-surface-sidebar) 82%, transparent); }
 
 /* The Writing Desk toolbar scrolls sideways when the panels leave it little room, rather than wrapping. */
 .wd-toolbar { scrollbar-width: none; }

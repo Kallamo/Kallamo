@@ -93,7 +93,7 @@ export default function ConfigurationView({ onTriggerSummarize }) {
   const shared = { activeChat, handleSaveChat, electronAPI, refreshChats, showToast };
 
   return (
-    <div className="ws-clear flex h-full w-full overflow-hidden bg-surface-canvas">
+    <div className="opaque-view ws-clear flex h-full w-full overflow-hidden bg-surface-canvas">
       <nav aria-label="Configuration sections" className="ws-rail flex w-62 shrink-0 select-none flex-col gap-0.5 border-r border-border-subtle bg-surface-sidebar/70 px-3 py-5">
         <span className="px-2.5 pb-3 text-[0.9375rem] font-bold text-text-primary">Configuration</span>
         {SECTIONS.map(section => {

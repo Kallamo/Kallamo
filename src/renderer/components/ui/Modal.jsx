@@ -120,7 +120,7 @@ export default function Modal({
         aria-labelledby={title ? generatedTitleId : undefined}
         tabIndex={-1}
         onKeyDown={keepFocusInside}
-        className={`my-auto w-full ${SIZES[size] || SIZES.sm} bg-surface-canvas border border-border-default rounded-card shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
+        className={`my-auto w-full ${SIZES[size] || SIZES.sm} bg-surface-panel border border-border-default rounded-card shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 ${className}`}
       >
         {title && (
           <div className="relative z-10 shrink-0 flex items-center justify-between gap-3 min-h-14 px-5 bg-surface-panel/60 border-b border-border-subtle">
