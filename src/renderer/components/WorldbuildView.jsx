@@ -46,7 +46,7 @@ import WorldbuildFactsRegistry from '../features/worldbuild/WorldbuildFactsRegis
 import WorldbuildCalendar from '../features/worldbuild/WorldbuildCalendar';
 import WorldbuildRules from '../features/worldbuild/WorldbuildRules';
 import WorldbuildEventOccurrences from '../features/worldbuild/WorldbuildEventOccurrences';
-import WorldDateInput, { formatWorldDate } from '../features/worldbuild/WorldDateInput';
+import WorldDateInput, { StoryDayContext, formatWorldDate } from '../features/worldbuild/WorldDateInput';
 import { AddHoursButton, AddLengthButton, HoursInput, LengthInput, WeekdayPicker, defaultHours, onceSummary, recurrenceSummary } from '../features/worldbuild/EventSchedule';
 import { birthDateForAge, derivedAge } from '../../shared/world-age';
 import { WorldbuildInventory, WorldbuildRelationships } from '../features/worldbuild/WorldbuildAgentCollections';
@@ -324,8 +324,9 @@ const LocationSizeValue = ({ size }) => {
   return <div className="inline-flex items-center gap-1.5 text-sm font-medium text-text-primary"><Icon className="h-3.5 w-3.5 text-entity-location" aria-hidden="true" />{locationSizeLabel(size)}</div>;
 };
 
+// Chips never wrap: a long name shortens with an ellipsis and keeps the chip on one line.
 const Chip = ({ children }) => (
-  <span className="inline-flex min-h-6 items-center gap-1 rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 py-0.5 text-xs font-medium text-text-secondary">{children}</span>
+  <span className="inline-flex min-h-6 max-w-full items-center gap-1 whitespace-nowrap rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 py-0.5 text-xs font-medium text-text-secondary"><span className="min-w-0 truncate">{children}</span></span>
 );
 
 // A sheet section: titled card with one Edit for everything inside, template fields
@@ -487,16 +488,14 @@ function AliasInput({ value, onChange, placeholder, withEyes = false }) {
 
 const draftFor = (type, data = {}) => ({ id: null, type, canonicalName: '', aliases: '', lore: '', loreDocumentId: '', status: 'confirmed', data });
 
-// Links need a saved entity id, so these render nothing before the first save.
-function SingleRelation({ label, hint, current, options, onSet, disabled, spoiler }) {
-  if (disabled) return null;
+function SingleRelation({ label, hint, current, options, onSet, spoiler }) {
   const currentName = options.find(o => o.id === current)?.canonicalName;
   return (
     <Edit label={label} hint={hint} spoiler={spoiler}>
       <div className="flex items-center gap-2 flex-wrap">
         {currentName
-          ? <div className="inline-flex min-h-9 items-center gap-2 rounded-control border border-border-default bg-surface-input/70 pl-3 pr-1.5 text-sm font-medium text-text-primary">
-              <span>{currentName}</span>
+          ? <div className="inline-flex min-h-9 max-w-full items-center gap-2 whitespace-nowrap rounded-control border border-border-default bg-surface-input/70 pl-3 pr-1.5 text-sm font-medium text-text-primary">
+              <span className="min-w-0 truncate">{currentName}</span>
               <button type="button" aria-label={`Clear ${label}`} onClick={() => onSet(null)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-status-danger/10 hover:text-status-danger"><X className="w-3.5 h-3.5" /></button>
             </div>
           : <span className="inline-flex min-h-9 items-center rounded-control border border-dashed border-border-default px-3 text-sm text-text-subtle">None set</span>}
@@ -505,18 +504,17 @@ function SingleRelation({ label, hint, current, options, onSet, disabled, spoile
     </Edit>
   );
 }
-function MultiRelation({ label, hint, links, options, onAdd, onRemove, disabled, spoiler }) {
-  if (disabled) return null;
+function MultiRelation({ label, hint, links, options, onAdd, onRemove, spoiler }) {
   const linked = new Set(links.map(l => l.entity.id));
   const remaining = options.filter(o => !linked.has(o.id));
   return (
     <Edit label={label} hint={hint} spoiler={spoiler}>
       <div className="flex flex-wrap items-center gap-1.5">
         {links.map(l => (
-          <span key={l.linkId} className="inline-flex min-h-6 items-center gap-1.5 text-xs font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
-            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${meta(l.entity.type).dot || 'bg-text-subtle'}`} /><SpoilerCover field={`link:${l.linkId}`} compact>{l.entity.canonicalName}</SpoilerCover>
-            <FieldEye field={`link:${l.linkId}`} size="sm" />
-            <button type="button" onClick={() => onRemove(l.linkId)} aria-label={`Remove ${l.entity.canonicalName}`} className="text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+          <span key={l.linkId} className="inline-flex min-h-6 max-w-full items-center gap-1.5 whitespace-nowrap text-xs font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
+            <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${meta(l.entity.type).dot || 'bg-text-subtle'}`} /><SpoilerCover field={`link:${l.linkId}`} compact><span className="min-w-0 truncate">{l.entity.canonicalName}</span></SpoilerCover>
+            {!String(l.linkId).startsWith('draft:') && <FieldEye field={`link:${l.linkId}`} size="sm" />}
+            <button type="button" onClick={() => onRemove(l.linkId)} aria-label={`Remove ${l.entity.canonicalName}`} className="shrink-0 text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
         <EntityPickerButton title={label} options={remaining} onPick={onAdd} />
@@ -544,9 +542,9 @@ function LabeledRelation({ subjectName, links, options, priorLabels, onAdd, onRe
       <div className="flex flex-wrap gap-1.5 my-2">
         {(!links || links.length === 0) && <span className="caption">None yet.</span>}
         {(links || []).map(l => (
-          <span key={l.linkId} className="inline-flex min-h-6 items-center gap-1 text-xs font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
-            <span className="text-text-muted">{l.label || 'related'}</span> · {l.entity.canonicalName}
-            <button type="button" onClick={() => onRemove(l.linkId)} aria-label={`Remove ${l.entity.canonicalName}`} className="text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
+          <span key={l.linkId} className="inline-flex min-h-6 max-w-full items-center gap-1 whitespace-nowrap text-xs font-medium text-text-primary bg-surface-hover/65 border border-border-default rounded-full pl-2.5 pr-1 py-0.5">
+            <span className="min-w-0 truncate"><span className="text-text-muted">{l.label || 'related'}</span> · {l.entity.canonicalName}</span>
+            <button type="button" onClick={() => onRemove(l.linkId)} aria-label={`Remove ${l.entity.canonicalName}`} className="shrink-0 text-text-muted hover:text-status-danger cursor-pointer p-0.5"><X className="w-3 h-3" /></button>
           </span>
         ))}
       </div>
@@ -612,6 +610,8 @@ function MemberRow({ link, calendar, kind, isLeader, editing, onOpen, onSetRole,
             <input value={role} onChange={(e) => setRole(e.target.value)} onBlur={commitRole} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
               placeholder={isFormer ? 'Last rank' : 'Rank'} aria-label={`Rank of ${link.entity.canonicalName}`}
               className="wb-input h-9 w-56 shrink-0 rounded-control border border-border-default bg-surface-input/90 px-2.5 text-sm text-text-primary placeholder:text-text-subtle focus:border-accent/70 focus:outline-none" />
+            {onSetFormer && <IconButton icon={LogOut} size="sm" label={`Mark ${link.entity.canonicalName} as moved on`} onClick={() => onSetFormer(link)} />}
+            {onRestore && <IconButton icon={Undo2} size="sm" label={`Put ${link.entity.canonicalName} back on the roster`} onClick={() => onRestore(link)} />}
             <IconButton icon={MoreHorizontal} size="sm" label={`${link.entity.canonicalName} membership`} aria-expanded={datesOpen} className={datesOpen ? '!bg-surface-hover !text-text-primary' : ''} onClick={() => setDatesOpen(open => !open)} />
           </>
         ) : (
@@ -630,12 +630,10 @@ function MemberRow({ link, calendar, kind, isLeader, editing, onOpen, onSetRole,
           ) : <p className="caption">Set up the world calendar to record dates.</p>}
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="ghost" icon={Landmark} aria-pressed={Boolean(meta.founder)} className={meta.founder ? '!border-entity-faction/40 !text-entity-faction' : ''} onClick={() => onSetMeta(link, { founder: !meta.founder })}>Founder</Button>
-            {onSetFormer && <Button size="sm" variant="ghost" icon={LogOut} onClick={() => onSetFormer(link)}>Moved on</Button>}
-            {onRestore && <Button size="sm" variant="ghost" icon={Undo2} onClick={() => onRestore(link)}>Back on the roster</Button>}
             <span className="flex-1" />
             <Button size="sm" variant="subtle" icon={Trash2} className="!text-status-danger" onClick={() => onRemove(link.linkId)}>{isFormer ? 'Drop this record' : 'Remove from roster'}</Button>
           </div>
-          <p className="caption">{isFormer ? 'Dropping the record erases this tenure entirely.' : 'Moved on keeps what they knew and stops what the faction shares from now on. Remove erases the record.'}</p>
+          <p className="caption">{isFormer ? 'Dropping the record erases this tenure entirely.' : 'Moving on keeps what they knew and stops what the faction shares from now on. Remove erases the record.'}</p>
         </div>
       )}
     </div>
@@ -1209,7 +1207,14 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   };
   const onOverview = surface === 'entities' && !selected;
   const showOverview = () => { setSurface('entities'); setSelected(null); setEditingSection(null); };
-  const startNew = (type, data = {}) => { setOpenCreateSections(new Set()); setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftFor(type, data)); setRel({}); };
+  // The template's default race shows on the new sheet, so the choice is visible before create applies it.
+  const draftWithDefaults = (type, data) => {
+    const draft = draftFor(type, data);
+    const raceId = type === 'Characters' ? templates.find(template => template.typeId === 'Characters')?.layout?.nativeDefaults?.race : null;
+    if (!raceId || !entities.some(entity => entity.id === raceId && entity.type === 'Races' && entity.status !== 'proposed')) return draft;
+    return { ...draft, draftLinks: { is_race: [raceId] }, draftSingles: { is_race: true } };
+  };
+  const startNew = (type, data = {}) => { setOpenCreateSections(new Set()); setSurface('entities'); setShowCreate(false); setEditingSection(null); setCharTab('data'); setSelected(draftWithDefaults(type, data)); setRel({}); };
   const patch = (f) => setSelected(p => ({ ...p, ...f }));
   const patchData = (f) => setSelected(p => ({ ...p, data: { ...p.data, ...f } }));
   // An age and a birth date never live side by side: the birthday replaces the stored age, and
@@ -1264,11 +1269,17 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       else {
         const r = await electronAPI.createEntity(payload); if (!r?.success) throw new Error(r?.error || 'create failed'); id = r.entity.id;
         const drafts = selected.draftLinks || {};
+        const singles = selected.draftSingles || {};
+        // A single link replaces what create already wrote (the default race), and an emptied one clears it.
         for (const [relType, targets] of Object.entries(drafts)) {
+          if (singles[relType]) { await electronAPI.setEntityLink({ workspaceId, fromId: id, relType, toId: targets[0] || null, single: true }); continue; }
           for (const toId of targets) await electronAPI.setEntityLink({ workspaceId, fromId: id, relType, toId, single: false });
         }
+        // A faction's leader joins its roster, as setFactionLeader does on a saved sheet.
+        const leaderId = selected.type === 'Factions' ? drafts.led_by?.[0] : null;
+        if (leaderId) await electronAPI.setEntityLink({ workspaceId, fromId: leaderId, relType: 'member_of', toId: id, single: false, label: 'Leader', metadata: {} });
         // The main fills template defaults and the default race on create, so the sheet takes what was stored.
-        setSelected(s => ({ ...s, id, status: r.entity.status, data: r.entity.data || s.data, draftLinks: undefined }));
+        setSelected(s => ({ ...s, id, status: r.entity.status, data: r.entity.data || s.data, draftLinks: undefined, draftSingles: undefined }));
         await loadRelations({ ...selected, id });
       }
       await load();
@@ -1589,7 +1600,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     .filter(Boolean)
     .map(entity => ({ linkId: `draft:${relType}:${entity.id}`, entity }));
   const singleProps = (relType, current) => unsaved
-    ? { current: draftTargets(relType)[0], onSet: (id) => setDraftTargets(relType, id ? [id] : []) }
+    ? { current: draftTargets(relType)[0], onSet: (id) => setSelected(p => ({ ...p, draftLinks: { ...(p.draftLinks || {}), [relType]: id ? [id] : [] }, draftSingles: { ...(p.draftSingles || {}), [relType]: true } })) }
     : { current, onSet: (id) => setSingle(relType, id) };
   const multiProps = (relType, links) => unsaved
     ? { links: draftLinksOf(relType), onAdd: (id) => setDraftTargets(relType, [...draftTargets(relType), id]), onRemove: (linkId) => setDraftTargets(relType, draftTargets(relType).filter(id => `draft:${relType}:${id}` !== linkId)) }
@@ -1851,9 +1862,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </Edit>
           <Edit label="Type" spoiler="locationType" hint="Its kind in your own words."><LInput placeholder="e.g. kingdom, space station, tavern, bridge" value={selected.data.locationType || ''} onChange={(e) => patchData({ locationType: e.target.value })} /></Edit>
           <Edit label="Description" spoiler="description"><SpoilerTextArea rows={5} placeholder="What this place looks and feels like, including its defining features." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
-          <SingleRelation label="Inside another place" spoiler="inside" hint="Nest this within a larger location." disabled={unsaved} current={rel.inside?.entity?.id} options={parentOptions} onSet={(id) => setSingle('inside', id)} />
+          <SingleRelation label="Inside another place" spoiler="inside" hint="Nest this within a larger location." options={parentOptions} {...singleProps('inside', rel.inside?.entity?.id)} />
           <NestingWarning size={size} parent={parent} />
-          <SingleRelation label="Owner or leader" spoiler="leader" hint="Who holds or rules this place, if anyone." disabled={unsaved} current={rel.leader?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('led_by', id)} />
+          <SingleRelation label="Owner or leader" spoiler="leader" hint="Who holds or rules this place, if anyone." options={byType.Characters} {...singleProps('led_by', rel.leader?.entity?.id)} />
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
       const childIds = new Set(insideLinks.filter(link => link.toId === selected.id).map(link => link.fromId));
@@ -1906,7 +1917,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </Edit>
           {isItemType && <Edit label={<>How common <InfoPopover items={ABUNDANCE_HELP} /></>} spoiler="abundance"><ChoiceSelect label="How common" value={selected.data.abundance} onChange={(e) => patchData({ abundance: e.target.value })} options={RARITY} /></Edit>}
           </div>
-          <SingleRelation label="Creator" spoiler="creator" hint="Leave blank if unknown." disabled={unsaved} current={rel.createdBy?.entity?.id} options={byType.Characters} onSet={(id) => setSingle('created_by', id)} />
+          <SingleRelation label="Creator" spoiler="creator" hint="Leave blank if unknown." options={byType.Characters} {...singleProps('created_by', rel.createdBy?.entity?.id)} />
           {isUniqueItem && !unsaved && <Edit label="Owner" spoiler="owner" hint="A unique item can be in one inventory or one world location.">
             <div className="flex items-center gap-2 flex-wrap">
               <button type="button" onClick={() => setOwner('ai')} aria-pressed={ownerVal === 'ai'} className={`inline-flex min-h-9 items-center gap-2 rounded-control border px-3 py-2 text-xs font-semibold transition-colors ${ownerVal === 'ai' ? 'border-border-strong bg-surface-hover text-text-primary' : 'border-border-default bg-surface-input/70 text-text-muted hover:border-border-strong hover:text-text-primary'}`}><AiGlyph className="h-3.5 w-3.5" />Decided by the AI</button>
@@ -1915,9 +1926,9 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
               <EntityPickerButton icon={rel.ownedBy ? Replace : Plus} label={rel.ownedBy ? 'Change' : 'Choose entity'} title="Choose owner" options={ownerOptions} onPick={setOwner} />
             </div>
           </Edit>}
-          {isUniqueItem && <SingleRelation label="Current location" spoiler="location" hint="Setting a location removes this item from its current inventory." disabled={unsaved} current={rel.locatedIn?.entity?.id} options={presenceLocations} onSet={setItemLocation} />}
-          {isItemType && <MultiRelation label="Where found" spoiler="foundIn" hint="Places where this item type can be found, gathered, or obtained." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />}
-          {isItemType && <MultiRelation label="Where sold" spoiler="soldIn" hint="Places where this item type can normally be purchased." disabled={unsaved} links={rel.soldIn || []} options={byType.Locations} onAdd={(id) => addMulti('sold_in', id)} onRemove={removeLink} />}
+          {isUniqueItem && <SingleRelation label="Current location" spoiler="location" hint="Setting a location removes this item from its current inventory." options={presenceLocations} {...(unsaved ? singleProps('located_in') : { current: rel.locatedIn?.entity?.id, onSet: setItemLocation })} />}
+          {isItemType && <MultiRelation label="Where found" spoiler="foundIn" hint="Places where this item type can be found, gathered, or obtained." options={byType.Locations} {...multiProps('found_in', rel.foundIn || [])} />}
+          {isItemType && <MultiRelation label="Where sold" spoiler="soldIn" hint="Places where this item type can normally be purchased." options={byType.Locations} {...multiProps('sold_in', rel.soldIn || [])} />}
           <Edit label="Description" spoiler="description"><SpoilerTextArea rows={4} placeholder="What it looks like and does." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit>
         </> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
@@ -1958,7 +1969,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           </Edit>
           <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
             {isIndividual
-              ? <SingleRelation label="Species" spoiler="race" disabled={unsaved} current={rel.isRace?.entity?.id} options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} onSet={(id) => setSingle('is_race', id)} />
+              ? <SingleRelation label="Species" spoiler="race" options={byType.Creatures.filter(creature => creature.data?.scope === 'group' && creature.id !== selected.id)} {...singleProps('is_race', rel.isRace?.entity?.id)} />
               : <Edit label="Nature" spoiler="nature"><FreeDatalist value={selected.data.nature} onChange={(e) => patchData({ nature: e.target.value })} options={natureOpts} placeholder="e.g. Beast, Spirit, Deity" /></Edit>}
             <Edit label="Threat" spoiler="threat"><ChoiceSelect label="Threat" value={selected.data.threat} onChange={(e) => patchData({ threat: e.target.value })} options={THREAT} /></Edit>
           </div>
@@ -1972,7 +1983,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           {isIndividual && worldCalendar && selected.data.birthDate && <Checkbox checked={Boolean(selected.data.showBirthday)} onChange={showBirthday => patchData({ showBirthday })} label="Show the birthday on the calendar" />}
           {isIndividual && selected.data.status === 'deceased' && worldCalendar && <Edit label="Death date" spoiler="deathDate"><WorldDateInput label="Death date" emptyLabel="Set death date" calendar={worldCalendar} value={selected.data.deathDate} onChange={deathDate => patchData({ deathDate })} /></Edit>}
           {isIndividual && selected.data.status === 'missing' && worldCalendar && <Edit label="Disappearance date" spoiler="missingDate"><WorldDateInput label="Disappearance date" emptyLabel="Set disappearance date" calendar={worldCalendar} value={selected.data.missingDate} onChange={missingDate => patchData({ missingDate })} /></Edit>}
-          <MultiRelation label="Habitat" spoiler="foundIn" hint="Where it is found or dwells." disabled={unsaved} links={rel.foundIn || []} options={byType.Locations} onAdd={(id) => addMulti('found_in', id)} onRemove={removeLink} />
+          <MultiRelation label="Habitat" spoiler="foundIn" hint="Where it is found or dwells." options={byType.Locations} {...multiProps('found_in', rel.foundIn || [])} />
         </> });
       // A species has a shared look worth describing, but no single temperament: a
       // personality belongs to one being, never to every member of a kind.
@@ -2057,10 +2068,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           )}
           {scheduleExtras}
           </div>}
-          {!unsaved && <div className="grid grid-cols-1 gap-4 border-t border-border-subtle pt-5 sm:grid-cols-2">
-            <MultiRelation label="Where" spoiler="happenedAt" disabled={unsaved} links={rel.happenedAt || []} options={byType.Locations} onAdd={(id) => addMulti('happened_at', id)} onRemove={removeLink} />
-            <MultiRelation label="Who took part" spoiler="involved" disabled={unsaved} links={rel.involved || []} options={byType.Characters} onAdd={(id) => addMulti('involved', id)} onRemove={removeLink} />
-          </div>}
+          <div className="grid grid-cols-1 gap-4 border-t border-border-subtle pt-5 sm:grid-cols-2">
+            <MultiRelation label="Where" spoiler="happenedAt" options={byType.Locations} {...multiProps('happened_at', rel.happenedAt || [])} />
+            <MultiRelation label="Who took part" spoiler="involved" options={byType.Characters} {...multiProps('involved', rel.involved || [])} />
+          </div>
         </> });
       S.push({ key: 'desc', title: 'Description', icon: AlignLeft, scalar: true, spoiler: 'description', empty: !String(selected.data.description || '').trim(), view: <Prose text={selected.data.description} />, edit: <Edit><SpoilerTextArea aria-label="Description" rows={5} placeholder="What happened, and why it matters." value={selected.data.description || ''} onChange={(e) => patchData({ description: e.target.value })} /></Edit> });
       S.push({ key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit });
@@ -2094,13 +2105,13 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         {pastFactions.map(link => membershipRow(link, true))}
       </div>,
       edit: <>
-        <MultiRelation label="Factions" hint={hint} disabled={unsaved} links={rel.memberOf || []} options={byType.Factions} onAdd={(id) => addMulti('member_of', id)} onRemove={removeLink} />
+        <MultiRelation label="Factions" hint={hint} options={byType.Factions} {...multiProps('member_of', rel.memberOf || [])} />
         {pastFactions.length > 0 && <Edit label="Former factions" hint="Departures are recorded on the faction sheet."><div className="space-y-0.5">{pastFactions.map(link => membershipRow(link, true))}</div></Edit>}
       </> };
   };
 
-  const characterSections = () => {
-    if (charTab === 'data') return [
+  const characterSections = (tab = charTab) => {
+    if (tab === 'data') return [
       { key: 'identity', title: 'Identity', icon: IdCard, scalar: true,
         view: <>
           <FactGrid>
@@ -2113,7 +2124,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             {selected.data.status === 'deceased' && <ViewField label="Died" spoiler="deathDate" value={formatWorldDate(worldCalendar, selected.data.deathDate)} />}
             {selected.data.status === 'missing' && <ViewField label="Disappeared" spoiler="missingDate" value={formatWorldDate(worldCalendar, selected.data.missingDate)} />}
             <ViewField label="Lives in" spoiler="livesIn" value={rel.livesIn?.entity ? <SpoilerCover field={`link:${rel.livesIn.linkId}`} compact><EntityChip entity={rel.livesIn.entity} onOpen={openEntityById} /></SpoilerCover> : null} />
-            <ViewField label="Works at" spoiler="worksAt" value={(rel.worksAt || []).length ? <ChipList onOpen={openEntityById} links={rel.worksAt} /> : null} />
+            <ViewField label="Works at" spoiler="worksAt" value={(rel.worksAt || []).length ? <ChipList onOpen={openEntityById} links={rel.worksAt} labelName="Job" /> : null} />
           </FactGrid>
         </>,
         edit: <>
@@ -2144,7 +2155,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       { key: 'personality', title: 'Personality', icon: Drama, scalar: true, spoiler: 'personality', empty: !String(selected.data.personality || '').trim(), view: <Prose text={selected.data.personality} />, edit: <Edit><SpoilerTextArea aria-label="Personality" rows={5} placeholder="Temperament, habits, values, and contradictions." value={selected.data.personality || ''} onChange={(e) => patchData({ personality: e.target.value })} /></Edit> },
       { key: 'lore', title: 'Lore', icon: ScrollText, scalar: true, spoiler: 'lore', empty: loreEmpty, view: loreView, edit: loreEdit },
     ];
-    if (charTab === 'inventory') return [
+    if (tab === 'inventory') return [
       { key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
     ];
     return [
@@ -2156,8 +2167,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
 
   // Faction sheet mirrors the Character one: Data holds what a faction is, the
   // connections tab holds who it is made of and how it stands with the world.
-  const factionSections = () => {
-    if (charTab !== 'connections') return sectionsFor('Factions');
+  const factionSections = (tab = charTab) => {
+    if (tab !== 'connections') return sectionsFor('Factions');
     const leaderId = rel.leader?.entity?.id;
     const founders = [...(rel.members || []), ...(rel.formerMembers || [])].filter(link => link.metadata?.founder);
     // A roster is not only people: a bonded mount, a familiar or a dragon at the head of a
@@ -2180,19 +2191,19 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <ViewField full label="Area of operation" spoiler="area" value={<ChipList onOpen={openEntityById} links={rel.operatesIn} empty="No territory set." />} />
         </FactGrid>,
         edit: <>
-          <SingleRelation label="Leader (optional)" spoiler="leader" hint="Who heads this faction. They join the roster automatically, with an editable rank." disabled={unsaved} current={leaderId} options={candidates} onSet={setFactionLeader} />
+          <SingleRelation label="Leader (optional)" spoiler="leader" hint="Who heads this faction. They join the roster automatically, with an editable rank." options={candidates} {...(unsaved ? singleProps('led_by') : { current: leaderId, onSet: setFactionLeader })} />
           {worldCalendar && <Edit label="Founded" spoiler="founded" hint="When this faction came into being."><WorldDateInput label="Founded" emptyLabel="Set founding date" calendar={worldCalendar} value={selected.data.foundedDate} onChange={foundedDate => patchData({ foundedDate })} /></Edit>}
-          <Edit label="Founded by" spoiler="foundedBy" hint="Mark a founder with the star on their row in Members or Former members.">
+          {!unsaved && <Edit label="Founded by" spoiler="foundedBy" hint="Mark a founder with the star on their row in Members or Former members.">
             {founders.length
               ? <div className="flex flex-wrap gap-1.5">{founders.map(link => <EntityChip key={link.linkId} entity={link.entity} onOpen={openEntityById} />)}</div>
               : <span className="caption">Nobody marked yet.</span>}
-          </Edit>
-          <MultiRelation label="Area of operation" spoiler="area" hint="Locations this faction works out of." disabled={unsaved} links={rel.operatesIn || []} options={byType.Locations} onAdd={(id) => addMulti('operates_in', id)} onRemove={removeLink} />
+          </Edit>}
+          <MultiRelation label="Area of operation" spoiler="area" hint="Locations this faction works out of." options={byType.Locations} {...multiProps('operates_in', rel.operatesIn || [])} />
         </> },
-      { key: 'members', title: 'Members', icon: Users, scalar: false, spoiler: 'members', count: rel.members?.length || null, emptyVerb: 'Add', empty: !(rel.members || []).length,
+      { key: 'members', title: 'Members', icon: Users, scalar: false, spoiler: 'members', count: rel.members?.length || null, emptyVerb: 'Add', empty: !(rel.members || []).length, emptyNote: 'No members yet',
         view: roster(false),
         edit: unsaved ? null : roster(true) },
-      { key: 'formerMembers', title: 'Former members', icon: UserMinus, scalar: false, spoiler: 'formerMembers', empty: !(rel.formerMembers || []).length, derived: !(rel.formerMembers || []).length,
+      { key: 'formerMembers', title: 'Former members', icon: UserMinus, scalar: false, spoiler: 'formerMembers', empty: !(rel.formerMembers || []).length, emptyNote: 'Edit Members to mark someone as moved on', derived: !(rel.formerMembers || []).length,
         view: <MemberList links={rel.formerMembers} calendar={worldCalendar} kind="former" onOpen={openEntityById} empty="Nobody has left yet." />,
         edit: <div>
           <p className="caption mb-2">They keep what they already knew. From here on, whatever the faction shares with all members no longer reaches them.</p>
@@ -2215,15 +2226,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
         {withTies && <ViewField label="Tied to" empty="Tied to no place." value={tied.length ? <ChipList onOpen={openEntityById} links={tied} /> : null} />}
       </div>,
       edit: <>
-        <MultiRelation label="Local knowledge" spoiler="localTo" hint={`Regions and Areas where this ${noun} knows what everyone there knows.`} disabled={unsaved} links={localTo} options={sharingLocations} onAdd={(id) => addMulti('local_to', id)} onRemove={removeLink} />
-        {withTies && <MultiRelation label="Tied to" hint={`Other places that matter to this ${noun}: where they were born, a place they guard, a haunt.`} disabled={unsaved} links={tied} options={byType.Locations} onAdd={(id) => addMulti('connected_to', id)} onRemove={removeLink} />}
+        <MultiRelation label="Local knowledge" spoiler="localTo" hint={`Regions and Areas where this ${noun} knows what everyone there knows.`} options={sharingLocations} {...multiProps('local_to', localTo)} />
+        {withTies && <MultiRelation label="Tied to" hint={`Other places that matter to this ${noun}: where they were born, a place they guard, a haunt.`} options={byType.Locations} {...multiProps('connected_to', tied)} />}
       </>,
     };
   };
 
-  const individualCreatureSections = () => {
-    if (charTab === 'inventory') return [{ key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
-    if (charTab === 'connections') return [
+  const individualCreatureSections = (tab = charTab) => {
+    if (tab === 'inventory') return [{ key: 'inv', raw: <WorldbuildInventory workspaceId={workspaceId} subject={selected} links={rel.inventory || []} options={byType.Items} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> }];
+    if (tab === 'connections') return [
       membershipSection('Groups this being belongs to. A pack, a cult, or the household that keeps it.'),
       placesSection('being', false),
       { key: 'rels', raw: <WorldbuildRelationships workspaceId={workspaceId} subject={selected} links={rel.relationships || []} options={[...byType.Characters, ...individualCreatures]} api={electronAPI} showToast={showToast} onChanged={() => loadRelations(selected)} /> },
@@ -2258,10 +2269,15 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       .map(section => ({ ...section, title: sectionSetting(section.key)?.label || section.title }))
       .sort((left, right) => (positions.get(left.key) ?? 999) - (positions.get(right.key) ?? 999));
   };
+  // A new sheet has no tabs, so it also carries the connections that can be set before it exists.
+  const connectionsBuilder = selected?.type === 'Characters' ? characterSections : isIndividualCreature ? individualCreatureSections : isFaction ? factionSections : null;
+  const createConnections = isNew && connectionsBuilder
+    ? connectionsBuilder('connections').filter(s => !s.raw && s.edit && s.key !== 'members' && s.key !== 'formerMembers')
+    : [];
   const sections = selected
     ? (charTab === 'knowledge' && hasKnowledgeTab) || (charTab === 'occurrences' && hasOccurrencesTab)
       ? []
-      : customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : isFaction ? factionSections() : sectionsFor(selected.type))
+      : [...customizeSections(selected.type === 'Characters' ? characterSections() : isIndividualCreature ? individualCreatureSections() : isFaction ? factionSections() : sectionsFor(selected.type)), ...createConnections]
     : [];
   const m = selected ? concreteEntityMeta(selected) : null;
   const hasLifeStatus = selected?.type === 'Characters' || isIndividualCreature;
@@ -2873,7 +2889,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <span aria-current="page" className="min-w-0 truncate px-2 text-text-subtle">{isNew ? `New ${typeMeta(selected.type).label.toLowerCase()}` : selected.canonicalName}</span>
           </nav>
           <div className="mx-auto max-w-3xl space-y-4 px-6 pb-6 pt-3" inert={sheetBeingRead || undefined} aria-busy={sheetBeingRead || undefined}>
-            <SpoilerScope key={selected.id || 'new'} data={selected.data} onToggle={toggleHidden}>
+            <StoryDayContext.Provider value={worldClock}><SpoilerScope key={selected.id || 'new'} data={selected.data} onToggle={toggleHidden}>
             {sheetBeingRead && (
               <SheetNotice busy icon={Loader2} title="The AI is reading this sheet" text="It opens for editing again as soon as this entity is done. Other sheets stay editable." />
             )}
@@ -2904,11 +2920,11 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
             <div data-tour={isNew ? 'wb-new-head' : 'wb-sheet-head'} data-entity-id={isNew ? undefined : selected.id} data-entity-name={isNew ? undefined : selected.canonicalName} data-entity-type={selected.type}
               className={`ws-card @container relative overflow-hidden rounded-surface border ${m.ring} bg-surface-panel-muted/60 backdrop-blur-md`}>
               <div aria-hidden="true" className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${m.wash} via-transparent to-transparent`} />
-              <div className="relative p-5">
               {coverImage && <>
                 <FramedImage image={coverImage} className="pointer-events-none absolute inset-0" />
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-r from-surface-panel via-surface-panel/80 to-surface-panel/20" />
               </>}
+              <div className="relative p-5">
               <div className="relative">
               {(isNew || editingSection === '__header__') ? (
                 <div className="flex items-start gap-4">
@@ -3159,7 +3175,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
                 )}
               </div>
             )}
-            </SpoilerScope>
+            </SpoilerScope></StoryDayContext.Provider>
           </div>
           </>
         )}
@@ -3215,26 +3231,36 @@ function KnownMembers({ links, portraits, onOpen }) {
   );
 }
 
-function ChipList({ links, empty, onOpen }) {
+function ChipList({ links, empty, onOpen, labelName }) {
   if (!links || links.length === 0) return <p className="text-sm text-text-disabled">{empty}</p>;
   return <div className="flex flex-wrap gap-1.5">{links.map(l => (
-    <SpoilerCover key={l.linkId} field={`link:${l.linkId}`} compact><EntityChip entity={l.entity} label={l.label} onOpen={onOpen} /></SpoilerCover>
+    <SpoilerCover key={l.linkId} field={`link:${l.linkId}`} compact><EntityChip entity={l.entity} label={l.label} labelName={labelName} onOpen={onOpen} /></SpoilerCover>
   ))}</div>;
 }
 
 // Every name on a sheet is the same reference: a neutral chip whose dot carries the type.
-function EntityChip({ entity, label, onOpen }) {
+// `labelName` names what the link label is (a job, a rank), so the tooltip keeps it apart from the name.
+function EntityChip({ entity, label, labelName, onOpen }) {
   const body = <>
     <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${meta(entity.type).dot || 'bg-text-subtle'}`} />
-    {entity.canonicalName}{label && <span className="text-text-subtle">· {label}</span>}
+    <span className="min-w-0 truncate">{entity.canonicalName}</span>
+    {label && <span className="min-w-0 max-w-[10rem] truncate text-text-subtle">· {label}</span>}
   </>;
-  const cls = 'inline-flex min-h-6 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 py-0.5 text-xs font-medium text-text-secondary';
+  const cls = 'inline-flex min-h-6 max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-hover/35 px-2.5 py-0.5 text-left text-xs font-medium text-text-secondary';
   if (!onOpen) return <span className={cls}>{body}</span>;
+  const tip = (
+    <span className="block">
+      <span className="block text-text-primary">Open {entity.canonicalName}</span>
+      {label && <span className="mt-0.5 block text-text-muted">{labelName ? `${labelName}: ${label}` : label}</span>}
+    </span>
+  );
   return (
-    <button type="button" onClick={() => onOpen(entity.id)} data-tooltip={`Open ${entity.canonicalName}`}
-      className={`${cls} transition-colors duration-200 ease-standard hover:border-border-strong hover:bg-surface-hover/70 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer`}>
-      {body}
-    </button>
+    <Tooltip content={tip}>
+      <button type="button" onClick={() => onOpen(entity.id)}
+        className={`${cls} transition-colors duration-200 ease-standard hover:border-border-strong hover:bg-surface-hover/70 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer`}>
+        {body}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -3243,13 +3269,13 @@ function EntityChip({ entity, label, onOpen }) {
 function createRelationHint(type) {
   return {
     System: '',
-    Locations: 'Its parent place and its owner can be set once the location exists.',
-    Items: 'Creator, owner, and where it is found or sold can be set once the item exists.',
+    Locations: 'Places inside it open once the location exists.',
+    Items: 'Who carries it can be set once the item exists.',
     Races: 'Members are filled in automatically as you assign this race to characters.',
-    Factions: 'Leader, territory, members, and knowledge open once the faction exists.',
-    Characters: 'Race, inventory, connections, and knowledge open once the character exists.',
-    Creatures: 'Habitat, inventory, connections, and knowledge open once it exists.',
-    Events: 'Places, participants, and recorded occurrences open once the event exists.',
+    Factions: 'Members and knowledge open once the faction exists.',
+    Characters: 'Inventory, relationships, and knowledge open once the character exists.',
+    Creatures: 'Inventory, relationships, and knowledge open once it exists.',
+    Events: 'Recorded occurrences open once the event exists.',
   }[type] || 'Connections can be added once this entity exists.';
 }
 

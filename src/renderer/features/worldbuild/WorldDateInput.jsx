@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { createContext, useContext } from 'react';
 import { CalendarDays, X } from 'lucide-react';
 import SelectMenu from '../../components/ui/SelectMenu';
 import NumberInput from '../../components/ui/NumberInput';
@@ -30,6 +30,10 @@ export function formatWorldDate(calendar, value, includeTime = false) {
   return `${date} | ${String(value.hour ?? 0).padStart(2, '0')}:${String(value.minute ?? 0).padStart(2, '0')}`;
 }
 
+// The story day of the open world. An empty date starts there instead of on the first day
+// of the calendar, since most dates people add sit near the story.
+export const StoryDayContext = createContext(null);
+
 // The one date control in the app. While empty it shows a button, not fields filled with a
 // default nobody chose.
 export default function WorldDateInput({
@@ -45,14 +49,19 @@ export default function WorldDateInput({
   className = '',
   ...rest
 }) {
+  const storyDay = useContext(StoryDayContext);
   if (!calendar) return null;
+  const storySeed = storyDay?.year ? {
+    eraId: storyDay.eraId, year: storyDay.year, month: storyDay.month, day: storyDay.day,
+    ...(includeTime ? { hour: storyDay.hour ?? 8, minute: storyDay.minute ?? 0 } : {})
+  } : null;
   const defaultDate = {
     eraId: calendar.defaultEraId,
     year: 1,
     month: 1,
     day: 1,
     ...(includeTime ? { hour: 8, minute: 0 } : {}),
-    ...(seedValue || {})
+    ...(seedValue || storySeed || {})
   };
   const date = value || defaultDate;
   const set = patch => onChange({ ...date, ...patch });
