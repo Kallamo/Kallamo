@@ -765,7 +765,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .chat-message-deferred[data-find-current] { content-visibility: visible; }
 
 /* Find in chat paints over the rendered text without touching it. */
-::highlight(chat-find) { background-color: color-mix(in srgb, var(--theme-tint) 22%, transparent); }
+::highlight(chat-find) {
+  background-color: color-mix(in srgb, var(--theme-tint) 78%, transparent);
+  color: var(--theme-surface-canvas);
+}
 ::highlight(chat-find-current) {
   background-color: color-mix(in srgb, var(--app-accent) 55%, transparent);
   color: var(--theme-text-primary);
