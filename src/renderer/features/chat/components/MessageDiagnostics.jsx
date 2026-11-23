@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ChevronDown, ChevronRight, ChevronUp, Copy } from 'lucide-react';
 import Tooltip from '../../../components/ui/Tooltip';
 import { describeSpanCheck, formatFrameTime } from '../frame-format';
@@ -13,7 +13,8 @@ import {
   formatAssembly,
   formatPlannerDecisions,
   formatRetrievalDiagnostics,
-  prettyJsonText
+  prettyJsonText,
+  safeParseDebugNotice
 } from '../diagnostic-format';
 
 const fmt = value => (Number(value) || 0).toLocaleString();
@@ -34,31 +35,52 @@ export function tokenTotals(debug) {
   return { input, output, total: usage ? usage.total.total : input + output };
 }
 
-/** The readouts this reply has, in tab order; `copy` is the full text report. */
+/** The readouts this reply has, in tab order; `copy` builds the full text report when asked,
+ * since every reply in the thread lists its readouts on each render. */
 export function diagnosticsFor(debug, flags) {
   const totals = tokenTotals(debug);
   return [
-    flags.tokenDebug && totals && { key: 'tokens', label: 'Tokens', copy: null },
+    flags.tokenDebug && totals && { key: 'tokens', label: 'Tokens', copy: () => null },
     flags.agenticDebug && (debug?.agentic || debug?.agenticRagResponse || debug?.agenticTrajectory)
-      && { key: 'agentic', label: 'Agentic trace', copy: formatAgenticTrace(debug) },
+      && { key: 'agentic', label: 'Agentic trace', copy: () => formatAgenticTrace(debug) },
     flags.ragDebug && (debug?.retrieval || debug?.standardRagContextGathered)
-      && { key: 'retrieval', label: 'Retrieval', copy: formatRetrievalDiagnostics(debug) },
+      && { key: 'retrieval', label: 'Retrieval', copy: () => formatRetrievalDiagnostics(debug) },
     flags.ragDebug && debug?.generation?.requests?.length
-      && { key: 'request', label: 'Request', copy: formatGenerationRequests(debug.generation.requests) },
+      && { key: 'request', label: 'Request', copy: () => formatGenerationRequests(debug.generation.requests) },
     flags.ragDebug && (debug?.legacyText || debug?.workflowStatus)
-      && { key: 'workflow', label: 'Workflow', copy: debug.legacyText || debug.workflowStatus },
+      && { key: 'workflow', label: 'Workflow', copy: () => debug.legacyText || debug.workflowStatus },
     flags.narrativeStateDebug && debug?.generation?.scenePlan
-      && { key: 'scene-plan', label: 'Scene plan', copy: debug.generation.scenePlan },
+      && { key: 'scene-plan', label: 'Scene plan', copy: () => debug.generation.scenePlan },
     flags.narrativeStateDebug && debug?.narrativeState
-      && { key: 'narrative', label: 'Narrative state', copy: diagnosticText(debug.narrativeState) },
+      && { key: 'narrative', label: 'Narrative state', copy: () => diagnosticText(debug.narrativeState) },
     flags.narrativeStateDebug && debug?.narrativeCalls?.length
-      && { key: 'model-calls', label: 'Model calls', copy: formatNarrativeCalls(debug.narrativeCalls) }
+      && { key: 'model-calls', label: 'Model calls', copy: () => formatNarrativeCalls(debug.narrativeCalls) }
   ].filter(Boolean);
 }
 
+// Pages carry a light copy of large diagnostics; the whole record is read when the panel opens.
+function useFullDiagnostics(open, debug, messageId) {
+  const [full, setFull] = useState(null);
+  useEffect(() => {
+    if (!open || !debug?.omitted || !messageId || full?.id === messageId) return undefined;
+    let live = true;
+    window.electronAPI?.getMessageDebugNotice?.(messageId).then(result => {
+      if (!live || !result?.success) return;
+      const parsed = safeParseDebugNotice(result.debugNotice);
+      if (parsed) setFull({ id: messageId, debug: parsed });
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [open, debug, messageId, full]);
+  if (!debug?.omitted) return debug;
+  return full?.id === messageId ? full.debug : null;
+}
+
 /** The report lies inside the reply, so it scrolls with its button and never pushes the thread down. */
-export function MessageDiagnostics({ debug, items, names, onCopy, copiedKey }) {
+export function MessageDiagnostics({ debug: shownDebug, messageId, flags, items: shownItems, names, onCopy, copiedKey }) {
   const [open, setOpen] = useState(false);
+  const fullDebug = useFullDiagnostics(open, shownDebug, messageId);
+  const debug = fullDebug || shownDebug;
+  const items = useMemo(() => (fullDebug && fullDebug !== shownDebug ? diagnosticsFor(fullDebug, flags) : shownItems), [fullDebug, shownDebug, flags, shownItems]);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
   const totals = tokenTotals(debug);
@@ -101,7 +123,9 @@ export function MessageDiagnostics({ debug, items, names, onCopy, copiedKey }) {
       </button>
       {open && (
         <div role="dialog" aria-label="Reply diagnostics" className="absolute right-0 top-full -mt-px">
-          <DiagnosticsPanel debug={debug} items={items} names={names} onCopy={onCopy} copiedKey={copiedKey} />
+          {fullDebug
+            ? <DiagnosticsPanel debug={debug} items={items} names={names} onCopy={onCopy} copiedKey={copiedKey} />
+            : <div className="w-[min(42rem,calc(100vw-2rem))] rounded-card rounded-tr-none border border-border-default bg-surface-panel px-3.5 py-6 text-center text-xs text-text-muted shadow-overlay">Loading diagnostics…</div>}
         </div>
       )}
     </div>
@@ -917,7 +941,7 @@ function DiagnosticsPanel({ debug, items, names, onCopy, copiedKey }) {
   const [activeKey, setActiveKey] = useState(items[0]?.key);
   const active = items.find(item => item.key === activeKey) || items[0];
   if (!active) return null;
-  const copyText = active.key === 'tokens' ? null : active.copy;
+  const copyText = active.key === 'tokens' ? null : active.copy();
   return (
     <div className="w-[min(42rem,calc(100vw-2rem))] rounded-card rounded-tr-none border border-border-default bg-surface-panel p-3.5 shadow-overlay select-none">
       <div className="mb-3.5 flex items-center gap-2">
@@ -950,14 +974,14 @@ function DiagnosticsPanel({ debug, items, names, onCopy, copiedKey }) {
       </div>
       <div className="max-h-[28rem] overflow-y-auto pr-1 custom-scrollbar">
         {active.key === 'tokens' && <TokensView debug={debug} />}
-        {active.key === 'agentic' && <AgenticView debug={debug} copy={active.copy} />}
-        {active.key === 'retrieval' && <RetrievalView debug={debug} copy={active.copy} />}
-        {active.key === 'scene-plan' && <ScenePlanView plan={active.copy} />}
-        {active.key === 'narrative' && <NarrativeView debug={debug} names={names} copy={active.copy} />}
+        {active.key === 'agentic' && <AgenticView debug={debug} copy={copyText} />}
+        {active.key === 'retrieval' && <RetrievalView debug={debug} copy={copyText} />}
+        {active.key === 'scene-plan' && <ScenePlanView plan={copyText} />}
+        {active.key === 'narrative' && <NarrativeView debug={debug} names={names} copy={copyText} />}
         {active.key === 'model-calls' && <ModelCallsView calls={debug.narrativeCalls} />}
         {active.key === 'request' && <RequestView requests={debug.generation.requests} />}
         {active.key === 'workflow' && (
-          <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-text-muted select-text">{active.copy}</div>
+          <div className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-text-muted select-text">{copyText}</div>
         )}
       </div>
     </div>

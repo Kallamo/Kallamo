@@ -381,6 +381,8 @@ function AiMessage({ message, isEditing, isLastAi, isTyping, frame, view, action
         {diagnostics.length > 0 && (
           <MessageDiagnostics
             debug={debugObj}
+            messageId={message.id}
+            flags={flags}
             items={diagnostics}
             names={view.entityNames}
             copiedKey={copiedKey}
