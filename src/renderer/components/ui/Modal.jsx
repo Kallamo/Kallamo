@@ -56,6 +56,8 @@ export default function Modal({
       const dialog = dialogRef.current;
       // React's autoFocus leaves no attribute behind, so keep a field that already took focus.
       if (dialog?.contains(document.activeElement) && document.activeElement !== dialog) return;
+      // A popover opened by the dialog's content lives outside it in the DOM; its field keeps focus.
+      if (document.activeElement?.closest?.('[data-floating-layer]')) return;
       const target = dialog?.querySelector('[autofocus], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])');
       (target || dialog)?.focus();
     });

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import Popover from './Popover';
 
@@ -50,11 +50,12 @@ export default function SearchableSelect({
     setActiveIndex(current => Math.min(current, Math.max(0, filtered.length - 1)));
   }, [filtered.length]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [isOpen]);
+  // The search field exists only while open, so it takes focus as it mounts. A popover opened
+  // with the component renders a frame later, after a surrounding modal placed its own focus.
+  const attachInput = useCallback((node) => {
+    inputRef.current = node;
+    node?.focus({ preventScroll: true });
+  }, []);
 
   const close = () => {
     setIsOpen(false);
@@ -107,7 +108,7 @@ export default function SearchableSelect({
           <div className="flex min-h-10 w-full items-center gap-2 rounded-control border border-accent/70 bg-surface-input px-3 ring-3 ring-accent/15">
             <Search className="h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
             <input
-              ref={inputRef}
+              ref={attachInput}
               value={query}
               onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
               onKeyDown={handleMenuKeyDown}
@@ -181,7 +182,7 @@ export default function SearchableSelect({
         {!searchInTrigger && <div className="relative border-b border-border-subtle bg-surface-panel-muted">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-subtle" />
           <input
-            ref={inputRef}
+            ref={attachInput}
             value={query}
             onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
             onKeyDown={handleMenuKeyDown}
