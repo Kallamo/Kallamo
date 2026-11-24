@@ -363,6 +363,11 @@ textarea, input, [contenteditable], .ProseMirror {
   --color-border-default: var(--theme-border-well);
 }
 
+/* Borders are translucent: a box filled by an image keeps its own background inside the border,
+   where the image and its veils end, so nothing lighter shows through at the edge. */
+.bg-cover,
+:has(img.absolute.object-cover)[class*="rounded"] { background-clip: padding-box; }
+
 @utility reveal {
   display: grid;
   grid-template-rows: 0fr;

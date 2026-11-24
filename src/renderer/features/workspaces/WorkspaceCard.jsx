@@ -26,16 +26,21 @@ export default function WorkspaceCard({ chat, profiles, onOpen, onTogglePin, onE
         type="button"
         onClick={() => onOpen(chat)}
         className={`absolute inset-0 overflow-hidden rounded-2xl border surface-card text-left shadow-[0_10px_24px_color-mix(in_srgb,var(--theme-shade)_25%,transparent)] transition-[transform,box-shadow,border-color] duration-300
-          hover:-translate-y-[3px] hover:border-border-strong hover:shadow-[0_22px_40px_color-mix(in_srgb,var(--theme-shade)_45%,transparent)]
-          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${menuOpen ? 'border-border-strong' : 'border-border-subtle'}`}
+          hover:-translate-y-[3px] hover:border-border-default hover:shadow-[0_22px_40px_color-mix(in_srgb,var(--theme-shade)_45%,transparent)]
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${menuOpen ? 'border-border-default' : 'border-border-subtle'}`}
       >
-        {image ? (
-          <img key={image.src} src={image.src} alt="" onError={stepDown} style={{ objectPosition: image.position }} className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.06]" />
-        ) : (
-          <ContourCover title={chat.title} />
-        )}
-        {hasScene && <span aria-hidden="true" className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-scrim/70 to-transparent" />}
-        <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-scrim/96 from-[8%] via-scrim/55 via-[48%] to-transparent to-[78%]" />
+        {/* The art and its veils zoom as one layer under one clip, so the art's edge never shows past a veil. */}
+        <span aria-hidden="true" className="absolute inset-0 overflow-hidden rounded-[calc(1rem-1px)] [transform:translateZ(0)]">
+          <span className="absolute inset-0 transition-transform duration-500 group-hover:scale-[1.06]">
+            {image ? (
+              <img key={image.src} src={image.src} alt="" onError={stepDown} style={{ objectPosition: image.position }} className="absolute inset-0 h-full w-full object-cover" />
+            ) : (
+              <ContourCover title={chat.title} />
+            )}
+            {hasScene && <span className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-scrim/70 to-transparent" />}
+            <span className="absolute inset-0 bg-gradient-to-t from-scrim/96 from-[8%] via-scrim/55 via-[48%] to-transparent to-[78%]" />
+          </span>
+        </span>
         {(pinned || roleplay) && (
           <span className="absolute inset-x-3 top-3 flex flex-col items-start gap-2">
             <span className="flex gap-1.5">
