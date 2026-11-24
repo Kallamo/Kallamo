@@ -33,4 +33,4 @@ Please describe the tests you ran to verify your changes. Provide instructions s
 
 ## Contributor License Agreement (CLA)
 
-- [ ] **I have read and agree to the terms of the [Kallamo Contributor License Agreement (CLA)](https://github.com/Kallamo/Kallamo/blob/main/CLA.md).**
+On your first pull request, the CLA check asks you to sign the [Kallamo Contributor License Agreement](https://github.com/Kallamo/.github/blob/main/CLA.md). Signing once covers every Kallamo project.
