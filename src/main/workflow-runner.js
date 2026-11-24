@@ -22,6 +22,7 @@ const { refreshLocalContextWindows } = require('./features/llm/local-context-win
 const { createEntityLabels } = require('./features/ai-engine/entity-labels');
 const { deferredNarrativeState, findPendingNarrativeTurn, replacedReplyIds } = require('./features/chat/narrative-turns');
 const { purgeDeadTurns } = require('./features/narrative/turn-ownership');
+const { isUnchangedEquipment } = require('./features/narrative/inventory-equipment');
 const { parseEntityUpdateObject } = require('./features/worldbuild/entity-update-json');
 const {
     addCacheUsage,
@@ -3545,6 +3546,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                     playerEntityId: roleplaySettings.playerEntityId
                 }
             );
+            if (isUnchangedEquipment(normalizedPatch, currentInventoryState)) continue;
             const change = roleplay.proposeInventoryChange({
                 id: `${provenanceId}:inventory:${index}`,
                 workspaceId,
