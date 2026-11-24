@@ -9,9 +9,13 @@ const RELEASE_2_0_0 = {
         'After every reply, the Narrative State updates the scene, the time, what everyone carries, their resources and their relationships. Bigger changes, like a secret coming out, wait for your approval.',
         'Characters can grow with levels, attributes and skills that use your own rank names.',
         'Who is in the conversation follows the story, and paying, buying or trading moves coins and items between inventories, in whatever language you play.',
+        'Conditions your world defines come and go with the story, characters recover while they sleep or rest, and growth is weighed when a scene ends.',
+        'Each workspace keeps a Chat and a Roleplay conversation side by side.',
       ],
       'Who knows what': [
         'Each character knows only what they saw, were told or remember, so a secret stays out of a scene until someone in it finds out.',
+        'Memories fade as story time passes and return when recalled, and characters remember the earlier scenes they witnessed.',
+        'Before each reply, Kallamo plans what the turn needs from the story and your world, within a set budget.',
         'The Knowledge tab lets you decide what a character knows, believes and remembers about anyone or anything in your world.',
         'Factions share what they know with their members, and regions and towns with the people who live there.',
       ],
@@ -44,6 +48,7 @@ const RELEASE_2_0_0 = {
       'Workspaces open without the conversation jumping, switching between areas is faster, and long conversations stay responsive.',
       'Update entities runs in the background with progress, Stop and a list of failures to retry.',
       'Speech in replies can have its own color, in Settings > Appearance.',
+      'Side panels can be resized and the Roleplay panel rearranged, and Ctrl+F finds anything in the chat.',
     ],
     Fixed: [
       'Newer Claude models no longer fail with an error about temperature.',
@@ -59,12 +64,12 @@ const RELEASE_2_0_0 = {
 export const GLOBAL_WHATS_NEW = {
   version: '2.0',
   title: 'A whole new app and a world that keeps up',
-  intro: "Kallamo 2.0 redesigns every screen and rebuilds much of what runs underneath. Kallamo's own knowledge engine now keeps your world in step with the story, and it is still growing, so tell us what it gets wrong. Everything you already made is right where you left it.",
+  intro: "Kallamo 2.0 redesigns every screen and rebuilds much of what runs underneath. Umwelt, Kallamo's epistemic state engine, now keeps your world in step with the story, and it is still growing, so tell us what it gets wrong. Everything you already made is right where you left it.",
   highlights: [
     {
       icon: 'Drama',
       title: 'Roleplay with a Narrative State',
-      text: "Play a character while Kallamo's own knowledge engine keeps the story straight: the scene, the time, inventories, resources and relationships update after every reply.",
+      text: "Play a character while Umwelt keeps the story straight: the scene, the time, inventories, resources and relationships update after every reply.",
     },
     {
       icon: 'Brain',
@@ -87,6 +92,61 @@ export const GLOBAL_WHATS_NEW = {
 
 // Notes for each later 2.x update, keyed by version, shown once after updating to it.
 export const PATCH_WHATS_NEW = {
+  '2.0.0-beta.3': {
+    title: 'Your story moves into Umwelt',
+    intro: 'Thanks for playing the second beta. The Narrative State now runs on Umwelt, our epistemic state engine: it tracks what happened and who knows it, on the story\'s own timeline. Your stories from earlier betas move into it on their own the first time you open this version.',
+    highlights: [
+      {
+        icon: 'Sparkles',
+        title: 'Powered by Umwelt',
+        text: 'Each story lives in its own Umwelt file. Every turn is kept as a draft that a regenerated reply replaces, nothing is erased, and each character reads only what the engine admits for them.',
+      },
+      {
+        icon: 'Brain',
+        title: 'Memories that fade and return',
+        text: 'What the story stops drawing on drifts out of reach as time passes and comes back when someone recalls it. Hearing it again makes knowledge firmer, and seeing proof makes it certain.',
+      },
+      {
+        icon: 'Globe2',
+        title: 'Each reply reads what the turn needs',
+        text: 'Before every reply, Kallamo plans what to look up: who and what the turn names, earlier scenes it calls back and what the characters know, all within a set budget.',
+      },
+      {
+        icon: 'Drama',
+        title: 'Conditions, sleep and growth',
+        text: 'Characters can be poisoned, exhausted or anything your world defines, recover while they sleep or rest, and gain XP and skills when a scene ends.',
+      },
+    ],
+    sections: {
+      Added: [
+        'Diagnostics show story checks for each turn: a secret told outside its circle, or a claim with nothing behind it.',
+        'Each workspace has a Chat and a Roleplay conversation, and messages can move between them.',
+        'Characters recall earlier scenes they witnessed, and a secret can be held, suspected, denied or lied about.',
+        'Choose what a scene may create on its own, for review, or not at all, for each kind of thing, factions included.',
+        'A sheet born in a scene is filled from that scene right away, so the next turn already knows it.',
+        'The narrator knows how the people present feel about someone who is away, and when they last saw them.',
+        'Characters have a gender, a home and a workplace with a job.',
+        'Ctrl+F finds anything in the whole chat history.',
+        'Side panels can be resized, and the Roleplay panel can sit on either side with its blocks rearranged.',
+        'The Library opens from the title bar, and the uninstaller can also remove your data if you ask it to.',
+      ],
+      Changed: [
+        'Update entities no longer proposes memories, knowledge and relationships twice, and fills empty fields in a pass of their own.',
+        'Changing a field type keeps the values and warns about any that would be lost.',
+        'Renaming an entity carries the new name into the story.',
+        'Long campaigns plan each turn several times faster, and long chats open quicker.',
+        'Portraits are framed at 3:4, and the roleplay rail shows level progress.',
+      ],
+      Fixed: [
+        'Local and OpenRouter models that think before answering have room to think and still reply.',
+        'An item already equipped is no longer equipped again every turn.',
+        'A vague line such as "not long" no longer moves the clock by a full hour.',
+        'A dropped connection says why, and story updates try again.',
+        'Tall dialogs scroll instead of cutting off their top, and pickers focus their search field.',
+        'Reasoning in <reasoning> tags stays out of history and search.',
+      ],
+    },
+  },
   '2.0.0-beta.2': {
     title: 'Bring any world into Kallamo',
     intro: 'Thanks for playing the first beta. This one brings any world you already have into Worldbuild in minutes, lets you start a story over in the same world, and gives events their hours.',

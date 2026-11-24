@@ -2,6 +2,75 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the change for the people using Kallamo. From 2.0.0, a major release brings a feature that changes what Kallamo is, a minor release adds features on top of it, and a patch release only fixes. Before 2.0.0, minor releases were named milestones and patch releases also refined.
 
+## [2.0.0-beta.3] - 2026-11-24
+
+The Narrative State now runs on Umwelt, the epistemic state engine by Kallamo. The reply reads what each turn needs, memories fade and return, and characters keep conditions, sleep and grow at the end of a scene.
+
+### Umwelt
+- **The Narrative State runs on Umwelt** (`@kallamo/umwelt` 0.2.0), the epistemic state engine that tracks what happened and who knows it. Facts, knowledge, beliefs, memories, relationships and who is aware of whom are now Umwelt records, each placed on the story's own timeline and held by the character, faction or place it belongs to.
+- **One story file per workspace**: each workspace keeps its story in its own `.umw` file. Every turn writes a draft, a regenerated reply replaces that draft, and reverting or deleting turns retires exactly what they wrote. History is never erased, only retired, so the story can be read as it stood at any point.
+- **Moving from earlier betas**: on the first start, the story of every existing workspace is replayed into its Umwelt file, skipping turns that were reverted or replaced, and the old story tables are removed. Backups and restores carry the story files, deleting a chat removes its file, and files left without a workspace are cleaned up.
+- **The engine decides what reaches a character**: the context of each character is built from what Umwelt admits for them: their own records and those of the factions and places they belong to. What it refuses is listed in the context diagnostics.
+- **Story checks**: each turn reports, without blocking, a secret passed outside its audience, a telling with no record behind it and why (the teller holds the opposite, cannot reach it or holds nothing), and whether canon agrees.
+- Characters, factions and places are searched in the story by words and by meaning, with vectors filled in the background so a long campaign never holds up a turn.
+
+### Added
+- **Chat and Roleplay conversations**: each workspace has a Chat and a Roleplay conversation, each with its own messages, summaries and archive settings. Roleplay workspaces open on the story, campaigns from earlier betas move to the Roleplay, and messages can be moved between the two. The Chat and the Writing Desk can read the Roleplay history with an adjustable share.
+- **Retrieval Planner**: before each reply, it decides what to look up: who and what the turn names, past moments it calls back, what the characters know and the documents it needs. The scene and what is at stake always enter, and the rest fits a token ceiling. Diagnostics show what each need cost.
+- **Memories fade and return**: memories the story has not drawn on drift out of reach as story time passes and come back when recalled. Being told makes knowledge firmer and seeing proof makes it certain. When a scene ends, what characters carry is tidied.
+- The narrator recalls earlier scenes a character witnessed, and finds what a character holds, their factions' and places' records, and Facts by words or by meaning with the local embedding model. A paid embedding API is never used for this.
+- The research planner can ask the story who knows something, how they learned it and what two characters know differently.
+- **Story pass**: knowledge, beliefs, memories, facts and relationships are recorded in a background pass after the scene pass, retried after a failure and shown in the Roleplay panel when it stalls. It can revise, end or settle an earlier record, and a holding can be a suspicion, a denial, a lie, an inference or a secret kept within a circle. Characters who heard each other become aware of each other, and witnesses of an event keep what they saw.
+- **What a scene may create**: characters, races, creatures, species, items, places, areas, regions and factions can each be Off, Review or Automatic. A faction needs a name of its own and the members or purpose the scene shows, and starts on Review. Review creates a provisional entity the story can refer to at once, and when the AI is unsure what kind of thing something is, the review card lets you pick.
+- A sheet the Narrative State creates is filled right away from the scene that created it, so the next turn already reads it. Diagnostics list what each new sheet got.
+- The reply reads about people the turn names who are not in the scene: how those present regard them, who could come in, when they were last seen and the last scene two people shared. Memories involving a named person are found when reading about them.
+- **Conditions**: a world has a Conditions catalog. A condition starts from the story, by hand or when a resource drops below a threshold, and ends after a duration, after sleep or rest, or when the story ends it. Active conditions show as chips in the roleplay rail and on the character sheet, and travel with the world export.
+- **Sleep and rest**: a resource can give back a set amount per hour of sleep and per hour of rest awake, applied from the story clock.
+- **Growth at scene end**: XP, attributes and skill ranks are weighed once when a scene ends, with a checkpoint in long scenes.
+- A resource can keep whole numbers or tenths. Time changes too small to show are kept for the next turn, so a slow drain still lands.
+- Characters have a gender, a Lives in place and Works at places or factions with a job. Items gain Furniture, Art and Vehicle categories and more steps of abundance.
+- Property is a Knowledge category for what a thing is made of, its condition or what examining it showed.
+- Beliefs read as aligned with or contradicting canon, a Knowledge statement can trace how it was learned, and the Knowledge tab shows what someone held by the end of a past day.
+- Writing Desk rewrites and analyses read the Facts and earlier scenes the passage is about.
+- **Find in chat**: Ctrl+F searches the whole chat history, loading older messages to reach a match.
+- A reply whose context was trimmed shows a Context trimmed tag that opens archiving.
+- **Panels**: every side panel can be resized from its inner edge, and a double-click restores its width. The Roleplay panel can sit on either side, and its blocks can be moved, collapsed or hidden. Settings can reset the layout.
+- After a regenerated or switched reply, the Roleplay panel offers to update the Narrative State from it.
+- The Library opens from the title bar over the workspace, and Back returns to it.
+- The uninstaller can also remove workspaces, profiles, settings and downloaded models. It is off by default, and an update never removes anything.
+- Exported worlds carry a package identity and version, and a world remembers which package it came from.
+- Template field defaults and a default race fill a new entity once, whether you or the story creates it, and an action writes a default into existing entries that leave the field empty.
+
+### Changed
+- Update entities runs a sheet pass and a story pass. Played turns the story already read only update the sheet, so memories, knowledge and relationships are no longer proposed twice. Empty fields get a pass of their own, place links name the most specific current place, and lore keeps only background. A menu action suggests taking story events out of existing lore.
+- Changing a field's type converts the stored values, and the editor first names the entries that would lose theirs. Adding a field no longer makes every passage be read again.
+- Turn triage sees each character's resources and conditions, and a turn that names one is always read for resource changes.
+- Locations without a size take one from what they contain and what holds them. A turn that only moved costs at most its journey's Time Cost Matrix category, unless the narration states the time.
+- Renaming an entity updates its name in the story and in the relationships that copied it.
+- The create screen sets every link a sheet can hold before it exists, including a faction's leader and territory and a character's factions and places.
+- Roleplay state and Skills on the character sheet start folded with a one-line summary, and remember whether they are open.
+- Portraits are framed at 3:4 and shown larger on the character sheet. The roleplay rail shows the player's level progress.
+- Typing in a Worldbuild sheet or a memory note no longer re-renders the lists around it. Planning a roleplay turn on a long campaign is several times faster, long chats open without reading large diagnostics, and long Worldbuild lists render only the rows on screen.
+- Cards, dialogs and fields have a consistent depth, with and without background art.
+- A connection with unsaved changes shows a Save and Reset bar before you leave Settings.
+
+### Fixed
+- A turn that names an item already equipped, or already put away, no longer records it as a new change.
+- Thinking models served locally or through OpenRouter, such as Qwen3, DeepSeek R1 and gpt-oss, get extra room for their reasoning on top of the output limit, so the thinking no longer uses up the answer.
+- A vague span such as not long no longer advances the clock by a full hour.
+- A dropped connection names its cause instead of fetch failed, and Narrative State calls retry it.
+- Reasoning in `<reasoning>` tags stays out of history, archive and search, like `<think>`.
+- The summary log shows only the reply text.
+- A character no longer learns their own plans, identity or abilities as knowledge about themselves. Only a secret they keep is held that way.
+- When a turn moves, an event that names the place it arrived at is recorded there, even while the move waits for approval.
+- Tall popovers open upward when they do not fit below, and looking back in the Knowledge tab lists the newest entries first.
+- Text carried between passages starts at a sentence or word, never in the middle of one.
+- Event times read 09:00 instead of 9:0.
+- New details show on each entity while Update entities runs.
+- Tall dialogs scroll instead of cutting off their top.
+- Entity pickers in dialogs put the cursor in their search field.
+- Find matches are readable, images no longer show past their rounded border, and the workspace title is shortened instead of wrapping.
+
 ## [2.0.0-beta.2] - 2026-11-04
 
 Any world brought into Worldbuild in one go, a new story in the same world, events with hours, and leaner Narrative State requests.
