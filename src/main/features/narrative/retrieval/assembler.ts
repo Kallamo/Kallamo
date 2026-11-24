@@ -4,7 +4,8 @@ import { createWorldbuildView, renderEntity, type EntityRow, type WorldbuildView
 import type { ContextItem, DraftItem, ItemTier } from './items';
 import { mergeNeeds, NameIndex, namedNeeds, parseBrief, type ContextMode, type Need, type NeedContext } from './needs';
 import { resolveNeeds, type Passage } from './resolvers';
-import { beliefsAtOdds, buildSceneCore, outOfReach, presentIds as scenePresentIds, secretsAtRisk, type SceneInput, type SceneStateSource } from './scene-core';
+import { beliefsAtOdds, buildSceneCore, involvedIds, outOfReach, presentIds as scenePresentIds, secretsAtRisk, type SceneInput, type SceneStateSource } from './scene-core';
+import { aboutEachOther, actorsAboutPresent, couldComeIn, reunions, towardNamed } from './offstage';
 import { StoryReads } from './story-reads';
 import { buildWorkspaceCore } from './workspace-core';
 import { loadSkillBook } from './skills';
@@ -224,6 +225,7 @@ export async function assembleContext(input: AssembleInput): Promise<AssembledCo
   const resolved = await resolveNeeds({
     db, mode, view, reads, presentIds: present, playerId: scene?.playerId ?? null, nowMinute,
     isRecent: eventId => recentEvents.has(eventId.split('@')[0]),
+    locationId: scene?.locationId ?? null,
     vectorOf: need => vectors.get(need.id) ?? null,
     searchDocuments: input.searchDocuments ?? (async () => []),
     searchArchive: input.searchArchive ?? (async () => []),
@@ -234,6 +236,24 @@ export async function assembleContext(input: AssembleInput): Promise<AssembledCo
   // What came up may name someone or something the context does not hold: the name brings a card.
   const inContext = new Set([...inScene, ...present, ...(scene?.locationId ? [scene.locationId] : []), ...(scene?.playerId ? [scene.playerId] : []), ...needs.flatMap(need => need.entityIds), ...core.flatMap(item => item.key.startsWith('entity:') ? [item.key.slice('entity:'.length)] : [])]);
   resolved.push(...followNamed(resolved, names, view, inContext));
+
+  // Who is not in the conversation but bears on it: those named, those who could come in, and the
+  // last time people meeting again were together. And what the people here hold about each other.
+  const isRecent = (eventId: string) => recentEvents.has(eventId.split('@')[0]);
+  const offstage: DraftItem[] = [];
+  if (scene && reads.exists) {
+    const involved = involvedIds(names, input.request, input.lastReply);
+    const nearby = [...new Set([...scene.possibleObserverIds, ...scene.nearbyIds])].filter(id => !present.includes(id));
+    const common = { view, reads, locationId: scene.locationId, present, playerId: scene.playerId, involved, nowMinute, isRecent };
+    const comeIn = couldComeIn({ ...common, nearby });
+    const listed = new Set(comeIn.map(item => item.key.slice('come-in:'.length)));
+    offstage.push(...comeIn, ...towardNamed({ ...common, exclude: new Set([...nearby.filter(id => involved.has(id)), ...listed]) }), ...reunions({ ...common, recentEventIds: recentEvents }), ...aboutEachOther(common));
+    // Who the turn has acting: the planner's "acts", or without one, who the request itself names.
+    const actors = input.brief
+      ? needs.filter(need => need.use === 'acts').flatMap(need => need.entityIds)
+      : names.mentions(input.request).map(match => match.entityId);
+    offstage.push(...actorsAboutPresent({ ...common, actors: [...new Set(actors)] }));
+  }
 
   const focusIds = new Set([...present, ...needs.flatMap(need => need.entityIds)]);
   const narratorNotes = scene && reads.exists
@@ -248,7 +268,7 @@ export async function assembleContext(input: AssembleInput): Promise<AssembledCo
       holders: [holder], group: 'Worldbuild Knowledge', priority: ROLE_PRIORITY.support, text: line.text
     })))
     : [];
-  let items = merge([...core, ...resolved, ...narratorNotes, ...knownItems]).map(item => measured(item, input.estimateTokens));
+  let items = merge([...core, ...offstage, ...resolved, ...narratorNotes, ...knownItems]).map(item => measured(item, input.estimateTokens));
 
   // The engine confirms each character's records are theirs to hold at this point of the story.
   const admitRejected: AssemblyReport['admitRejected'] = [];

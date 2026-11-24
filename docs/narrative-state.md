@@ -327,6 +327,29 @@ context stays under, never a size to reach. The code is in `features/narrative/r
   those the turn or the last reply names; the rest get a card), cards for objects and the location,
   their resources, skills and inventory, how the people present stand toward each other, and the
   scene memory. Outside roleplay: the world date. Systems marked always in context go to the rules.
+- **Who is not in the conversation.** Three parts of the core, built without any model, for the
+  people who bear on the scene without being in it:
+  - *Between them* also covers someone nearby the turn speaks to or about.
+  - *Toward who is named*: for up to three people the turn or the last reply names who are not here,
+    each present person's regard toward them and theirs back, by title and value only.
+  - *Could come in*: who is nearby, who the place keeps (it is `led_by` them, or they are
+    `connected_to`, `located_in` or `operates_in` it) and who took part in the latest scenes here
+    and has not been seen elsewhere since. Four get a card (with every custom field, so a voice field
+    goes too), when they were last seen and doing what, and their two strongest ties with those
+    here; anyone else nearby is a mention. The dead are never offered.
+  - *Last together*: for people who share at most two of the scenes the history still shows, the
+    last scene they shared before those and each one's latest memory involving the other (under
+    their name in what they know), six pairs at most. The player's own memories stay the user's.
+  - *About each other*: what each person here holds about the others here, statements and the
+    memories the other is part of, two per pair and twelve at most, ordered by how much they weigh
+    on the holder, the pairs the turn names first. They stand under the holder's name in what they
+    know. What the history still shows is left out, and so is what the player holds.
+    Someone the turn has acting who is not in the scene yet (the planner's `acts`, or without a
+    planner whoever the request names) brings what they hold about those here the same way, eight
+    lines at most: the scene state follows the story a turn late.
+  "Last seen" is the latest scene someone took part in up to now on the story clock, read back in
+  widening spans (a day, a week, a month, four months); a thread played ahead of the clock is not
+  the past yet. A need of kind `place` about a person answers where they were last seen.
 - **Needs.** The names written in the request are the floor: each one is a need without any model.
   The Retrieval Planner then reads the turn once (a short JSON brief, no tools) and lists what else
   it needs: a rule used, an item in hand, a memory called back, what someone knows, who knows
@@ -354,6 +377,10 @@ context stays under, never a size to reach. The code is in `features/narrative/r
   grants name no participants.
 - **Flashbacks.** A recalled memory's story-axis position dates the knowledge read after it, so a
   character's knowledge is read as it stood then.
+- **Memories about someone.** A memory is held about its holder, with the others in it as related
+  or as participants, so a read about the other person never finds it. What someone holds about a
+  named person or thing adds, beside up to three statements each, the two memories involving it
+  that weigh most across everyone here.
 - **Perspective.** What each character holds is written under their name; a statement everyone present
   holds, once. A member reads what their faction or area holds when the card's audience lets them.
   The Worldbuild Knowledge cards add which fields of a sheet each person knows. Secrets someone would

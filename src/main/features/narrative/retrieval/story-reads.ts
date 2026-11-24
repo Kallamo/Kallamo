@@ -18,6 +18,17 @@ export type { StoryEvent, StoryRecord, HoldingItem };
 export interface StoryAdmission { id: string; recordId?: string; eventId?: string; priority: number; cost: number; classification?: string }
 
 /**
+ * A statement the interpreter once wrote of someone learning about themselves (their own plan, what
+ * they are): what they live is their memory, and the gate no longer lets these through. A secret they
+ * keep, and what the author wrote in a Knowledge card, stay.
+ */
+function discoversSelf(record: StoryRecord): boolean {
+  if (record.kind !== 'holding' || record.claim.subject !== record.holder || kindOf(record) === 'memory') return false;
+  const origin = (record.provenance as { origin?: { kind?: string } } | undefined)?.origin?.kind;
+  return origin === 'model' && metadataOf(record).category !== 'secret';
+}
+
+/**
  * The story reads retrieval makes, each one a filtered engine query on the timeline the turn reads.
  * Results are kept for the life of one context, since the story does not change while it is built.
  */
@@ -72,13 +83,35 @@ export class StoryReads {
   holdingsAbout(holder: string, about: string, at?: { axis?: string; tick?: number }): HoldingItem[] {
     if (!this.exists || !this.known([holder, about]).has(holder)) return [];
     return this.once(`holdings\u0000${holder}\u0000${about}\u0000${JSON.stringify(at ?? null)}`, () =>
-      this.reader.holdings(holder, { timelineId: this.timelineId(), about, includeWithheld: false, ...(at ? { at } : {}) }));
+      this.reader.holdings(holder, { timelineId: this.timelineId(), about, includeWithheld: false, ...(at ? { at } : {}) }).filter(item => !discoversSelf(item.record)));
   }
 
   /** Everything a holder holds, withheld records included. */
   holdings(holder: string): HoldingItem[] {
     if (!this.exists || !this.known([holder]).has(holder)) return [];
-    return this.once(`all-holdings\u0000${holder}`, () => this.reader.holdings(holder, { timelineId: this.timelineId(), includeWithheld: true }));
+    return this.once(`all-holdings\u0000${holder}`, () => this.reader.holdings(holder, { timelineId: this.timelineId(), includeWithheld: true }).filter(item => !discoversSelf(item.record)));
+  }
+
+  /**
+   * A holder's memories in which someone else takes part. A memory is held about the holder
+   * themselves, so a read about the other never finds it: the other is in it as someone related or
+   * someone who was there.
+   */
+  memoriesInvolving(holder: string, about: string): HoldingItem[] {
+    if (holder === about) return [];
+    return this.holdings(holder).filter(item => {
+      const record = item.record;
+      if (record.kind !== 'holding' || kindOf(record) !== 'memory' || record.claim.subject === about) return false;
+      const related = metadataOf(record).relatedEntityIds;
+      return (Array.isArray(related) && related.includes(about)) || this.participantsOf(record.eventId).has(about);
+    });
+  }
+
+  /** What a holder holds about someone: statements about them and memories they are part of. */
+  heldAbout(holder: string, about: string): HoldingItem[] {
+    const byId = new Map<string, HoldingItem>();
+    for (const item of [...this.holdingsAbout(holder, about), ...this.memoriesInvolving(holder, about)]) byId.set(item.record.id, item);
+    return [...byId.values()];
   }
 
   factsAbout(subject: string): StoryRecord[] {
@@ -133,6 +166,10 @@ export class StoryReads {
   /** The events someone took part in, in story order; a span narrows it on the story axis. */
   eventsOf(participant: string, options: { eventTypes?: readonly string[]; from?: number; to?: number; limit?: number } = {}): StoryEvent[] {
     if (!this.exists || !this.known([participant]).has(participant)) return [];
+    return this.once(`events\u0000${participant}\u0000${JSON.stringify(options)}`, () => this.readEvents(participant, options));
+  }
+
+  private readEvents(participant: string, options: { eventTypes?: readonly string[]; from?: number; to?: number; limit?: number }): StoryEvent[] {
     const range = options.from !== undefined || options.to !== undefined ? { range: { ...(options.from !== undefined ? { from: options.from } : {}), ...(options.to !== undefined ? { to: options.to } : {}) } } : {};
     const page = this.world.call<EventPageResult>('timeline', {
       timelineId: this.timelineId(),

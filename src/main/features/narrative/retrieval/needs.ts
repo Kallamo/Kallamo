@@ -246,8 +246,8 @@ const KIND_GUIDE: Record<NeedKind, string> = {
   recall: 'a past moment the text calls back ("that day", "like in the tournament"); give "holder" (who remembers) and a short "query"',
   knowledge: 'what one character knows about someone or something; "holder" and "entities"',
   'who-knows': 'who knows a fact or secret; "query" says which',
-  relationship: 'how two characters stand toward each other; both in "entities"',
-  place: 'what happened before at, or exists in, a place; the place in "entities"',
+  relationship: 'how two characters stand toward each other when neither is in the scene; both in "entities"',
+  place: 'what happened before at, or exists in, a place, the place in "entities"; or where someone not in the scene is now, that person in "entities"',
   document: 'a passage of a knowledge base document; its name in "document" when given, and a short "query"',
   chronology: 'what happened to someone, or between two dates, in order; "entities", and "from"/"to" as written dates ("12 Harvestmoon 1024") when the text gives them',
   research: 'a question that needs several steps or a comparison across sources',
@@ -275,7 +275,7 @@ export function briefPrompt(input: BriefInput): { systemPrompt: string; prompt: 
   const systemPrompt = [
     'You read one turn of a story and list what the writer needs to look up to continue it well. You never write the story.',
     input.mode === 'roleplay'
-      ? 'The scene (place, time, everyone present with their sheets, what they perceived) is already in the writer\'s context. List only what lies outside it, or a rule or item the turn uses.'
+      ? 'The scene (place, time, everyone present with their sheets, what they perceived) is already in the writer\'s context, and so are how the people here stand toward each other and toward anyone the turn names, what the people here hold about each other, who could come in, and the last time people meeting again were together. List only what lies outside it, or a rule or item the turn uses.'
       : 'The writer works as the author, with what the user pinned. List what the request depends on.',
     'Kinds of need:',
     ...kinds.map(kind => `- ${kind}: ${KIND_GUIDE[kind]}`),

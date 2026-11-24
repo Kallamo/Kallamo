@@ -3,10 +3,14 @@ import { firstSentence, renderEntity, type EntityTier, type WorldbuildView } fro
 import { renderFact, renderHolding, storyDateLabel, type DraftItem } from './items';
 import type { ContextMode, Need } from './needs';
 import { isRetired, ROLE_PRIORITY, salience } from './salience';
-import type { HoldingItem, StoryReads, StoryRecord } from './story-reads';
+import { relevanceOf } from '../memory-relevance';
+import { metadataOf, type HoldingItem, type StoryReads, type StoryRecord } from './story-reads';
 import { STORY_AXIS } from '../umwelt/narrative-world';
 import { storyRecordText } from '../umwelt/story-text';
 import { sharedKnowledgeCards } from '../../worldbuild/knowledge-groups';
+import { lastSeen, regardLine, sightingLine } from './offstage';
+
+const PEOPLE = new Set(['Characters', 'Creatures']);
 
 /** A skill as the rule it is, with who in the scene has it and at what rank. */
 export interface SkillRule { name: string; description: string; parentName?: string; holders: Array<{ name: string; rank: string }> }
@@ -31,12 +35,14 @@ export interface ResolverContext {
   skill(id: string): SkillRule | null;
   /** An event from a reply still in the chat history: the narrator already reads it there. */
   isRecent?(eventId: string): boolean;
+  /** Where the scene is, so a sighting there reads as "here". */
+  locationId?: string | null;
 }
 
 // Within one holder's own records the candidates are already theirs, and a first-person memory scores
 // lower against a short query than canon does: the relative floor may reach further down.
 const HOLDER_FLOOR = 0.84;
-const LIMITS = { facts: 3, knowledgePerHolder: 3, knowledge: 6, recall: 4, recallScenes: 2, unaware: 6, place: 3, chronology: 20, documents: 4, open: 3 };
+const LIMITS = { facts: 3, knowledgePerHolder: 3, sharedMemories: 2, knowledge: 6, recall: 4, recallScenes: 2, unaware: 6, place: 3, chronology: 20, documents: 4, open: 3 };
 const HOLDER_TYPES = new Set(['Characters', 'Creatures', 'Factions']);
 
 function entityDraft(ctx: ResolverContext, need: Need, id: string, tier: EntityTier): DraftItem | null {
@@ -132,11 +138,14 @@ function knownByPresent(ctx: ResolverContext, need: Need, entityId: string): Dra
   const entity = ctx.view.entity(entityId);
   const label = need.label || entity?.canonicalName || 'this';
   const unaware: string[] = [];
+  const memories: Array<{ holder: string; item: HoldingItem }> = [];
   for (const holder of ctx.presentIds) {
     if (holder === entityId) continue;
     // A member reads what their faction or area holds about a target its card lets them share.
     const groups = sharedKnowledgeCards(ctx.db, ctx.view.workspaceId, [holder], [entityId]).map(card => card.groupId);
     const own = rankHoldings(ctx, ctx.reads.holdingsAbout(holder, entityId)).slice(0, LIMITS.knowledgePerHolder);
+    const lived = ctx.reads.memoriesInvolving(holder, entityId);
+    memories.push(...lived.map(item => ({ holder, item })));
     const shared = [...new Set(groups)].flatMap(group => rankHoldings(ctx, ctx.reads.holdingsAbout(group, entityId)).slice(0, LIMITS.knowledgePerHolder)
       .map(item => ({ item, via: ctx.view.nameOf(group) })));
     const held = [...own.map(item => ({ item, via: undefined as string | undefined })), ...shared];
@@ -144,7 +153,21 @@ function knownByPresent(ctx: ResolverContext, need: Need, entityId: string): Dra
       const draft = holdingDraft(ctx, need, item, `About ${entity?.canonicalName ?? label}`, 'support');
       if (draft) items.push({ ...draft, key: `${draft.key}:${holder}`, holders: [holder], ...(via ? { text: `${draft.text} (as one of ${via})` } : {}) });
     }
-    if (!held.length && entity && HOLDER_TYPES.has(entity.type) && !ctx.reads.isAware(holder, entityId)) unaware.push(ctx.view.nameOf(holder) ?? 'Someone');
+    if (!held.length && !lived.length && entity && HOLDER_TYPES.has(entity.type) && !ctx.reads.isAware(holder, entityId)) unaware.push(ctx.view.nameOf(holder) ?? 'Someone');
+  }
+  // Memories they lived with it come beside what they know of it, never in its place: the few that
+  // weigh most on whoever holds them, across everyone here.
+  const weightOf = (item: HoldingItem) => relevanceOf(metadataOf(item.record).salience, metadataOf(item.record).category);
+  const lived = memories
+    .filter(({ item }) => item.record.kind === 'holding' && !isRetired(item.record))
+    .sort((left, right) => weightOf(right.item) - weightOf(left.item) || right.item.record.position.tick - left.item.record.position.tick);
+  let shown = 0;
+  for (const { holder, item } of lived) {
+    if (shown >= LIMITS.sharedMemories) break;
+    const draft = holdingDraft(ctx, need, item, `About ${entity?.canonicalName ?? label}`, 'support');
+    if (!draft) continue;
+    items.push({ ...draft, key: `${draft.key}:${holder}`, holders: [holder] });
+    shown += 1;
   }
   if (unaware.length && entity) {
     items.push({
@@ -222,7 +245,11 @@ async function resolveOne(ctx: ResolverContext, need: Need, recallMinutes: Map<s
       const minute = recallMinutes.get(holder);
       const at = minute !== undefined ? { axis: STORY_AXIS, tick: minute } : undefined;
       const held = need.entityIds.length
-        ? need.entityIds.flatMap(id => rankHoldings(ctx, ctx.reads.holdingsAbout(holder, id, at)))
+        // A flashback reads what was held then; memories are read as they stand now, so only without one.
+        ? need.entityIds.flatMap(id => [
+          ...rankHoldings(ctx, ctx.reads.holdingsAbout(holder, id, at)),
+          ...(at ? [] : rankHoldings(ctx, ctx.reads.memoriesInvolving(holder, id)).slice(0, LIMITS.sharedMemories))
+        ])
         : ctx.reads.search({ holderId: holder, text: query, vector, limit: LIMITS.knowledge, relative: true, floor: HOLDER_FLOOR }).flatMap(hit => hit.record?.kind === 'holding' ? [{ record: hit.record, acquisition: hit.record.acquisition } as HoldingItem] : []);
       for (const item of held.slice(0, LIMITS.knowledge)) push(holdingDraft(ctx, need, item, need.label || 'Known', 'direct'));
       break;
@@ -257,7 +284,7 @@ async function resolveOne(ctx: ResolverContext, need: Need, recallMinutes: Map<s
           items.push({
             key: `record:${record.id}`, section: 'turn', needIds: [need.id], tier: 'line', recordId: record.id, holders: [holder],
             group: need.label || 'Relationship', priority: ROLE_PRIORITY.direct,
-            text: `${ctx.view.nameOf(holder) ?? 'Someone'} → ${ctx.view.nameOf(target) ?? 'someone'}: ${record.dimension} ${Number(record.value)}`
+            text: regardLine(ctx.view, record, true)
           });
         }
       }
@@ -266,6 +293,17 @@ async function resolveOne(ctx: ResolverContext, need: Need, recallMinutes: Map<s
     case 'place': {
       const placeId = need.entityIds[0];
       if (!placeId) break;
+      // Where someone is: the last scene they took part in.
+      if (PEOPLE.has(ctx.view.entity(placeId)?.type ?? '')) {
+        push(entityDraft(ctx, need, placeId, 'card'));
+        const sighting = lastSeen(ctx.reads, placeId, ctx.nowMinute);
+        items.push({
+          key: `seen:${placeId}`, section: 'turn', needIds: [need.id], tier: 'line', holders: [], group: need.label || 'Where they are',
+          priority: ROLE_PRIORITY.direct,
+          text: sighting ? `${ctx.view.nameOf(placeId)}: ${sightingLine(ctx.view, sighting, ctx.nowMinute, ctx.locationId ?? null)}` : `${ctx.view.nameOf(placeId)} has not been seen in a scene lately.`
+        });
+        break;
+      }
       push(entityDraft(ctx, need, placeId, 'card'));
       const rows = ctx.reads.sceneIdsAt(placeId, LIMITS.place);
       const details = ctx.db.prepare('SELECT event_id AS id, description FROM narrative_events WHERE workspace_id = ? AND event_id = ?');

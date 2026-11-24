@@ -2,7 +2,7 @@ import type { WorldbuildView } from './entity-tiers';
 import type { ContextItem, ContextSection } from './items';
 import type { ContextMode, Need } from './needs';
 
-const CORE_GROUPS = ['Scene', 'Workspace', 'Player', 'Present', 'Location', 'Objects here', 'State', 'Between them', 'Nearby', 'Character scene memory'];
+const CORE_GROUPS = ['Scene', 'Workspace', 'Player', 'Present', 'Location', 'Objects here', 'State', 'Between them', 'Toward who is named', 'Last together', 'Nearby', 'Could come in', 'Character scene memory'];
 
 function grouped(items: ContextItem[], order: string[] = []): string {
   const groups = new Map<string, string[]>();

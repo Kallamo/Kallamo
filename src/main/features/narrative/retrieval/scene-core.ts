@@ -6,6 +6,9 @@ import type { StoryReads } from './story-reads';
 import { propositionIdentity } from '../../../../narrative/narrative-taxonomy';
 import { objectOf } from '../umwelt/story-reader';
 import { metadataOf } from './story-reads';
+import { regardLine } from './offstage';
+
+const PEOPLE = new Set(['Characters', 'Creatures']);
 
 export interface SceneInput {
   locationId: string | null;
@@ -33,6 +36,14 @@ export interface SceneStateSource {
 
 // Up to this many people in the scene, everyone gets a full sheet; beyond it only who the turn involves.
 const SMALL_SCENE = 4;
+
+/** Who and what the turn speaks to or about: named in the request or at the end of the last reply. */
+export function involvedIds(names: NameIndex, request: string, lastReply: string): Set<string> {
+  return new Set([
+    ...names.mentions(request).map(match => match.entityId),
+    ...names.mentions(lastReply.slice(-4000)).map(match => match.entityId)
+  ]);
+}
 
 export function presentIds(scene: SceneInput): string[] {
   return [...new Set([scene.playerId, ...scene.participantIds].filter((id): id is string => Boolean(id)))];
@@ -72,10 +83,7 @@ export function buildSceneCore(input: {
   const { view, reads, source, scene } = input;
   const workspaceId = view.workspaceId;
   const present = presentIds(scene);
-  const involved = new Set([
-    ...input.names.mentions(input.request).map(match => match.entityId),
-    ...input.names.mentions(input.lastReply.slice(-4000)).map(match => match.entityId)
-  ]);
+  const involved = involvedIds(input.names, input.request, input.lastReply);
   const small = present.length <= SMALL_SCENE;
   const items: DraftItem[] = [];
   const push = (item: DraftItem | null) => { if (item) items.push(item); };
@@ -104,7 +112,12 @@ export function buildSceneCore(input: {
     push(entityItem(view, id, tier, id === scene.playerId ? 'Player' : 'Present'));
   }
   // Someone nearby the turn speaks to or about is in the conversation, whatever the cast list says.
-  for (const id of nearby) push(entityItem(view, id, involved.has(id) ? 'sheet' : 'mention', involved.has(id) ? 'Present' : 'Nearby'));
+  // People nearby otherwise stand under Could come in, with what they were doing and their ties.
+  for (const id of nearby) {
+    if (involved.has(id)) push(entityItem(view, id, 'sheet', 'Present'));
+    else if (!PEOPLE.has(view.entity(id)?.type ?? '')) push(entityItem(view, id, 'mention', 'Nearby'));
+  }
+  const talking = [...present, ...nearby.filter(id => involved.has(id))];
   for (const id of scene.objectIds) push(entityItem(view, id, involved.has(id) ? 'sheet' : 'card', 'Objects here'));
   if (scene.locationId) push(entityItem(view, scene.locationId, 'card', 'Location'));
   for (const id of source.alwaysInContextIds(workspaceId)) {
@@ -115,15 +128,12 @@ export function buildSceneCore(input: {
   const state = source.stateLines(workspaceId, present);
   if (state.length) items.push({ key: 'scene:state', section: 'core', needIds: [], tier: 'line', holders: [], group: 'State', priority: ROLE_PRIORITY.core, text: state.join('\n') });
 
-  // How the people present stand toward each other, one line per directed pair.
+  // How the people in the conversation stand toward each other, one line per directed pair.
   const relations: string[] = [];
-  for (const holder of present) {
+  for (const holder of talking) {
     for (const record of reads.dispositions(holder)) {
-      if (record.kind !== 'disposition' || !present.includes(record.target) || record.target === holder) continue;
-      const meta = metadataOf(record);
-      const title = String(meta.title ?? '').trim();
-      const description = String(meta.description ?? '').trim();
-      relations.push(`${view.nameOf(holder) ?? 'Someone'} → ${view.nameOf(record.target) ?? 'someone'} (${record.dimension} ${Number(record.value)})${title ? `: ${title}` : ''}${description ? `. ${description}` : ''}`);
+      if (record.kind !== 'disposition' || !talking.includes(record.target) || record.target === holder) continue;
+      relations.push(regardLine(view, record, true));
     }
   }
   if (relations.length) items.push({ key: 'scene:relations', section: 'core', needIds: [], tier: 'line', holders: [], group: 'Between them', priority: ROLE_PRIORITY.core, text: relations.join('\n') });
