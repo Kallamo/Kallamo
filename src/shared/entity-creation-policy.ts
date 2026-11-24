@@ -7,7 +7,8 @@ export type CreationKind =
   | 'characters' | 'races'
   | 'creatures' | 'species'
   | 'named' | 'ordinary'
-  | 'spots' | 'places' | 'areas' | 'regions';
+  | 'spots' | 'places' | 'areas' | 'regions'
+  | 'factions';
 
 export type EntityCreationPolicy = Record<CreationKind, CreationMode>;
 
@@ -21,7 +22,9 @@ export const DEFAULT_ENTITY_CREATION_POLICY: Readonly<EntityCreationPolicy> = Ob
   spots: 'auto',
   places: 'auto',
   areas: 'review',
-  regions: 'review'
+  regions: 'review',
+  // A group is canon of weight: one passing remark should not found a guild.
+  factions: 'review'
 });
 
 export const CREATION_KINDS = Object.keys(DEFAULT_ENTITY_CREATION_POLICY) as CreationKind[];
@@ -53,6 +56,7 @@ export function creationKindOf(subject: CreationSubject): CreationKind | null {
   switch (subject.type) {
     case 'Characters': return 'characters';
     case 'Races': return 'races';
+    case 'Factions': return 'factions';
     case 'Creatures': return subject.scope === 'group' ? 'species' : 'creatures';
     case 'Items': return subject.itemNature === 'type' ? 'ordinary' : 'named';
     case 'Locations':

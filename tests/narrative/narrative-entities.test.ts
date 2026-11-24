@@ -222,6 +222,17 @@ describe('Narrative entity identity', () => {
       expect(ordinary).toMatchObject({ status: 'rejected', entityId: null });
     });
 
+    test('a new faction waits for review by default, and is created on its own when allowed', () => {
+      const faction = (overrides: Record<string, unknown> = {}) => entityProposal({ referenceId: 'new:ravens', name: 'The Ravens', type: 'Factions', ...overrides } as never);
+      const pending = system.resolveOrPropose('workspace-one', 'message-one', faction());
+      const allowed = system.resolveOrPropose('workspace-one', 'message-two', faction({ referenceId: 'new:wardens', name: 'The Wardens' }), { policy: { ...DEFAULT_ENTITY_CREATION_POLICY, factions: 'auto' } });
+
+      expect(pending).toMatchObject({ status: 'pending', createdEntity: true });
+      expect(statusOf(pending.entityId)).toBe('proposed');
+      expect(allowed.status).toBe('applied');
+      expect(statusOf(allowed.entityId)).toBe('confirmed');
+    });
+
     test('a kind in review enters the story at once as provisional, and approval confirms it', () => {
       const policy = { ...DEFAULT_ENTITY_CREATION_POLICY, named: 'review' as const };
       const change = system.resolveOrPropose('workspace-one', 'message-one', item({}), { policy });

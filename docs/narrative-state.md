@@ -129,17 +129,17 @@ manifest close to a megabyte.
 
 ## New things in a scene
 
-A person, creature, race, place or unique item that appears in a scene, or is made, forged, copied,
+A person, creature, race, faction, place or unique item that appears in a scene, or is made, forged, copied,
 split off or transformed into something new, is proposed in the scene pass. Without an entity of its
 own, what the story learns about it is pinned to the nearest existing one: the facts about a replica
 end up on the original.
 
 - **What may be created is the workspace's call**, per kind, in Configuration (Narrative State,
   What the AI may create): characters, races, specific creatures, species groups, named items,
-  ordinary items, spots, places, areas and regions, each Off, Review or Automatic
+  ordinary items, spots, places, areas, regions and factions, each Off, Review or Automatic
   (`src/shared/entity-creation-policy.ts`). The defaults let a scene make its own people, creatures,
-  named items, rooms and places, ask about species, areas and regions, and leave races and ordinary
-  items alone. Review everything turns every Automatic kind into Review; Manual creates nothing.
+  named items, rooms and places, ask about species, areas, regions and factions, and leave races and
+  ordinary items alone. A faction needs a name of its own and members or a purpose the scene shows. Review everything turns every Automatic kind into Review; Manual creates nothing.
 - **Review is provisional, not absent.** A proposal waiting for review is created at once as a
   proposed entity, so the story pass of the same turn, the scene and the inventory can refer to it.
   Approving confirms it; rejecting removes it and retires what the story said about it.

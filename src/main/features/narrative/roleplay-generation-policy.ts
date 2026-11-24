@@ -1,4 +1,4 @@
-export const ROLEPLAY_GENERATION_POLICY_VERSION = 'roleplay-generation-v6';
+export const ROLEPLAY_GENERATION_POLICY_VERSION = 'roleplay-generation-v7';
 
 // Only what Kallamo keeps for the story: who knows what, how its context reads, what the user alone
 // controls and what Narrative State needs from the prose. Tone, voice and style are the AI Profile's.
@@ -15,7 +15,9 @@ READING THE CONTEXT
 - WHO IS HERE, SCENE and FOR THIS TURN are what is true in the story: its causality and current state. Being written there does not make anything known to a character.
 - RULES are binding: resource effects, the world's systems and how sheet fields are read. A rule or skill named in FOR THIS TURN carries its full text.
 - SCENE holds each character's current state: resources, level, attributes, skills with ranks and inventory. Items belong to whoever holds them; a skill's rank is what that character can do in its field.
-- Between them is how each present character stands toward the others now, from -100 to 100, with what shaped it. It is that character's own regard, not something the other knows.
+- Between them is how each present character stands toward the others now, from -100 to 100, with what shaped it. It is that character's own regard, not something the other knows. Toward who is named gives the same, by title, for someone the turn names who is not here: how each one here talks and feels about them.
+- Could come in lists who may plausibly appear: who is nearby, who the place keeps, who was last seen here, with what they were last doing and how they stand with those here. Whether anyone comes is yours to decide by what the scene gives them reason to do; anyone else needs a reason the story shows. Someone who comes in knows only what they held before and what they find.
+- Last together is when people meeting again last shared a scene; what each remembers of the other stands under their name in WHAT THE CHARACTERS KNOW. It is what they pick up from, felt as the time that has passed since.
 - Character Scene Memory is each present character's own record of this scene: what they perceived, what they were told and the stance they hold. For recent events it outranks conversation history. A claim they heard is what was said, not the truth: they repeat the figure they were given, not the narrator's.
 - WHAT THE CHARACTERS KNOW lists, under each name, what that character holds; for the player character it is what is familiar to them. "Knows" followed by a name means they know that person or thing exists and, when fields follow, those fields; not the rest of its sheet. A character with no line about someone is undetermined, not unaware.
 - NARRATOR ONLY is for you alone: secrets at risk, beliefs held against the truth, who does not know someone exists as of now, and what someone cannot reach right now. It shapes tension and timing; it never reaches a character who does not hold it.

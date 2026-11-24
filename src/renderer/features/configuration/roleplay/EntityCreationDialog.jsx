@@ -30,6 +30,9 @@ export const CREATION_GROUPS = [
     { kind: 'places', label: 'Places', noun: 'places', description: 'Somewhere a scene happens.' },
     { kind: 'areas', label: 'Areas', noun: 'areas', description: 'A district or stretch that holds many places.' },
     { kind: 'regions', label: 'Regions', noun: 'regions', description: 'Land wider than any scene.' }
+  ] },
+  { label: 'Factions', type: 'Factions', rows: [
+    { kind: 'factions', label: 'Factions', noun: 'factions', description: 'A guild, an order, a gang or a house with a name of its own.' }
   ] }
 ];
 
@@ -68,7 +71,7 @@ export default function EntityCreationDialog({ value, updatePolicy, onSave, onCl
       title="What the AI may create"
       icon={SquarePlus}
       iconClassName="text-text-secondary"
-      subtitle="New people, things and places that show up in a scene. Review puts them in the story at once and waits for you before they join Worldbuild."
+      subtitle="New people, groups, things and places that show up in a scene. Review puts them in the story at once and waits for you before they join Worldbuild."
       onClose={onClose}
       size="xl"
       className="max-h-[calc(100vh-2rem)]"

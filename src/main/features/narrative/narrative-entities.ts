@@ -9,7 +9,7 @@ import { retireStoryEntity } from './umwelt/story-entities';
 import { creationKindOf, DEFAULT_ENTITY_CREATION_POLICY, type EntityCreationPolicy } from '../../../shared/entity-creation-policy';
 
 
-export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items' | 'Races';
+export type NarrativeEntityType = 'Characters' | 'Creatures' | 'Locations' | 'Items' | 'Races' | 'Factions';
 export type NarrativeEntityDecision = 'new' | 'ambiguous' | 'conflicting';
 
 export interface NarrativeEntityProposal {
@@ -848,7 +848,7 @@ function normalizeProposal(input: NarrativeEntityProposal): NarrativeEntityPropo
   const referenceId = String(input.referenceId ?? '').trim();
   const name = String(input.name ?? '').trim();
   if (!referenceId || !name) throw new Error('Narrative entity reference and name are required.');
-  if (!['Characters', 'Creatures', 'Locations', 'Items', 'Races'].includes(input.type)) throw new Error('Narrative entity type is not supported.');
+  if (!['Characters', 'Creatures', 'Locations', 'Items', 'Races', 'Factions'].includes(input.type)) throw new Error('Narrative entity type is not supported.');
   const text = (value: unknown) => String(value ?? '').trim();
   return {
     referenceId,

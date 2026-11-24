@@ -8,7 +8,7 @@ describe('Roleplay generation policy', () => {
   test('leaves tone, style and how a reply ends to the AI Profile', () => {
     const policy = getRoleplayGenerationPolicy();
 
-    expect(ROLEPLAY_GENERATION_POLICY_VERSION).toBe('roleplay-generation-v6');
+    expect(ROLEPLAY_GENERATION_POLICY_VERSION).toBe('roleplay-generation-v7');
     expect(policy).toContain('Tone, style, voices, pacing, length, formatting and how a reply ends belong to the AI Profile');
     expect(policy).not.toMatch(/guess or ask/);
     expect(policy).not.toMatch(/Narrative Authority|Player Perspective|Scene Actor Perspective/);
