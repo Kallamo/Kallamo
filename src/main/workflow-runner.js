@@ -3623,6 +3623,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             speakerIds,
             startScene: compactNarrativeScene(scene, roleplaySettings.playerEntityId),
             endScene: compactNarrativeScene(finalScene, roleplaySettings.playerEntityId),
+            // A move awaiting approval still happened in the prose: what took place there is placed there.
+            ...(endLocationId && endLocationId !== scene?.locationId ? { movedToLocationId: endLocationId } : {}),
             introductions: narrativeIntroductions.map(({ proposal, entityId }) => ({
                 entityId,
                 proposal: {
@@ -3777,6 +3779,14 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
         ORDER BY type, canonicalName COLLATE NOCASE
     `).all(workspaceId);
     const allowedEntityIds = new Set(allEntities.map(entity => entity.id));
+    // When the turn moved, an event that names where it arrived happened there; the rest before leaving.
+    const movedTo = handoff.movedToLocationId ? allEntities.find(entity => entity.id === handoff.movedToLocationId) : null;
+    const movedToNames = movedTo ? [movedTo.canonicalName, ...parseJsonArray(movedTo.aliases)].map(foldPlaceName).filter(name => name.length >= 4) : [];
+    const eventLocationId = event => {
+        if (!movedTo) return scene?.locationId;
+        const text = foldPlaceName(event?.description || '');
+        return movedToNames.some(name => text.includes(name)) ? movedTo.id : scene?.locationId;
+    };
     const actorIds = new Set(allEntities.filter(entity => entity.type === 'Characters' || entity.type === 'Creatures').map(entity => entity.id));
     const factionIds = new Set(allEntities.filter(entity => entity.type === 'Factions').map(entity => entity.id));
     const entityLabels = loadEntityLabels(workspaceId);
@@ -4045,7 +4055,7 @@ async function recordNarrativeStory({ workspaceId, originId, modelCalls = null }
                     workspaceId,
                     originId: originId,
                     sceneId: scene?.id,
-                    locationId: scene?.locationId,
+                    locationId: eventLocationId(normalizedEvent),
                     interpreterId: role.executor.model,
                     event: normalizedEvent,
                     allowedEntityIds,
@@ -5538,6 +5548,19 @@ function resolveNarrativeEntityReferences(value, resolveReference) {
  * The journey's band from the location graph and the Time Cost Matrix. The floor always applies to a
  * move; the ceiling only when the triage says the move was all the turn did and no span was stated.
  */
+function parseJsonArray(value) {
+    try {
+        const parsed = JSON.parse(value || '[]');
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+        return [];
+    }
+}
+
+function foldPlaceName(value) {
+    return String(value || '').normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 function resolveTravelBounds({ startLocationId, endLocationId, locationLinks, locationSizes, timeMatrix, timeAdvance }) {
     const category = travelCategory(startLocationId, endLocationId, locationLinks || [], locationSizes);
     if (!category) return { category: null, floorMinutes: 0, ceilingMinutes: 0 };
