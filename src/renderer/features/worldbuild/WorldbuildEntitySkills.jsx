@@ -15,6 +15,8 @@ function OneLineChips({ chips, onMore }) {
   const wrapRef = useRef(null);
   const measureRef = useRef(null);
   const [fit, setFit] = useState(chips.length);
+  // Chips arrive as a new array on every parent render, so measure only when their text changes.
+  const signature = chips.map(chip => chip.signature ?? chip.key).join('|');
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
     const row = measureRef.current;
@@ -38,7 +40,7 @@ function OneLineChips({ chips, onMore }) {
     const observer = new ResizeObserver(measure);
     observer.observe(wrap);
     return () => observer.disconnect();
-  }, [chips]);
+  }, [signature]); // eslint-disable-line react-hooks/exhaustive-deps
   const hidden = chips.length - fit;
   const more = <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-tint/[0.08] px-2 text-[0.6875rem] font-semibold tabular-nums text-text-secondary">+{Math.max(hidden, chips.length)}</span>;
   return (
@@ -132,6 +134,7 @@ export default function WorldbuildEntitySkills({ workspaceId, entity, api, showT
     <div className="flex items-center gap-2 border-t border-border-subtle px-4 py-2.5">
       <OneLineChips onMore={() => toggleOpen(true)} chips={held.map(skill => ({
         key: skill.skillId,
+        signature: `${skill.skillId}:${skill.name}:${skill.rankName}`,
         node: (
           <SpoilerCover field={`skill:${skill.key}`} compact>
             <span className="inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border border-border-subtle bg-surface-canvas/50 px-2 text-[0.6875rem] font-semibold text-text-secondary">

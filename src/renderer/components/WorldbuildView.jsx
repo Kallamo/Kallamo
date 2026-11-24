@@ -1201,6 +1201,8 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const en = entities.find(e => e.id === view.entityId);
     if (en) openEntity(en, { tab: view.charTab });
   }, [registryFresh, navigationStateReady, surface, focusEntityId, selected, entities]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openEntityRef = useRef(null);
+  openEntityRef.current = openEntity;
   const openEntityById = (entityId, options) => {
     const target = entities.find(item => item.id === entityId);
     if (target) openEntity(target, options);
@@ -2349,7 +2351,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       && !hiddenFields(entity.data).includes('status') ? entity.data.status : null;
     return (
       <div className="relative">
-        <button type="button" onClick={() => manageMode ? toggleEntitySelection(entity.id) : openEntity(entity)} aria-pressed={manageMode ? picked : undefined}
+        <button type="button" onClick={() => manageMode ? toggleEntitySelection(entity.id) : openEntityRef.current(entity)} aria-pressed={manageMode ? picked : undefined}
           className={`group flex min-h-9 w-full items-center gap-2.5 rounded-control py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 pl-2 ${trailing || toggle ? 'pr-9' : 'pr-2'} ${active && !manageMode ? 'bg-accent/[0.13]' : picked ? 'bg-surface-hover/70' : 'hover:bg-surface-hover/60'}`}>
           {manageMode && <span aria-hidden="true" className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border-[1.5px] ${picked ? 'border-accent bg-accent text-on-accent' : 'border-border-strong'}`}>{picked && <Check className="h-3 w-3" strokeWidth={3} />}</span>}
           {portraits[entity.id]?.imagePath && canHavePortrait(entity)
@@ -2441,6 +2443,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       return [head, ...list.sort((a, b) => a.canonicalName.localeCompare(b.canonicalName)).map(renderEntityButton)];
     });
   };
+
+  // Typing in a sheet changes only the draft, so the list of several hundred rows is kept as is.
+  const sidebarRows = useMemo(renderSidebarEntities, [filtered, search, reviewFilter, filterType, collapsedGroups, locationTree, expandedLocations,
+    selected?.id, selectedIds, manageMode, portraits, enrichProgress?.entityId, enrichErrors, reviewCounts, nameReview]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const renderSection = (s) => {
     if (s.raw) return <React.Fragment key={s.key}>{s.raw}</React.Fragment>;
@@ -2796,7 +2802,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           <div className="wb-list-rows space-y-px pt-1">
             {loading ? <p className="caption py-8 text-center">Loading…</p>
               : filtered.length === 0 ? <p className="caption py-8 text-center">{search.trim() || filterType || reviewFilter ? 'Nothing matches.' : 'Nothing here yet.'}</p>
-              : renderSidebarEntities()}
+              : sidebarRows}
           </div>
         </div>
         <WorldUpdateStatus

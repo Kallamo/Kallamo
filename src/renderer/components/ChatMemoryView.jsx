@@ -1476,6 +1476,36 @@ export default function ChatMemoryView({
     </div>
   );
 
+  // The note editor and tag fields re-render this view on every key, so the rows are kept unless what they show changes.
+  const sectionList = React.useMemo(() => (
+            <div className="flex flex-col gap-3.5">
+              {visibleModes.map(mode => {
+                const items = filteredBlocks.filter(block => blockMode(block) === mode);
+                if (searchQuery && items.length === 0) return null;
+                const open = Boolean(searchQuery) || tourExamples || !collapsedSections[mode];
+                return (
+                  <div key={mode} data-tour={`mem-${mode}`}>
+                  <CollapsibleSection
+                    icon={MODES[mode].icon}
+                    title={MODES[mode].title}
+                    description={MODES[mode].description}
+                    toneClass={MODES[mode].toneClass}
+                    total={sectionTotal(mode)}
+                    count={mode === 'history' ? plural(modeCounts.history, 'summary', 'summaries') : plural(modeCounts[mode], 'item', 'items')}
+                    open={open}
+                    onToggle={(next) => toggleSection(mode, next)}
+                  >
+                    {items.length > 0
+                      ? (mode === 'history' && roleplayWorkspace && !tourExamples ? renderHistoryGroups(items) : items.map(renderRow))
+                      : <p className="border-t border-border-subtle px-4 py-3 text-sm text-text-subtle">{mode === 'history' ? 'Nothing archived yet.' : 'Nothing here yet.'}</p>}
+                  </CollapsibleSection>
+                  </div>
+                );
+              })}
+            </div>
+  ), [combinedBlocks, searchQuery, activeFilter, collapsedSections, tourExamples, roleplayWorkspace, selectedBlockIds, writingProfiles, chat, settings,
+    memoryTags, fileChunkTags, worldIndexStatuses, summaryTokens, tokenTotals, indexMenu]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className={`flex-1 flex flex-col md:flex-row h-full overflow-hidden select-none ${hasBackdrop ? 'has-backdrop' : ''}`}>
 
@@ -1618,33 +1648,7 @@ export default function ChatMemoryView({
               No memory matches "<span className="text-text-primary">{searchQuery}</span>".{' '}
               <button type="button" onClick={() => setSearchQuery('')} className="font-semibold text-text-secondary hover:text-text-primary cursor-pointer">Clear search</button>
             </div>
-          ) : (
-            <div className="flex flex-col gap-3.5">
-              {visibleModes.map(mode => {
-                const items = filteredBlocks.filter(block => blockMode(block) === mode);
-                if (searchQuery && items.length === 0) return null;
-                const open = Boolean(searchQuery) || tourExamples || !collapsedSections[mode];
-                return (
-                  <div key={mode} data-tour={`mem-${mode}`}>
-                  <CollapsibleSection
-                    icon={MODES[mode].icon}
-                    title={MODES[mode].title}
-                    description={MODES[mode].description}
-                    toneClass={MODES[mode].toneClass}
-                    total={sectionTotal(mode)}
-                    count={mode === 'history' ? plural(modeCounts.history, 'summary', 'summaries') : plural(modeCounts[mode], 'item', 'items')}
-                    open={open}
-                    onToggle={(next) => toggleSection(mode, next)}
-                  >
-                    {items.length > 0
-                      ? (mode === 'history' && roleplayWorkspace && !tourExamples ? renderHistoryGroups(items) : items.map(renderRow))
-                      : <p className="border-t border-border-subtle px-4 py-3 text-sm text-text-subtle">{mode === 'history' ? 'Nothing archived yet.' : 'Nothing here yet.'}</p>}
-                  </CollapsibleSection>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          ) : sectionList}
         </div>
 
         <SelectionBar
