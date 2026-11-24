@@ -39,6 +39,7 @@ import { perfEndAfterPaint, perfStart } from '../utils/perf';
 import { ChatFilesView, ChatMemoryView, ConfigurationView, WorldbuildView, WritingDeskView, workspaceTabViews } from '../views';
 import { forgetWorldbuildView } from '../features/worldbuild/worldbuildViewCache';
 import { openConfigurationSection } from '../features/configuration/open-section';
+import Tooltip from './ui/Tooltip';
 import { firstActiveProfile, moveBetweenThreads, rebuildFailureMessage } from '../features/chat/thread-move-actions';
 
 // Within this distance of the end the reader counts as following the conversation.
@@ -49,6 +50,26 @@ const ALWAYS_RENDERED_ROWS = 10;
 
 const bubbleAlpha = opacity => opacity / 100;
 const ROLEPLAY_KEPT_LINE = count => `Your roleplay is kept (${count} ${count === 1 ? 'message' : 'messages'}). It comes back when Roleplay mode is on.`;
+
+// The full name shows in a tooltip only when the header has cut it short.
+function WorkspaceTitle({ title }) {
+  const ref = useRef(null);
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => setClipped(node.scrollWidth > node.clientWidth);
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    measure();
+    return () => observer.disconnect();
+  }, [title]);
+  return (
+    <Tooltip content={title} side="bottom" disabled={!clipped}>
+      <h2 ref={ref} className="min-w-0 truncate text-sm font-semibold text-text-primary">{title}</h2>
+    </Tooltip>
+  );
+}
 
 export default function ChatWorkspaceView() {
   const {
@@ -1225,9 +1246,7 @@ export default function ChatWorkspaceView() {
             >
               <ArrowLeft className="w-4.5 h-4.5" />
             </button>
-            <h2 className="text-text-primary font-semibold text-sm truncate">
-              {activeChat.title}
-            </h2>
+            <WorkspaceTitle title={activeChat.title} />
           </div>
 
           <nav aria-label="Workspace areas" data-tour="workspace-tabs" className="ws-well flex min-w-0 items-center gap-0.5 rounded-lg border border-border-subtle bg-surface-input/80 p-1 select-none z-10">

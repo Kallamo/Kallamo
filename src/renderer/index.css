@@ -259,7 +259,8 @@ body {
   text-wrap: pretty;
 }
 
-h1, h2, h3, h4 {
+/* The shorthand also sets wrapping on, which would undo `truncate` on a heading. */
+:is(h1, h2, h3, h4):not(.truncate) {
   text-wrap: balance;
 }
 
