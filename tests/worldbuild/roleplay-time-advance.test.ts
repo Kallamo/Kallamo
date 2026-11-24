@@ -49,6 +49,12 @@ describe('Roleplay time advance', () => {
     });
   }
 
+  // A fresh workspace starts at the wall clock; pinning near the hour also covers the rollover.
+  function pinClock(hour: number, minute: number) {
+    const clock = calendarService.getRoleplayClock(db, WORKSPACE);
+    return calendarService.saveRoleplayClock(db, WORKSPACE, { ...clock, hour, minute });
+  }
+
   /* The interpreter reports 0 confidence for ordinary advances, so confidence is not a gate. */
   test('keeps an advance the interpreter reported no confidence in', () => {
     const advance = calendarService.normalizeTimeAdvance(
@@ -124,11 +130,11 @@ describe('Roleplay time advance', () => {
   });
 
   test('a ceiling never undercuts the floor or a stated clock', () => {
-    const clock = calendarService.getRoleplayClock(db, WORKSPACE);
+    const clock = pinClock(10, 57);
     const stated = frame('turn-room-explicit', {
       actionType: 'explicit_clock_progression', basis: 'explicit',
       duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 5 },
-      targetPosition: { ...clock, minute: clock.minute + 5 }, confidence: 1
+      targetPosition: { ...clock, hour: 11, minute: 2 }, confidence: 1
     }, 1, 2);
     expect(stated.advance).toMatchObject({ basis: 'explicit', duration: { minutes: 5 } });
     expect(stated.advance).not.toHaveProperty('loweredToMove');
@@ -138,11 +144,11 @@ describe('Roleplay time advance', () => {
 
   /* A time the narrative actually states outranks the matrix: there the author said it. */
   test('never overrides a clock the narrative stated', () => {
-    const clock = calendarService.getRoleplayClock(db, WORKSPACE);
+    const clock = pinClock(10, 57);
     const result = frame('turn-explicit', {
       actionType: 'explicit_clock_progression', basis: 'explicit',
       duration: { years: 0, months: 0, days: 0, hours: 0, minutes: 5 },
-      targetPosition: { ...clock, hour: clock.hour, minute: clock.minute + 5 },
+      targetPosition: { ...clock, hour: 11, minute: 2 },
       confidence: 1
     }, 240);
 
