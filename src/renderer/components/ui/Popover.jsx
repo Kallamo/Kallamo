@@ -38,7 +38,9 @@ export default function Popover({
     const rect = el.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
-    const flipUp = spaceBelow < maxHeight + gap && spaceAbove > spaceBelow;
+    // A panel that doesn't scroll needs its real height, which can exceed maxHeight.
+    const needed = scroll ? maxHeight : (panelRef.current?.offsetHeight || maxHeight);
+    const flipUp = spaceBelow < needed + gap && spaceAbove > spaceBelow;
 
     const next = {
       position: 'fixed',

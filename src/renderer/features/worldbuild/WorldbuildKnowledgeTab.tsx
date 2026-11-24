@@ -1837,7 +1837,10 @@ function LookBack({ workspaceId, owner, entities, api, calendar, clock, onClose 
     }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Could not read that day.'); });
     return () => { active = false; };
   }, [api, workspaceId, owner.id, date?.eraId, date?.year, date?.month, date?.day]);
-  const entries = view ? [...view.known, ...view.beliefs, ...view.memories] : [];
+  // Newest first: looking back starts from what the day closed on.
+  const entries = view
+    ? [...view.known, ...view.beliefs, ...view.memories].sort((a, b) => b.position.sequence - a.position.sequence)
+    : [];
   return (
     <section aria-label="Look back" className="space-y-3 rounded-card border border-border-subtle bg-surface-canvas/30 p-3">
       <div>
