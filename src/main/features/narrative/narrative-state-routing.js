@@ -189,6 +189,7 @@ ${String(narrativeResponse || '')}`);
   return unique(terms.filter(term => containsName(text, term.name)).map(term => term.domain));
 }
 
+/** @param {{ triage: any, signals: any, hasResourceDefinitions?: boolean, reachableItemIds?: string[], namedMechanics?: string[] }} input */
 function resolveNarrativeRouting({ triage, signals, hasResourceDefinitions = true, reachableItemIds = [], namedMechanics = [] }) {
   const triageDomains = unique(
     (Array.isArray(triage?.types) ? triage.types : []).filter(type => NARRATIVE_DOMAINS.includes(type))
@@ -318,6 +319,7 @@ function compactNarrativeManifest(manifest, subjectIds, targetIds) {
  * removes anyone from the place (see docs/narrative-state.md). Returns only the arrays that change.
  * @param {{ scene: any, playerId?: string|null, speakerIds?: Iterable<string>, involvedIds?: Iterable<string>,
  *   previous?: { involvedIds?: Iterable<string> }|null }} input
+ * @returns {{ participantIds?: string[], possibleObserverIds?: string[], nearbyIds?: string[] }}
  */
 function resolveSceneCast({ scene, playerId = null, speakerIds = [], involvedIds = [], previous = null }) {
   if (!scene) return {};
@@ -339,6 +341,7 @@ function resolveSceneCast({ scene, playerId = null, speakerIds = [], involvedIds
   for (const id of nearby) (speakers.has(id) ? nextParticipants : nextNearby).push(id);
 
   const same = (a, b) => a.length === b.length && a.every(id => b.includes(id));
+  /** @type {{ participantIds?: string[], possibleObserverIds?: string[], nearbyIds?: string[] }} */
   const patch = {};
   if (!same(nextParticipants, participants)) patch.participantIds = [...new Set(nextParticipants)];
   if (!same(nextObservers, observers)) patch.possibleObserverIds = [...new Set(nextObservers)];
@@ -351,6 +354,7 @@ const HOLDER_RECORD_TYPES = new Set(['knowledge', 'belief', 'memory']);
 /**
  * Presence decides how much of a perspective is read, never whether: someone left out of
  * presentIds still keeps what they hold about the focus.
+ * @param {{ candidateIds: Iterable<string>, sceneIds: Iterable<string>, presentIds?: string[] | null }} input
  */
 function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
   const candidates = [...new Set(candidateIds)];
@@ -358,6 +362,8 @@ function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
   const present = new Set([...sceneIds, ...presentIds].filter(id => candidates.includes(id)));
   return { present, mentioned: new Set(candidates.filter(id => !present.has(id))) };
 }
+
+const RESERVED = { intents: 30, outOfReach: 10 };
 
 /**
  * Knowledge, beliefs and memories only change for someone who perceived the turn, so they are kept
@@ -368,8 +374,6 @@ function resolveAnalysisHolders({ candidateIds, sceneIds, presentIds }) {
  * @param {Array<{ type: string, subjectId: string | null, value: any, interpreter?: string }>} rows
  * @param {{ holderIds: Iterable<string>, mentionedHolderIds?: Iterable<string>, targetIds: Iterable<string>, focusIds: Iterable<string>, topicIds?: Iterable<string> | null, fullHolderIds?: Iterable<string>, limit?: number, withRefs?: boolean }} options
  */
-const RESERVED = { intents: 30, outOfReach: 10 };
-
 function selectPerspectiveRecords(rows, { holderIds, mentionedHolderIds = [], targetIds, focusIds, topicIds = null, fullHolderIds = [], limit = 120, withRefs = false }) {
   const holders = new Set(holderIds);
   const mentionedHolders = new Set(mentionedHolderIds);
