@@ -73,10 +73,21 @@ function requestedOutputTokens(maxTokens) {
         : DEFAULT_OUTPUT_TOKENS;
 }
 
+// Open-weight models that think before answering, by the names local servers and OpenRouter use.
+// Qwen3 Instruct builds do not think, so they are left out.
+function isOpenReasoningModel(model) {
+    if (!model) return false;
+    const m = String(model).toLowerCase().split('/').pop();
+    if (/^qwen3/.test(m)) return !/instruct/.test(m);
+    return /^(?:qwq|deepseek-r1|gpt-oss|magistral|glm-z1|glm-4\.[5-9]|exaone-deep)/.test(m)
+        || /(?:^|[-_:.])(?:r1-distill|reasoning|thinking)(?:$|[-_:.])/.test(m);
+}
+
 function providerOutputLimit(provider, model, maxTokens) {
     const requested = requestedOutputTokens(maxTokens);
     const normalizedProvider = String(provider || '').toLowerCase();
-    if (['openai', 'openrouter', 'local'].includes(normalizedProvider) && needsMaxCompletionTokens(model)) {
+    if (['openai', 'openrouter', 'local'].includes(normalizedProvider)
+        && (needsMaxCompletionTokens(model) || (normalizedProvider !== 'openai' && isOpenReasoningModel(model)))) {
         return requested + REASONING_OUTPUT_HEADROOM;
     }
     if (['google ai', 'vertex ai'].includes(normalizedProvider) && isGeminiThinkingModel(model)) {

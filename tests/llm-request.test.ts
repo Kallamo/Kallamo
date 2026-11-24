@@ -298,6 +298,12 @@ describe('reasoning models, provider limits and replies', () => {
     expect(providerOutputLimit('Google AI', 'gemini-2.5-pro', 65000)).toBe(65536);
     expect(providerOutputLimit('Google AI', 'gemini-2.0-flash', 2048)).toBe(2048);
     expect(providerOutputLimit('Anthropic', 'claude-sonnet-4-5', 2048)).toBe(2048);
+    expect(providerOutputLimit('Local', 'qwen3:8b', 2048)).toBe(2048 + 8192);
+    expect(providerOutputLimit('Local', 'qwen/qwen3-14b', 2048)).toBe(2048 + 8192);
+    expect(providerOutputLimit('Local', 'deepseek-r1-distill-qwen-7b', 2048)).toBe(2048 + 8192);
+    expect(providerOutputLimit('OpenRouter', 'openai/gpt-oss-20b', 2048)).toBe(2048 + 8192);
+    expect(providerOutputLimit('Local', 'qwen3-30b-a3b-instruct-2507', 2048)).toBe(2048);
+    expect(providerOutputLimit('Local', 'ministral-3-8b-instruct-2512', 2048)).toBe(2048);
   });
 
   test('applies the connection context window when it is the smaller limit', async () => {
