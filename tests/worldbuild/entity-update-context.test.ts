@@ -29,8 +29,8 @@ describe('preceding passage for list-shaped documents', () => {
   });
 
   test('drops the overlap the passage shares with the start of the evidence', () => {
-    const previous = 'Document: Day 8\nContent: The herald reads the names aloud. Seraphina stands alone in the middle of the sand.';
-    const chunk = { ownerType: 'chat_kb', ownerId: 'ws', source: 'Day 8', ordinal: null, createdAt: 10, text: 'Document: Day 8\nContent: Seraphina stands alone in the middle of the sand. The crowd falls silent.' };
+    const previous = 'Document: Day 8\nContent: The herald reads the names aloud. Lisette stands alone in the middle of the sand.';
+    const chunk = { ownerType: 'chat_kb', ownerId: 'ws', source: 'Day 8', ordinal: null, createdAt: 10, text: 'Document: Day 8\nContent: Lisette stands alone in the middle of the sand. The crowd falls silent.' };
     expect(precedingPassageText(statements({ id: 'c4', text: previous }), chunk, new Set())).toBe('«The herald reads the names aloud.»');
   });
 

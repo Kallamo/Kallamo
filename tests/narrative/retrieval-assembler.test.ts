@@ -138,13 +138,13 @@ describe('Need-driven context assembly', () => {
       scene, ceiling: 20000, estimateTokens: estimate, source,
       brief: { needs: [{ kind: 'open', label: 'aging a forged piece', query: 'processos que imbuem história em peças sem danificá-las' }] },
       searchArchive: async () => [
-        { id: 'a1', source: 'Chat Archive', text: 'Ela conhece a história do Poço 04. Claro que conhece.' },
+        { id: 'a1', source: 'Chat Archive', text: 'Ela conhece a história do Galeria 07. Claro que conhece.' },
         { id: 'a2', source: 'Chat Archive', text: 'Bancadas de reparo, peças de armadura e panos de polimento.' },
         { id: 'a3', source: 'Chat Archive', text: 'Tomas contou que o processo de têmpera lenta dá história a uma peça sem danificar o núcleo.' }
       ]
     });
     expect(result.context).toContain('processo de têmpera lenta');
-    expect(result.context).not.toContain('Poço 04');
+    expect(result.context).not.toContain('Galeria 07');
     expect(result.context).not.toContain('panos de polimento');
   });
 
@@ -184,7 +184,7 @@ describe('Need-driven context assembly', () => {
 
 describe('Reading the planner\'s brief', () => {
   const entities = [
-    { id: 'a', type: 'Characters', canonicalName: 'Arkanos', aliases: [], lore: null, data: null, status: 'confirmed' },
+    { id: 'a', type: 'Characters', canonicalName: 'Velmont', aliases: [], lore: null, data: null, status: 'confirmed' },
     { id: 'b1', type: 'Locations', canonicalName: 'Forge', aliases: [], lore: null, data: null, status: 'confirmed' },
     { id: 'b2', type: 'Items', canonicalName: 'Forge', aliases: [], lore: null, data: null, status: 'confirmed' }
   ];
@@ -192,10 +192,10 @@ describe('Reading the planner\'s brief', () => {
 
   test('names resolve to ids, an unknown name becomes an open question, a kind of the other mode is dropped', () => {
     const needs = parseBrief({ needs: [
-      { kind: 'entity', label: 'Arkanos', entities: ['arkanos'] },
+      { kind: 'entity', label: 'Velmont', entities: ['velmont'] },
       { kind: 'entity', label: 'the ghost', entities: ['The Pale One'] },
-      { kind: 'chronology', label: 'later', entities: ['Arkanos'] }
-    ] }, context('Arkanos waits.'));
+      { kind: 'chronology', label: 'later', entities: ['Velmont'] }
+    ] }, context('Velmont waits.'));
     expect(needs.map(need => [need.kind, need.entityIds])).toEqual([['entity', ['a']], ['open', []]]);
     expect(needs[1].query).toBe('The Pale One');
   });
@@ -302,8 +302,8 @@ describe('Reading the planner\'s brief', () => {
   });
 
   test('the names floor and the brief join without repeating an entity, and acting wins', () => {
-    const ctx = context('Arkanos waits.');
-    const merged = mergeNeeds(namedNeeds(ctx), parseBrief({ needs: [{ kind: 'entity', label: 'Arkanos', entities: ['Arkanos'], use: 'acts' }] }, ctx));
+    const ctx = context('Velmont waits.');
+    const merged = mergeNeeds(namedNeeds(ctx), parseBrief({ needs: [{ kind: 'entity', label: 'Velmont', entities: ['Velmont'], use: 'acts' }] }, ctx));
     expect(merged).toHaveLength(1);
     expect(merged[0]).toMatchObject({ kind: 'entity', use: 'acts', entityIds: ['a'] });
   });

@@ -74,9 +74,9 @@ describe('purgeDeadTurns', () => {
       insert('narrative_events', {
         workspace_id: 'ws', event_id: eventId,
         operations_json: JSON.stringify([
-          { type: 'grant-awareness', awareness: { subjectId: 'kepler', targetId: 'rue' } },
-          { type: 'grant-knowledge', knowledge: { id: `knowledge-${originId}`, subjectId: 'kepler', proposition: { subjectId: 'rue' } } },
-          { type: 'grant-knowledge', knowledge: { id: `seeded-${originId}`, entryId: `entry-${originId}`, subjectId: 'kepler', proposition: { subjectId: 'lantern' } } }
+          { type: 'grant-awareness', awareness: { subjectId: 'tobin', targetId: 'rue' } },
+          { type: 'grant-knowledge', knowledge: { id: `knowledge-${originId}`, subjectId: 'tobin', proposition: { subjectId: 'rue' } } },
+          { type: 'grant-knowledge', knowledge: { id: `seeded-${originId}`, entryId: `entry-${originId}`, subjectId: 'tobin', proposition: { subjectId: 'lantern' } } }
         ])
       }, originId);
       for (const { table, column } of TURN_OWNED_COLUMNS) insert(table, { workspace_id: 'ws', [column]: originId, ...parents[table] }, originId);

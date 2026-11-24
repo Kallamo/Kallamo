@@ -19,11 +19,11 @@ describe('the planner gate', () => {
   });
 
   test('in a roleplay, naming something outside the scene or someone nearby is researched, and the reason says what', () => {
-    const outside = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: ['Festival do Encaixe'], bystanders: [] } });
-    expect(outside.reason).toBe('names outside the scene: Festival do Encaixe');
-    const nearby = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: [], bystanders: ['Hakan'] } });
+    const outside = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: ['Festival da Colheita'], bystanders: [] } });
+    expect(outside.reason).toBe('names outside the scene: Festival da Colheita');
+    const nearby = shouldRunPlanner(dialogue, { entityMentions: 1, scene: { outside: [], bystanders: ['Dorran'] } });
     expect(nearby.reason).toContain('nearby');
-    expect(nearby.reason).toContain('Hakan');
+    expect(nearby.reason).toContain('Dorran');
   });
 
   test('the override still forces research in a roleplay', () => {
@@ -33,7 +33,7 @@ describe('the planner gate', () => {
 
 describe('names the gate recognizes', () => {
   const entities = [
-    { id: 'festival', type: 'Events', canonicalName: 'Festival do Encaixe', aliases: ['Festival'] },
+    { id: 'festival', type: 'Events', canonicalName: 'Festival da Colheita', aliases: ['Festival'] },
     { id: 'order', type: 'Factions', canonicalName: 'Order', aliases: [] }
   ];
 

@@ -358,8 +358,8 @@ context stays under, never a size to reach. The code is in `features/narrative/r
   open question on the story and the Chat Archive and, outside roleplay, the documents.
 - **Finding what the turn does not name.** The planner has no tools, so it is shown what the tool loop
   used to find by reading: up to 30 entities one Worldbuild link away from what the turn and the last
-  reply name and from who is here, items and people first ("Presas Gêmeas da Penumbra (Items, owned by
-  Nex)"). A name also resolves by a distinctive part ("Sombrasulfeto" for "Minério de Sombrasulfeto"):
+  reply name and from who is here, items and people first ("Twin Fangs of the Dusk (Items, owned by
+  Quill)"). A name also resolves by a distinctive part ("Duskvein" for "Duskvein Ore"):
   a word of a name no other name uses, five letters or more; in free text it must be written as a
   proper noun or be ten letters or more. Entities named in what the needs brought and not yet in the
   context come along as cards, three at most. The profile's search instructions reach the planner.

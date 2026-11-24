@@ -38,8 +38,8 @@ describe('Roleplay mechanics: rest, conditions and scene growth', () => {
       );
     `);
     const insert = db.prepare('INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES (?, ?, ?, ?, ?, ?)');
-    insert.run('kepler', W, 'Characters', 'Kepler', '{}', 'confirmed');
-    insert.run('hakan', W, 'Characters', 'Hakan', '{}', 'confirmed');
+    insert.run('tobin', W, 'Characters', 'Tobin', '{}', 'confirmed');
+    insert.run('dorran', W, 'Characters', 'Dorran', '{}', 'confirmed');
     roleplay = new RoleplaySystem(db);
     conditions = new RoleplayConditions(db);
   });
@@ -56,57 +56,57 @@ describe('Roleplay mechanics: rest, conditions and scene growth', () => {
 
   test('sleep gives back what the resource says per hour, only to who slept, once per turn', () => {
     const definition = mana();
-    roleplay.setTargetValue(W, definition.id, 'entity', 'kepler', { current: 30 });
-    roleplay.setTargetValue(W, definition.id, 'entity', 'hakan', { current: 30 });
+    roleplay.setTargetValue(W, definition.id, 'entity', 'tobin', { current: 30 });
+    roleplay.setTargetValue(W, definition.id, 'entity', 'dorran', { current: 30 });
 
-    const changes = roleplay.applyRest(W, 'turn-5am', { sleepMinutes: 195, restMinutes: 0, entityIds: ['kepler'] });
-    expect(changes).toEqual([expect.objectContaining({ entityId: 'kepler', delta: 58, source: 'time', reason: '3 hours 15 minutes of sleep' })]);
-    roleplay.applyRest(W, 'turn-5am', { sleepMinutes: 195, restMinutes: 0, entityIds: ['kepler'] });
+    const changes = roleplay.applyRest(W, 'turn-5am', { sleepMinutes: 195, restMinutes: 0, entityIds: ['tobin'] });
+    expect(changes).toEqual([expect.objectContaining({ entityId: 'tobin', delta: 58, source: 'time', reason: '3 hours 15 minutes of sleep' })]);
+    roleplay.applyRest(W, 'turn-5am', { sleepMinutes: 195, restMinutes: 0, entityIds: ['tobin'] });
     const current = (id: string) => roleplay.listEntityResources(W, id).find(item => item.definitionId === definition.id)!.current;
-    expect(current('kepler')).toBe(88);
-    expect(current('hakan')).toBe(30);
+    expect(current('tobin')).toBe(88);
+    expect(current('dorran')).toBe(30);
     expect(roleplay.listDefinitions(W)[0]).toMatchObject({ sleepRate: 18, restRate: 4 });
   });
 
   test('a condition tied to a resource starts below its line and ends above it', () => {
     const definition = mana();
     const fatigue = conditions.saveDefinition(W, { name: 'Magic fatigue', triggerDefinitionId: definition.id, triggerBelowPercent: 33 });
-    roleplay.setTargetValue(W, definition.id, 'entity', 'kepler', { current: 30 });
+    roleplay.setTargetValue(W, definition.id, 'entity', 'tobin', { current: 30 });
 
-    conditions.applyThresholds(W, 'turn-1', ['kepler'], 'Day 16, 01:40');
-    expect(conditions.listActive(W, ['kepler'])).toEqual([expect.objectContaining({ conditionId: fatigue.id, source: 'threshold', startedLabel: 'Day 16, 01:40' })]);
+    conditions.applyThresholds(W, 'turn-1', ['tobin'], 'Day 16, 01:40');
+    expect(conditions.listActive(W, ['tobin'])).toEqual([expect.objectContaining({ conditionId: fatigue.id, source: 'threshold', startedLabel: 'Day 16, 01:40' })]);
 
-    roleplay.setTargetValue(W, definition.id, 'entity', 'kepler', { current: 120 });
-    conditions.applyThresholds(W, 'turn-2', ['kepler']);
-    expect(conditions.listActive(W, ['kepler'])).toEqual([]);
+    roleplay.setTargetValue(W, definition.id, 'entity', 'tobin', { current: 120 });
+    conditions.applyThresholds(W, 'turn-2', ['tobin']);
+    expect(conditions.listActive(W, ['tobin'])).toEqual([]);
   });
 
   test('sleep ends a condition only once enough of it was slept; a short night is not enough', () => {
     conditions.saveSettings(W, { updatePolicy: 'automatic' });
     const resonance = conditions.saveDefinition(W, { name: 'Flux Resonance', description: 'Veins swell and burn.', sleepMinutes: 360 });
-    const started = conditions.proposeChange({ id: 'turn-1:condition:0', workspaceId: W, entityId: 'kepler', condition: 'Flux Resonance', kind: 'start', reason: 'held the mana lid for minutes', source: 'ai', provenanceId: 'turn-1' });
+    const started = conditions.proposeChange({ id: 'turn-1:condition:0', workspaceId: W, entityId: 'tobin', condition: 'Flux Resonance', kind: 'start', reason: 'held the mana lid for minutes', source: 'ai', provenanceId: 'turn-1' });
     expect(started?.status).toBe('applied');
 
-    conditions.applyTime(W, 'turn-2', { minutes: 195, sleepMinutes: 195, restingIds: ['kepler'] });
-    expect(conditions.listActive(W, ['kepler'])).toEqual([expect.objectContaining({ conditionId: resonance.id, sleepLeftMinutes: 165 })]);
+    conditions.applyTime(W, 'turn-2', { minutes: 195, sleepMinutes: 195, restingIds: ['tobin'] });
+    expect(conditions.listActive(W, ['tobin'])).toEqual([expect.objectContaining({ conditionId: resonance.id, sleepLeftMinutes: 165 })]);
     // The same turn analysed again does not count the night twice.
-    conditions.applyTime(W, 'turn-2', { minutes: 195, sleepMinutes: 195, restingIds: ['kepler'] });
-    expect(conditions.listActive(W, ['kepler'])[0].sleepLeftMinutes).toBe(165);
+    conditions.applyTime(W, 'turn-2', { minutes: 195, sleepMinutes: 195, restingIds: ['tobin'] });
+    expect(conditions.listActive(W, ['tobin'])[0].sleepLeftMinutes).toBe(165);
 
-    const ended = conditions.applyTime(W, 'turn-3', { minutes: 200, sleepMinutes: 200, restingIds: ['kepler'] });
+    const ended = conditions.applyTime(W, 'turn-3', { minutes: 200, sleepMinutes: 200, restingIds: ['tobin'] });
     expect(ended).toEqual([expect.objectContaining({ kind: 'end', source: 'time', reason: 'Passed with sleep' })]);
-    expect(conditions.listActive(W, ['kepler'])).toEqual([]);
+    expect(conditions.listActive(W, ['tobin'])).toEqual([]);
   });
 
   test('the AI waits for review, and a condition the catalog lacks is proposed with it', () => {
     conditions.saveDefinition(W, { name: 'Bleeding', durationMinutes: 120, endsWhen: 'when the wound is treated' });
-    const start = conditions.proposeChange({ id: 'turn-1:condition:0', workspaceId: W, entityId: 'hakan', condition: 'bleeding', kind: 'start', source: 'ai', provenanceId: 'turn-1' });
+    const start = conditions.proposeChange({ id: 'turn-1:condition:0', workspaceId: W, entityId: 'dorran', condition: 'bleeding', kind: 'start', source: 'ai', provenanceId: 'turn-1' });
     expect(start?.status).toBe('pending');
     expect(conditions.listActive(W)).toEqual([]);
     conditions.resolveChange(W, start!.id, 'approved');
-    expect(conditions.listActive(W, ['hakan'])[0]).toMatchObject({ name: 'Bleeding', timeLeftMinutes: 120 });
+    expect(conditions.listActive(W, ['dorran'])[0]).toMatchObject({ name: 'Bleeding', timeLeftMinutes: 120 });
 
-    const created = conditions.proposeChange({ id: 'turn-2:condition:0', workspaceId: W, entityId: 'kepler', condition: 'Shadowsulfide poisoning', kind: 'start', source: 'ai', provenanceId: 'turn-2', create: { description: 'Lungs burn.' } });
+    const created = conditions.proposeChange({ id: 'turn-2:condition:0', workspaceId: W, entityId: 'tobin', condition: 'Shadowsulfide poisoning', kind: 'start', source: 'ai', provenanceId: 'turn-2', create: { description: 'Lungs burn.' } });
     expect(created?.status).toBe('pending');
     expect(conditions.listDefinitions(W).find(item => item.name === 'Shadowsulfide poisoning')?.status).toBe('proposed');
     conditions.resolveChange(W, created!.id, 'approved');
@@ -137,9 +137,9 @@ describe('Roleplay mechanics: rest, conditions and scene growth', () => {
   test('the condition catalog travels in the rules package; who has one stays', () => {
     const definition = mana();
     conditions.saveDefinition(W, { name: 'Magic fatigue', description: 'Hands tremble.', triggerDefinitionId: definition.id, triggerBelowPercent: 33, sleepMinutes: 480 });
-    conditions.setActive(W, 'kepler', conditions.listDefinitions(W)[0].id, true);
+    conditions.setActive(W, 'tobin', conditions.listDefinitions(W)[0].id, true);
     const packager = new RoleplayRulesPackager(db);
-    const rules = packager.export(W, new Set(['kepler']), false);
+    const rules = packager.export(W, new Set(['tobin']), false);
     expect(rules.conditions?.catalog).toEqual([expect.objectContaining({ name: 'Magic fatigue', triggerResourceKey: 'mana', sleepMinutes: 480 })]);
 
     packager.import('workspace-two', rules, 'merge', new Map());
@@ -150,8 +150,8 @@ describe('Roleplay mechanics: rest, conditions and scene growth', () => {
   });
 
   test('a turn that names a resource or condition is read for it, only when the triage found it consequential', () => {
-    const terms = [{ name: 'Mana', domain: 'resource' }, { name: 'Ressonância de Fluxo', domain: 'condition' }];
-    const named = mentionedMechanics({ userMessage: 'Fechava os olhos, concentrado no fluxo de mana.', narrativeResponse: 'A ressonancia de fluxo volta a queimar.', terms });
+    const terms = [{ name: 'Mana', domain: 'resource' }, { name: 'Eco Arcano', domain: 'condition' }];
+    const named = mentionedMechanics({ userMessage: 'Fechava os olhos, concentrado na mana.', narrativeResponse: 'O eco arcano volta a queimar.', terms });
     expect(named).toEqual(['resource', 'condition']);
     const signals = { strongDomains: [], candidateDomains: [], signals: [] };
     const read = resolveNarrativeRouting({ triage: { consequential: true, types: ['knowledge'] }, signals, namedMechanics: named });

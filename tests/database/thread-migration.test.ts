@@ -40,22 +40,22 @@ const summary = (id: string, ids: string[]) => ({ id, type: 'summarized', title:
 
 describe('splitting each workspace into the Chat and the Roleplay', () => {
   test('a beta campaign moves whole: marked replies, the messages before them and an unmarked failed reply', () => {
-    workspace('axiom', 'roleplay', [summary('early', ['u1', 'a1', 'u2', 'a2'])]);
-    message('u1', 'axiom', 'user', 1);
-    message('a1', 'axiom', 'ai', 2);
-    message('u2', 'axiom', 'user', 3);
-    message('a2', 'axiom', 'ai', 4);
-    message('u3', 'axiom', 'user', 5);
-    message('failed', 'axiom', 'ai', 6);
-    mark('roleplay_message_frames', 'axiom', 'a1');
-    mark('roleplay_turn_snapshots', 'axiom', 'a2');
-    mark('narrative_origin_lifecycle', 'axiom', 'a2');
+    workspace('harbor', 'roleplay', [summary('early', ['u1', 'a1', 'u2', 'a2'])]);
+    message('u1', 'harbor', 'user', 1);
+    message('a1', 'harbor', 'ai', 2);
+    message('u2', 'harbor', 'user', 3);
+    message('a2', 'harbor', 'ai', 4);
+    message('u3', 'harbor', 'user', 5);
+    message('failed', 'harbor', 'ai', 6);
+    mark('roleplay_message_frames', 'harbor', 'a1');
+    mark('roleplay_turn_snapshots', 'harbor', 'a2');
+    mark('narrative_origin_lifecycle', 'harbor', 'a2');
     migrate();
     expect(['u1', 'a1', 'u2', 'a2', 'u3', 'failed'].map(threadOf)).toEqual(Array(6).fill('roleplay'));
-    expect(blocksOf('axiom')[0].thread).toBe('roleplay');
-    const roleplay = db.prepare("SELECT * FROM workspace_threads WHERE workspace_id = 'axiom' AND thread = 'roleplay'").get();
+    expect(blocksOf('harbor')[0].thread).toBe('roleplay');
+    const roleplay = db.prepare("SELECT * FROM workspace_threads WHERE workspace_id = 'harbor' AND thread = 'roleplay'").get();
     expect(roleplay).toMatchObject({ summarized_index: 4, auto_summarize: 1, archive_threshold: 50000, last_target_id: 'narrator' });
-    expect(db.prepare("SELECT summarizedIndex FROM chats WHERE id = 'axiom'").get().summarizedIndex).toBe(0);
+    expect(db.prepare("SELECT summarizedIndex FROM chats WHERE id = 'harbor'").get().summarizedIndex).toBe(0);
   });
 
   test('an opening reply with no user message before it starts the campaign', () => {
@@ -113,10 +113,10 @@ describe('splitting each workspace into the Chat and the Roleplay', () => {
   });
 
   test('running it again changes nothing, and no message is lost or renamed', () => {
-    workspace('axiom', 'roleplay');
-    message('u1', 'axiom', 'user', 1);
-    message('a1', 'axiom', 'ai', 2);
-    mark('roleplay_message_frames', 'axiom', 'a1');
+    workspace('harbor', 'roleplay');
+    message('u1', 'harbor', 'user', 1);
+    message('a1', 'harbor', 'ai', 2);
+    mark('roleplay_message_frames', 'harbor', 'a1');
     migrate();
     const before = db.prepare('SELECT id, thread, content FROM messages ORDER BY id').all();
     splitConversationThreads(db, { log: () => {} });

@@ -104,7 +104,7 @@ function regard(reads: StoryReads, from: string, to: string): StoryRecord | null
   return reads.dispositions(from, to).find(record => record.kind === 'disposition') ?? null;
 }
 
-/** "Mara → Barnaby (overall 92): Pai substituto", with the description only when asked for. */
+/** "Mara → Pell (overall 92): Pai substituto", with the description only when asked for. */
 export function regardLine(view: WorldbuildView, record: StoryRecord, describe: boolean): string {
   if (record.kind !== 'disposition') return '';
   const meta = metadataOf(record);

@@ -182,12 +182,12 @@ describe('Narrative State quality gate', () => {
   test('keeps the first-contact operations the pipeline generates', () => {
     const introduction: ExtractedNarrativeOperation = {
       type: 'fact',
-      proposition: { subjectId: 'valera', predicate: 'narrative-introduction', object: 'A duelist from the Slag Pit enters the narrative.' },
+      proposition: { subjectId: 'odette', predicate: 'narrative-introduction', object: 'A duelist from the Slag Pit enters the narrative.' },
       category: 'identity',
       confidence: 0.9
     };
     const encounter: ExtractedNarrativeOperation = {
-      type: 'relationship', sourceEntityId: 'valera', targetEntityId: 'corwin',
+      type: 'relationship', sourceEntityId: 'odette', targetEntityId: 'corwin',
       dimension: 'overall', value: 0, cause: 'first-impression', impact: 'meaningful'
     };
 

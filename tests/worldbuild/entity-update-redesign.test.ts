@@ -95,7 +95,7 @@ describe('memories compared by meaning', () => {
 });
 
 describe('relationships moved by cause', () => {
-  const current = { title: 'Captor', value: 15, description: 'Borok cooperates on conditions.' };
+  const current = { title: 'Captor', value: 15, description: 'Grummel cooperates on conditions.' };
 
   test('a bond without a lasting cause does not move', () => {
     expect(resolveRelationshipChange(current, { direction: 'further', cause: 'routine-cooperation', impact: 'meaningful', description: 'x' })).toBeNull();
@@ -103,34 +103,34 @@ describe('relationships moved by cause', () => {
   });
 
   test('a wound short of drastic stops at neutral instead of turning a bond hostile', () => {
-    const update = resolveRelationshipChange(current, { direction: 'further', cause: 'betrayal', impact: 'significant', description: 'Borok no longer trusts him.' });
+    const update = resolveRelationshipChange(current, { direction: 'further', cause: 'betrayal', impact: 'significant', description: 'Grummel no longer trusts him.' });
     expect(update.value).toBeGreaterThanOrEqual(0);
     expect(update.value).toBeLessThan(15);
     expect(update.title).toBe('Captor');
   });
 
   test('closer moves up by the story pass arithmetic and keeps the title', () => {
-    const update = resolveRelationshipChange(current, { direction: 'closer', cause: 'sustained-trust', impact: 'meaningful', description: 'Borok starts to rely on his word.' });
+    const update = resolveRelationshipChange(current, { direction: 'closer', cause: 'sustained-trust', impact: 'meaningful', description: 'Grummel starts to rely on his word.' });
     expect(update.value).toBeGreaterThan(15);
     expect(update.value).toBeLessThanOrEqual(25);
     expect(update.title).toBe('Captor');
   });
 
   test('a new bond starts from the reading, inside the first-reading limit', () => {
-    const update = resolveRelationshipChange(null, { title: 'Rescuer', score: 80, cause: 'rescue', impact: 'meaningful', description: 'Theron owes him his life.' });
+    const update = resolveRelationshipChange(null, { title: 'Rescuer', score: 80, cause: 'rescue', impact: 'meaningful', description: 'Halden owes him his life.' });
     expect(update.value).toBe(25);
     expect(resolveRelationshipChange(null, { title: 'Rescuer', score: 80, cause: 'presence', impact: 'drastic', description: 'x' })).toBeNull();
   });
 });
 
 describe('lore kept as background', () => {
-  const current = 'Valerius rose from a minor noble house to Field Lieutenant. He served on the southern border for six years.';
+  const current = 'Cassian rose from a minor noble house to Field Lieutenant. He served on the southern border for six years.';
 
   test('a lore that drops or rewords a sentence is refused', () => {
     expect(keepsEveryLoreSentence(current, `${current} His mother ran the house archive.`)).toBe(true);
-    expect(keepsEveryLoreSentence(current, 'Valerius climbed from a small noble house to Field Lieutenant. He served on the southern border for six years.')).toBe(false);
+    expect(keepsEveryLoreSentence(current, 'Cassian climbed from a small noble house to Field Lieutenant. He served on the southern border for six years.')).toBe(false);
     const evidence = new Set(['E_1']);
-    const rewrite = { lore: { value: `Valerius climbed from a small noble house to Field Lieutenant and was respected for it. He served on the southern border for six years, and his mother ran the house archive for decades before he was born.`, support: 'x', evidence: ['E_1'] } };
+    const rewrite = { lore: { value: `Cassian climbed from a small noble house to Field Lieutenant and was respected for it. He served on the southern border for six years, and his mother ran the house archive for decades before he was born.`, support: 'x', evidence: ['E_1'] } };
     expect(validateEntityLore(rewrite, current, evidence)).toBeNull();
   });
 });
