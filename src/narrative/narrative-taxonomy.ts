@@ -90,7 +90,9 @@ const CAUSE_SET = new Set<string>(RELATIONSHIP_CAUSES);
 const DURABLE_CAUSE_SET = new Set<string>(DURABLE_RELATIONSHIP_CAUSES);
 
 /** A subject's own secret, identity or plan is perspective; anything else about itself is a world fact. */
-const SELF_REFERENTIAL_CATEGORIES = new Set<string>(['secret', 'identity', 'intent']);
+// What someone plans, is or learns about themselves is their memory, in their own perspective. Only a
+// secret they keep is held as a statement about themselves: it is what can be given away to others.
+const SELF_REFERENTIAL_CATEGORIES = new Set<string>(['secret']);
 
 function slug(value: unknown): string {
   return String(value ?? '')

@@ -88,6 +88,12 @@ describe('Narrative State quality gate', () => {
     expect(assessExtractedOperation(secret, model).accepted).toBe(true);
   });
 
+  test('a character never learns their own plan or who they are: what they live is their memory', () => {
+    for (const category of ['intent', 'identity', 'capability']) {
+      expect(assessExtractedOperation(knowledge({ subjectId: 'rosalind', category }), model)).toEqual({ accepted: false, reason: 'self-referential' });
+    }
+  });
+
   test('refuses a relationship change caused by mood, and lets ordinary courtesy through to its limits', () => {
     const mood: ExtractedNarrativeOperation = {
       type: 'relationship', sourceEntityId: 'pip', targetEntityId: 'corwin',

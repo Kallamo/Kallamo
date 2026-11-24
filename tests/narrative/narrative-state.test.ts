@@ -115,11 +115,13 @@ describe('Narrative State runtime', () => {
       participantIds: ['elias'], confidence: 0.95,
       operations: [
         { type: 'awareness', subjectId: 'elias', targetId: 'elias', confidence: 0.95 },
-        { type: 'belief', subjectId: 'elias', proposition: { subjectId: 'elias', predicate: 'self-view', object: 'He was never brave.' }, category: 'identity', confidence: 0.85 }
+        { type: 'belief', subjectId: 'elias', proposition: { subjectId: 'elias', predicate: 'self-view', object: 'He was never brave.' }, category: 'identity', confidence: 0.85 },
+        { type: 'knowledge', subjectId: 'elias', proposition: { subjectId: 'elias', predicate: 'hidden-flight', object: 'He ran from the first battle and told no one.' }, category: 'secret', acquisition: 'participant', confidence: 0.95 }
       ]
     }));
 
-    expect(result.record?.proposal.changeSet.operations.map(operation => operation.type)).toEqual(['set-belief']);
+    // Who he is to himself is his memory, not a statement he learns; a secret he keeps stays.
+    expect(result.record?.proposal.changeSet.operations.map(operation => operation.type)).toEqual(['grant-knowledge']);
   });
 
   test('keeps valid relationships when another extracted operation is malformed', () => {

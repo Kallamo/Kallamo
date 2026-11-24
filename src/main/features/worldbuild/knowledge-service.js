@@ -95,6 +95,8 @@ function createWorldbuildKnowledgeService(db) {
     const sourceType = SOURCE_TYPES.has(input.sourceType) ? input.sourceType : null;
     if (!sourceType) throw new Error('Unsupported Knowledge source type.');
     const sourceId = requireText(input.sourceId, 'sourceId');
+    // Nobody becomes aware of themselves.
+    if (ownerId === targetId) return { workspaceId, ownerId, targetId };
     const excluded = cached(`
       SELECT 1 FROM worldbuild_knowledge_exclusions
       WHERE workspace_id = ? AND owner_id = ? AND target_id = ?
@@ -611,7 +613,7 @@ function createWorldbuildKnowledgeService(db) {
 
   // Awareness lives in the story, where it is read in play; the card is the author's view of it.
   function persistTemporalAwareness({ workspaceId, ownerId, targetId, sourceType, sourceId, status }) {
-    if (!hasTable(db, 'narrative_events')) return;
+    if (!hasTable(db, 'narrative_events') || ownerId === targetId) return;
     if (status === 'active' && storyAwareness().isAware(db, workspaceId, ownerId, targetId)) return;
     const signature = crypto.createHash('sha256')
       .update(JSON.stringify({ workspaceId, ownerId, targetId, sourceType, sourceId, status }))
