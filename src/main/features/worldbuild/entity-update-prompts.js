@@ -91,6 +91,22 @@ function buildFieldGapSystemPrompt({ languageInstruction = '', sourceLanguageIns
   ].filter(Boolean).join('\n');
 }
 
+// A sheet the story just brought in is filled from that scene alone, so it is usable from the next turn.
+function buildFirstFillSystemPrompt({ languageInstruction = '', sourceLanguageInstruction = '' } = {}) {
+  return [
+    languageInstruction,
+    sourceLanguageInstruction,
+    'A story scene just brought a new record into the world bible. Fill the fields listed for it from that scene, so the record is usable from the next scene on.',
+    'Return one valid JSON object and nothing else: {"fields":[{"key":"<field key>","status":"found","value":"<JSON encoded value>","support":"<the words of the scene that show it>","evidence":["S1"]}]}.',
+    'Answer EVERY field listed under EMPTY FIELDS exactly once: status "found" with a value, its support and the evidence ID; status "absent" with an empty value and no evidence when the scene gives no ground for it.',
+    'Fill as much as the scene allows. What it states is found, and so is what it plainly shows: the pronouns used for someone, an evident life stage, a role they visibly hold, what an object is used for. What the scene gives no ground for is absent; never invent to complete a record.',
+    'Each field says what counts for it, and a field the author described is read by that description: follow it over these words. A choice field takes one of its options exactly; a number stays inside its range.',
+    'Encode values as JSON inside value: plain text remains plain text, numbers use "12", booleans use "true", lists use "[\\"one\\",\\"two\\"]".',
+    'Never take a trait of a race, a people or a culture as the record\'s own, and never let a passing state of this scene (a pose, a mood, today\'s clothes, a fresh wound) fill a lasting field.',
+    'Text between || and || is a spoiler; keep it inside its markers.',
+  ].filter(Boolean).join('\n');
+}
+
 function buildLoreCleanupSystemPrompt({ languageInstruction = '' } = {}) {
   return [
     languageInstruction,
@@ -104,5 +120,6 @@ module.exports = {
   buildCanonSystemPrompt,
   buildNarrativeSystemPrompt,
   buildFieldGapSystemPrompt,
+  buildFirstFillSystemPrompt,
   buildLoreCleanupSystemPrompt,
 };

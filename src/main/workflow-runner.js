@@ -3414,7 +3414,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             referenceIds.set(proposal.referenceId, change.entityId);
             allowedEntityIds.add(change.entityId);
             if (proposal.type === 'Characters' || (proposal.type === 'Creatures' && proposal.scope !== 'group')) actorIds.add(change.entityId);
-            narrativeIntroductions.push({ proposal, entityId: change.entityId });
+            narrativeIntroductions.push({ proposal, entityId: change.entityId, created: Boolean(change.createdEntity) });
         }
     }
     const resolveReference = value => referenceIds.get(value) || value;
@@ -3559,6 +3559,16 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
         }
     }
     })();
+    // A sheet this turn created is filled from the scene now, so the next turn already reads it.
+    const firstFill = await fillNewEntitySheets({
+        workspaceId,
+        created: narrativeIntroductions.filter(introduction => introduction.created),
+        userMessage,
+        narrativeResponse,
+        role,
+        telemetry: narrativeTelemetry,
+        labels: entityLabels
+    });
     const appliedLocationId = roleplay.getScene(workspaceId)?.locationId;
     const endLocationId = (rejectedSceneChange ? null : routedResult.scenePatch?.locationId) || appliedLocationId;
     // Only a move that happened charges the clock; one awaiting approval may still be rejected.
@@ -3681,6 +3691,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
             story: storyNeeded || sceneEnd ? { status: 'queued', domains: storyDomains, ...(sceneEnd ? { sceneEnded: sceneEnd.reason } : {}) } : { status: 'not-needed', domains: [] },
             rejectedSceneChange,
             invalidInventoryChanges,
+            ...(firstFill.length ? { firstFill } : {}),
             proposals: changes.map(change => ({
                 kind: change.kind,
                 status: change.status || change.decision || 'processed',
@@ -6896,6 +6907,137 @@ async function fillEntityFieldGaps({ workspaceId, entityIds, candidatesByEntity,
         countFound();
     }
     return outcome;
+}
+
+// --- FIRST FILL: a sheet the Narrative State creates is filled from the scene that brought it in ---
+
+const FIRST_FILL_SCENE_CHARS = 16000;
+
+/**
+ * One answer per field for each sheet this turn created, read from this turn alone. Values go on the
+ * sheet directly: a provisional sheet is reviewed whole, and an automatic one was the user's choice.
+ */
+async function fillNewEntitySheets({ workspaceId, created, userMessage, narrativeResponse, role, telemetry, labels }) {
+    if (!created.length || !role?.executor) return [];
+    const { buildFirstFillSystemPrompt } = require('./features/worldbuild/entity-update-prompts');
+    const { buildFieldGapSchema } = require('./features/worldbuild/entity-update-schema');
+    const { FIRST_FILL_GUIDANCE, firstFillFields } = require('./features/worldbuild/first-fill');
+    const systemPrompt = buildFirstFillSystemPrompt({ languageInstruction: getSystemLanguageInstruction(), sourceLanguageInstruction: getSourceLanguageInstruction() });
+    const definitions = db.prepare(`
+        SELECT field_id AS id, field_key AS key, label, value_type AS valueType, options_json AS optionsJson,
+          constraints_json AS constraintsJson, ai_access AS aiAccess, ai_guidance AS aiGuidance,
+          has_default AS hasDefault, default_value_json AS defaultJson
+        FROM worldbuild_field_definitions WHERE workspace_id = ? AND type_id = ? AND ai_access = 'read-write'
+        ORDER BY position, field_id
+    `);
+    const templateOf = db.prepare('SELECT layout_json AS json FROM worldbuild_entity_templates WHERE workspace_id = ? AND type_id = ?');
+    const all = entitiesStore.listEntities({ workspaceId });
+    const scene = `${String(userMessage || '').trim()}\n\n${stripReasoning(narrativeResponse || '').trim()}`.slice(-FIRST_FILL_SCENE_CHARS);
+    const parseJson = value => { try { return JSON.parse(value || 'null'); } catch { return null; } };
+
+    const fillOne = async ({ entityId, proposal }) => {
+        const ent = entitiesStore.getEntity(entityId);
+        if (!ent) return null;
+        const customDefinitions = definitions.all(workspaceId, ent.type).map(row => ({
+            ...row, options: parseJson(row.optionsJson) || [], constraints: parseJson(row.constraintsJson) || {},
+            hasDefault: row.hasDefault === 1, defaultValue: parseJson(row.defaultJson)
+        }));
+        const { native, custom } = firstFillFields(ent, {
+            allowedNative: enrichFieldsForEntity(ent),
+            customDefinitions,
+            layout: parseJson(templateOf.get(workspaceId, ent.type)?.json) || {}
+        });
+        const gaps = [
+            ...native.map(key => ({ key, label: key })),
+            ...custom.map(field => ({ key: `customFields.${field.key}`, label: field.label, custom: field }))
+        ];
+        // A person or a single creature without a people: the one the scene names, if the world has it.
+        const raceSpec = enrichRelationsForEntity(ent).find(spec => spec.key === 'race');
+        let raceCandidates = [];
+        if (raceSpec && !existingLinksByTarget(ent.id, raceSpec).size) {
+            raceCandidates = relationCandidates(all, ent, raceSpec).filter(candidate => textMentionsEntity(scene, entityMentionNames(candidate)));
+            if (raceCandidates.length) gaps.push({ key: 'link.race', label: raceSpec.label, spec: raceSpec });
+        }
+        if (!gaps.length) return { name: ent.canonicalName, filled: [], absent: [] };
+
+        const fieldLines = gaps.map(gap => {
+            if (gap.spec) return `- ${gap.key} (${gap.label}): one candidate name, from [${raceCandidates.map(candidate => candidate.canonicalName).join(', ')}]. ${ENRICH_RELATION_GUIDANCE[`${ent.type}.race`] || ''}`;
+            if (gap.custom) return `- ${gap.key} (${gap.label}): ${customFieldPromptShape(gap.custom)}. ${gap.custom.aiGuidance || `Only the meaning expressed by “${gap.label}”.`}`;
+            const shape = ENRICH_ENUMS[gap.key] ? `one of [${ENRICH_ENUMS[gap.key].join(', ')}]` : 'a concise literal value';
+            return `- ${gap.key}: ${shape}. ${FIRST_FILL_GUIDANCE[gap.key] || ENRICH_FIELD_GUIDANCE[gap.key] || ''}`;
+        });
+        const filled = {};
+        for (const field of enrichFieldsForEntity(ent)) if (ent.data?.[field] != null && String(ent.data[field]).trim()) filled[field] = ent.data[field];
+        const prompt = `RECORD: ${ent.canonicalName} (${ent.type.replace(/s$/, '')})\nAliases: ${ent.aliases?.join(', ') || '(none)'}\n` +
+            `ENTITY TYPE CONTRACT:\n${ENRICH_TYPE_GUIDANCE[ent.type] || 'A persistent canonical world entity.'}\n` +
+            (proposal?.description ? `How the scene introduced it: ${String(proposal.description).slice(0, 800)}\n` : '') +
+            (Object.keys(filled).length ? `Filled fields: ${JSON.stringify(filled)}\n` : '') +
+            `\nEMPTY FIELDS (answer each one):\n${fieldLines.join('\n')}\n` +
+            `\nSCENE:\n[S1 | the scene it first appeared in]\n${scene}`;
+
+        let response;
+        try {
+            response = await sendNarrativeJson({
+                apiProfileId: role.executor.apiProfileId,
+                model: role.executor.model,
+                systemPrompt: labels.encode(systemPrompt),
+                chatHistory: [],
+                newPrompt: labels.encode(prompt),
+                temperature: 0.1,
+                maxTokens: Math.min(3000, 400 + gaps.length * 300),
+                maxPayloadTokens: workspacePayloadTokens(workspaceId),
+                manualMode: false,
+                manualJson: null,
+                cacheScope: `${workspaceId}::first-fill`
+            }, buildFieldGapSchema(), 'New sheet', telemetry);
+        } catch (error) {
+            console.warn(`[First fill] ${ent.canonicalName} failed:`, cleanErrorMessage(error));
+            return { name: ent.canonicalName, filled: [], absent: gaps.map(gap => gap.label), error: cleanErrorMessage(error) };
+        }
+        const answers = safeParseObject(labels.decode(response))?.fields;
+        const fresh = entitiesStore.getEntity(ent.id) || ent;
+        const data = { ...(fresh.data || {}) };
+        const customValues = { ...(data.customFields && typeof data.customFields === 'object' ? data.customFields : {}) };
+        const report = { name: ent.canonicalName, filled: [], absent: [] };
+        for (const gap of gaps) {
+            const reply = (Array.isArray(answers) ? answers : []).find(item => item && item.key === gap.key);
+            const support = String(reply?.support || '').trim();
+            const shown = reply?.status === 'found' && support && (Array.isArray(reply.evidence) ? reply.evidence : []).map(String).includes('S1');
+            const raw = shown ? decodeEntityUpdate({ changes: [{ kind: 'field', key: gap.key, value: reply.value, support, evidence: ['S1'] }] }).data[gap.key]?.value : undefined;
+            let accepted = false;
+            if (raw !== undefined && gap.spec) {
+                const name = String(Array.isArray(raw) ? raw[0] : raw).trim();
+                const chosen = raceCandidates.find(candidate => foldText(candidate.canonicalName) === foldText(name));
+                if (chosen) {
+                    applyProposedLink(ent.id, { relType: gap.spec.relType, from: gap.spec.from, single: !!gap.spec.single, targetId: chosen.id }, workspaceId);
+                    accepted = true;
+                }
+            } else if (raw !== undefined && gap.custom) {
+                const isNumeric = gap.custom.valueType === 'number' || gap.custom.valueType === 'range';
+                const value = isNumeric && isUnsupportedNumericDelta(raw, support) ? undefined : normalizeCustomProposalValue(raw, gap.custom, workspaceId);
+                if (value !== undefined) {
+                    customValues[gap.custom.key] = value;
+                    accepted = true;
+                }
+            } else if (raw !== undefined) {
+                let value = String(raw ?? '').trim();
+                if (ENRICH_ENUMS[gap.key]) value = ENRICH_ENUMS[gap.key].find(option => option.toLowerCase() === value.toLowerCase()) || '';
+                if (value) {
+                    data[gap.key] = value;
+                    accepted = true;
+                }
+            }
+            (accepted ? report.filled : report.absent).push(gap.label);
+        }
+        if (report.filled.length) {
+            entitiesStore.updateEntity(ent.id, { data: { ...data, ...(Object.keys(customValues).length ? { customFields: customValues } : {}) } });
+        }
+        return report;
+    };
+    return (await Promise.all(created.map(item => fillOne(item).catch(error => {
+        console.warn('[First fill] Skipped a sheet:', error.message);
+        return null;
+    })))).filter(Boolean);
 }
 
 // A lore's sentences, keeping a spoiler span whole even when it holds several sentences.

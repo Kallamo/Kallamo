@@ -155,6 +155,17 @@ end up on the original.
   A reference to something that does not exist or is of the wrong kind is dropped.
 - **Places need a home.** A spot or place is created on its own only inside an area or place that
   already exists; without one it waits for review.
+- **Filled at birth.** Right after a sheet is created (provisional or confirmed), one short call
+  reads the turn that brought it in and fills the part of the sheet that says what it is, so the
+  next turn already reads it (`features/worldbuild/first-fill.js`): a character's Identity (status,
+  gender, age, the race the scene names if the world has it), a creature's Details, an item's
+  Details and a location's Overview without the description, and for every type the user's fields
+  placed in those sections or in none, each by its own AI guidance and options. Read-only and
+  hidden fields are never written; a field still at its default counts as empty. What the scene
+  states or plainly shows is filled (pronouns, an evident age, a role); what it gives no ground for
+  stays empty. Level, attributes and skills come with the proposal's starting profile when the
+  world has progression. Description, lore, appearance, personality and links to places wait for
+  Update entities. The message diagnostics list what each new sheet got under `firstFill`.
 
 ## Changing what is stored
 
