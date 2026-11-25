@@ -1623,7 +1623,7 @@ export default function ChatWorkspaceView() {
       )}
 
       {/* Floating Error modal for failed message edit */}
-      {editError && (
+      {editError && editError.thread === thread && (
         <div className="absolute bottom-28 right-6 w-80 bg-surface-danger border border-status-danger/30 rounded-xl p-4 shadow-[0_0_20px_color-mix(in_srgb,var(--theme-shade)_60%,transparent)] z-50 animate-in fade-in slide-in-from-bottom-5 duration-300 flex flex-col space-y-3">
           <div className="flex items-start justify-between">
             <div className="flex items-center space-x-2 text-status-danger">

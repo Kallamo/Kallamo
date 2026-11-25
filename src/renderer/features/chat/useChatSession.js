@@ -174,8 +174,10 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
 
     setIsLoadingOlderMessages(true);
+    const thread = activeThreadRef.current;
     try {
-      const page = await api.getChatMessagePage({ chatId: activeChatId, before: oldestMessageCursor, thread: activeThreadRef.current });
+      const page = await api.getChatMessagePage({ chatId: activeChatId, before: oldestMessageCursor, thread });
+      if (!isShown(activeChatId, thread)) return;
       setActiveMessages(previous => [...page.messages, ...previous]);
       setHasOlderMessages(page.hasMore);
       setOldestMessageCursor(page.oldestCursor);
@@ -188,17 +190,19 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
 
     setIsLoadingOlderMessages(true);
+    const thread = activeThreadRef.current;
     try {
       const olderMessages = [];
       let cursor = oldestMessageCursor;
       let hasMore = hasOlderMessages;
 
       while (hasMore) {
-        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor, thread: activeThreadRef.current });
+        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor, thread });
         olderMessages.unshift(...page.messages);
         cursor = page.oldestCursor;
         hasMore = page.hasMore;
       }
+      if (!isShown(activeChatId, thread)) return;
 
       setActiveMessages(previous => [...olderMessages, ...previous]);
       setHasOlderMessages(false);
@@ -212,16 +216,18 @@ export function useChatSession({ api, setChats, setCurrentView }) {
   const loadOlderUntil = async (messageId) => {
     if (!activeChatId || !hasOlderMessages || !oldestMessageCursor || isLoadingOlderMessages) return;
     setIsLoadingOlderMessages(true);
+    const thread = activeThreadRef.current;
     try {
       const olderMessages = [];
       let cursor = oldestMessageCursor;
       let hasMore = hasOlderMessages;
       while (hasMore && !olderMessages.some(message => message.id === messageId)) {
-        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor, thread: activeThreadRef.current });
+        const page = await api.getChatMessagePage({ chatId: activeChatId, before: cursor, thread });
         olderMessages.unshift(...page.messages);
         cursor = page.oldestCursor;
         hasMore = page.hasMore;
       }
+      if (!isShown(activeChatId, thread)) return;
       setActiveMessages(previous => [...olderMessages, ...previous]);
       setHasOlderMessages(hasMore);
       setOldestMessageCursor(cursor);
@@ -321,7 +327,7 @@ export function useChatSession({ api, setChats, setCurrentView }) {
     };
 
     await api.saveMessage(userMsg);
-    setActiveMessages(previous => [...previous, userMsg]);
+    if (isShown(activeChatId, thread)) setActiveMessages(previous => [...previous, userMsg]);
     setIsGenerating(true);
     setGenerationProgress({ chatId: activeChatId, thread, step: 1, totalSteps: 1, profileName: 'System', status: 'Thinking...' });
 
@@ -422,9 +428,10 @@ export function useChatSession({ api, setChats, setCurrentView }) {
       await saveAlternative(oldAlternative, messages);
     } catch (error) {
       console.error('EditUserMessage generation error:', error);
-      setActiveMessages(activeMessages);
+      if (isShown(activeChatId, thread)) setActiveMessages(activeMessages);
       setEditError({
         chatId: activeChatId,
+        thread,
         editedText: newText,
         msgId: messageId,
         targetId: selectedProfileOrWorkflowId,
