@@ -48,6 +48,8 @@ const FOLLOW_LATEST_THRESHOLD_PX = 96;
 // must be known when the scroll position is set. Older rows may skip offscreen rendering.
 const ALWAYS_RENDERED_ROWS = 10;
 
+const NO_FILES = [];
+
 const bubbleAlpha = opacity => opacity / 100;
 const ROLEPLAY_KEPT_LINE = count => `Your roleplay is kept (${count} ${count === 1 ? 'message' : 'messages'}). It comes back when Roleplay mode is on.`;
 
@@ -271,7 +273,13 @@ export default function ChatWorkspaceView() {
   const [confirmDeleteData, setConfirmDeleteData] = useState(null);
   const [deleteAttachedFiles, setDeleteAttachedFiles] = useState(true);
 
-  const [pendingFiles, setPendingFiles] = useState([]);
+  // Attachments wait with the draft of their own conversation.
+  const [pendingFilesByThread, setPendingFilesByThread] = useState({});
+  const pendingFiles = pendingFilesByThread[thread] || NO_FILES;
+  const setPendingFiles = (next, forThread = thread) => setPendingFilesByThread(previous => ({
+    ...previous,
+    [forThread]: typeof next === 'function' ? next(previous[forThread] || NO_FILES) : next
+  }));
 
   const [isDragging, setIsDragging] = useState(false);
   const dragCounter = useRef(0);
@@ -353,7 +361,7 @@ export default function ChatWorkspaceView() {
         path: file.path || '',
         size: file.size || 0
       }];
-    });
+    }, 'chat');
     setActiveSubView('chat');
   };
 
@@ -1500,7 +1508,7 @@ export default function ChatWorkspaceView() {
                   className="hidden"
                 />
                 <ChatInput
-                  key={activeChat.id}
+                  key={`${activeChat.id}:${thread}`}
                   canSend={canSend}
                   hasTargets={displayProfiles.length > 0 || displayWorkflows.length > 0}
                   isGenerating={isGenerating}
@@ -1508,7 +1516,7 @@ export default function ChatWorkspaceView() {
                   onSend={handleSend}
                   pendingFileCount={pendingFiles.length}
                   placeholder={activeMessages.length > 0 ? 'Write a message…' : 'Write a message or drop files here…'}
-                  workspaceId={activeChat.id}
+                  draftKey={`${activeChat.id}:${thread}`}
                   leading={(
                     <>
                       <IconButton icon={Paperclip} label="Attach files" size="sm" onClick={() => fileInputRef.current?.click()} />

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { SendHorizontal, Square } from 'lucide-react';
 
+// One draft per workspace and thread, so Chat and Roleplay keep their own unsent text.
 const sessionDrafts = new Map();
 
 // The composer: the draft on top, the tools row below. `leading` and `trailing`
@@ -13,11 +14,11 @@ export default function ChatInput({
   onSend,
   pendingFileCount,
   placeholder,
-  workspaceId,
+  draftKey,
   leading,
   trailing
 }) {
-  const [inputValue, setInputValue] = useState(() => sessionDrafts.get(workspaceId) || '');
+  const [inputValue, setInputValue] = useState(() => sessionDrafts.get(draftKey) || '');
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -27,13 +28,13 @@ export default function ChatInput({
   }, [inputValue]);
 
   useEffect(() => {
-    setInputValue(sessionDrafts.get(workspaceId) || '');
-  }, [workspaceId]);
+    setInputValue(sessionDrafts.get(draftKey) || '');
+  }, [draftKey]);
 
   const updateInputValue = (value) => {
     setInputValue(value);
-    if (value) sessionDrafts.set(workspaceId, value);
-    else sessionDrafts.delete(workspaceId);
+    if (value) sessionDrafts.set(draftKey, value);
+    else sessionDrafts.delete(draftKey);
   };
 
   const submit = () => {
