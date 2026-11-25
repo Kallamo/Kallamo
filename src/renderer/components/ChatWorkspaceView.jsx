@@ -299,18 +299,16 @@ export default function ChatWorkspaceView() {
     : { autoSummarize: activeChat?.autoSummarize, archiveThreshold: activeChat?.archiveThreshold, lastTargetId: activeChat?.lastTargetId };
   const autoSummarizeKey = `${activeChat?.id}:${thread}`;
 
-  // Counts summaries only, from the highest number used, so a deleted one never hands its number on.
-  const nextSummaryNumber = useMemo(() => {
-    const blocks = safeParseJson(activeChat?.memoryBlocks, []);
-    const used = (Array.isArray(blocks) ? blocks : [])
-      .filter(block => block && block.type === 'summarized')
-      .map(block => {
-        const match = /^\s*Summarization\s+(\d+)\s*$/i.exec(String(block.title || ''));
-        return match ? Number(match[1]) : 0;
-      });
-    const summaryCount = (Array.isArray(blocks) ? blocks : []).filter(block => block && block.type === 'summarized').length;
-    return Math.max(summaryCount, ...used, 0) + 1;
-  }, [activeChat?.memoryBlocks]);
+  // Counts this conversation's summaries only, from the highest number used, so a deleted one never hands its number on.
+  const summaryTitlePrefix = thread === 'roleplay' ? 'Roleplay' : 'Chat';
+  const nextSummaryTitle = useMemo(() => {
+    const summaries = threadMemoryBlocks.filter(block => block && block.type === 'summarized');
+    const used = summaries.map(block => {
+      const match = /^\s*(?:Summarization|(?:Chat|Roleplay)\s*·\s*Summary)\s+(\d+)\s*$/i.exec(String(block.title || ''));
+      return match ? Number(match[1]) : 0;
+    });
+    return `${summaryTitlePrefix} · Summary ${Math.max(summaries.length, ...used, 0) + 1}`;
+  }, [threadMemoryBlocks, summaryTitlePrefix]);
   const [isVectorizing, setIsVectorizing] = useState(false);
   // Bumped whenever archiving changes message state (covered or dropped) without
   // adding or removing messages, so the full history is read again.
@@ -1679,7 +1677,7 @@ export default function ChatWorkspaceView() {
         thread={thread}
         workspaceName={thread === 'roleplay' ? `${activeChat.title} · Roleplay` : activeChat.title}
         electronAPI={electronAPI}
-        nextSummaryNumber={nextSummaryNumber}
+        defaultTitle={nextSummaryTitle}
         onConfirm={handleExecuteSummarization}
         isVectorizing={isVectorizing}
         progress={summarizeProgress}

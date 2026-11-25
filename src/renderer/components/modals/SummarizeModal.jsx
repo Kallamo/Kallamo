@@ -34,7 +34,7 @@ export default function SummarizeModal({
   chatId,
   thread = 'chat',
   electronAPI,
-  nextSummaryNumber = 1,
+  defaultTitle = 'Summary',
   onConfirm,
   isVectorizing,
   progress,
@@ -136,7 +136,7 @@ export default function SummarizeModal({
     onConfirm({
       messageIds: visibleList.filter(m => m.state === ARCHIVE).map(m => m.id),
       excludedMessageIds: visibleList.filter(m => m.state === DROP).map(m => m.id),
-      customTitle: customTitle.trim() || `Summarization ${nextSummaryNumber}`
+      customTitle: customTitle.trim() || defaultTitle
     });
   };
 
@@ -166,7 +166,7 @@ export default function SummarizeModal({
               value={customTitle}
               onChange={(e) => setCustomTitle(e.target.value)}
               disabled={isVectorizing}
-              placeholder={`Summarization ${nextSummaryNumber}`}
+              placeholder={defaultTitle}
               className="field-input h-10 px-3 text-sm"
             />
           </label>
