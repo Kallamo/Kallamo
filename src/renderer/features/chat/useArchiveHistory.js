@@ -20,37 +20,42 @@ const cancelIdle = handle => {
   if (handle.timer !== undefined) clearTimeout(handle.timer);
 };
 
+const NO_HISTORY = [];
+
 // The complete persisted history, for context estimates and archiving prompts. It is read
 // from disk when the workspace opens or archiving changes older messages; each new reply
-// is merged from the page instead of re-reading the whole chat.
+// is merged from the page instead of re-reading the whole chat. Until the conversation on
+// screen has been read, nothing is returned, never the history of the one just left.
 export function useArchiveHistory({ api, chatId, thread = 'chat', activeMessages, revision, memoryBlocks }) {
-  const [history, setHistory] = useState([]);
+  const key = chatId ? `${chatId}:${thread}` : null;
+  const [history, setHistory] = useState({ key: null, messages: NO_HISTORY });
   const baseRef = useRef(null);
   const activeMessagesRef = useRef(activeMessages);
   activeMessagesRef.current = activeMessages;
 
   useEffect(() => {
     baseRef.current = null;
-    if (!chatId) {
-      setHistory([]);
+    if (!key) {
+      setHistory({ key: null, messages: NO_HISTORY });
       return undefined;
     }
     let cancelled = false;
     const handle = scheduleIdle(async () => {
       const messages = await api.getChatMessages(chatId, thread);
       if (cancelled) return;
-      baseRef.current = messages || [];
-      setHistory(mergeHistory(baseRef.current, activeMessagesRef.current));
+      baseRef.current = { key, messages: messages || [] };
+      setHistory({ key, messages: mergeHistory(baseRef.current.messages, activeMessagesRef.current) });
     });
     return () => {
       cancelled = true;
       cancelIdle(handle);
     };
-  }, [api, chatId, thread, revision, memoryBlocks]);
+  }, [api, chatId, thread, key, revision, memoryBlocks]);
 
   useEffect(() => {
-    if (baseRef.current) setHistory(mergeHistory(baseRef.current, activeMessages));
-  }, [activeMessages]);
+    const base = baseRef.current;
+    if (base && base.key === key) setHistory({ key, messages: mergeHistory(base.messages, activeMessages) });
+  }, [activeMessages, key]);
 
-  return history;
+  return history.key === key ? history.messages : NO_HISTORY;
 }
