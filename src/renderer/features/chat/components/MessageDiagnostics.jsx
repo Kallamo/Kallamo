@@ -242,10 +242,15 @@ function TokensView({ debug }) {
               </div>
             ))}
           </div>
-          <p className={`mt-1.5 text-xs ${cacheNet >= 0 ? 'text-status-success' : 'text-status-warning'}`}>
-            {cacheNet >= 0 ? `Saved ≈ ${fmt(cacheNet)} input tokens` : `Cost ≈ ${fmt(-cacheNet)} extra input tokens this turn`}
-            {cache.savingsKnown === false && <span className="text-text-muted"> · reads from an automatic cache are billed at the model's cached-input rate</span>}
-          </p>
+          {cache.savingsKnown === false ? (
+            <p className="mt-1.5 text-xs text-text-muted">
+              Savings unknown · reads from an automatic cache are billed at the model's cached-input rate
+            </p>
+          ) : (
+            <p className={`mt-1.5 text-xs ${cacheNet >= 0 ? 'text-status-success' : 'text-status-warning'}`}>
+              {cacheNet >= 0 ? `Saved ≈ ${fmt(cacheNet)} input tokens` : `Cost ≈ ${fmt(-cacheNet)} extra input tokens this turn`}
+            </p>
+          )}
         </div>
       )}
     </div>
