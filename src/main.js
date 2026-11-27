@@ -104,6 +104,19 @@ function isViteDevRunning() {
   });
 }
 
+// electron:dev starts Vite and Electron together and the window can be ready first;
+// without the wait it would load a stale dist/.
+const VITE_DEV_WAIT_MS = 10000;
+
+async function waitForViteDev() {
+  const deadline = Date.now() + VITE_DEV_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (await isViteDevRunning()) return true;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
 // The version that last opened the data; a different one means migrations are about to run.
 const LAST_VERSION_FILE = () => path.join(app.getPath('userData'), 'last-version.json');
 
@@ -211,7 +224,7 @@ function createWindow () {
   if (app.isPackaged) {
     loadBuiltRenderer();
   } else {
-    isViteDevRunning().then((devRunning) => {
+    waitForViteDev().then((devRunning) => {
       if (devRunning) {
         console.log('[Main] Loading from Vite dev server...');
         mainWindow.loadURL('http://localhost:5173');
