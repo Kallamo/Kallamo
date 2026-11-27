@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ArrowRight, BookOpen, ChevronLeft, ChevronRight, Clock, Coins, Eye, Guitar, MapPin, Route, Shapes, Shield, Slice, Sword, User, UserPlus, Users,
+  ArrowRight, BookOpen, ChevronLeft, ChevronRight, Clock, Coins, Cpu, Eye, Guitar, MapPin, Route, Shapes, Shield, Slice, Sparkles, Sword, User, UserPlus, Users,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import Modal from '../../components/ui/Modal';
@@ -9,8 +9,8 @@ import wellPainting from '../../../assets/whats-new-banner.jpg';
 import { useTour } from './GuidedTour';
 import { beginStory, setStoryStage } from './storyActions';
 
-const ICONS = { knife: Slice, coins: Coins, book: BookOpen, shield: Shield, guitar: Guitar, sword: Sword, shapes: Shapes, user: User, 'user-plus': UserPlus, eye: Eye, clock: Clock, users: Users };
-const PAGES = ['intro', 'world', 'pick'];
+const ICONS = { knife: Slice, coins: Coins, book: BookOpen, shield: Shield, guitar: Guitar, sword: Sword, shapes: Shapes, user: User, 'user-plus': UserPlus, eye: Eye, clock: Clock, users: Users, sparkles: Sparkles, cpu: Cpu };
+const PAGES = ['intro', 'narrators', 'world', 'pick'];
 
 // The first visit to a seeded story: what the Narrative State does, the world, then who to play.
 export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
@@ -125,7 +125,7 @@ export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
       {page === 'intro' && (
         <>
           <div className="flex flex-col gap-5 px-8 pb-6 pt-7">
-            <DialogHeading icon={Route} eyebrow={`Before the story · 1 of ${PAGES.length}`} title={story.intro.title} />
+            <DialogHeading icon={Route} eyebrow={`Before the story · ${step + 1} of ${PAGES.length}`} title={story.intro.title} />
             <p className="text-sm leading-relaxed text-text-secondary">{story.intro.text}</p>
             <ul className="flex flex-col gap-2.5">
               {story.intro.points.map(point => {
@@ -143,6 +143,32 @@ export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
             </ul>
           </div>
           <Footer step={step} left={<Button variant="subtle" onClick={() => setPage('pick')}>Skip introduction</Button>}>
+            <Button autoFocus onClick={() => setPage('narrators')}>Continue<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" /></Button>
+          </Footer>
+        </>
+      )}
+
+      {page === 'narrators' && (
+        <>
+          <div className="flex flex-col gap-5 px-8 pb-6 pt-7">
+            <DialogHeading icon={Sparkles} eyebrow={`Before the story · ${step + 1} of ${PAGES.length}`} title={story.narrators.title} />
+            <p className="text-sm leading-relaxed text-text-secondary">{story.narrators.text}</p>
+            <ul className="flex flex-col gap-2.5">
+              {story.narrators.points.map(point => {
+                const Icon = ICONS[point.icon] || Eye;
+                return (
+                  <li key={point.title} className="flex items-start gap-3 rounded-card border border-tint/[0.09] bg-tint/[0.03] px-4 py-3.5">
+                    <Icon className="mt-px h-[1.125rem] w-[1.125rem] shrink-0 text-accent" aria-hidden="true" />
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-semibold text-text-primary">{point.title}</span>
+                      <span className="text-xs leading-relaxed text-text-muted">{point.text}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <Footer step={step} left={<Button variant="ghost" onClick={() => setPage('intro')}>Back</Button>}>
             <Button autoFocus onClick={() => setPage('world')}>Continue<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" /></Button>
           </Footer>
         </>
@@ -162,7 +188,7 @@ export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
           </div>
           <div className="flex flex-col gap-3.5 px-8 pb-6 pt-2">
             <div className="flex flex-col gap-0.5">
-              <span className="text-xs font-semibold text-text-muted">The world · 2 of {PAGES.length}</span>
+              <span className="text-xs font-semibold text-text-muted">The world · {step + 1} of {PAGES.length}</span>
               <h2 className="text-xl font-extrabold tracking-[-0.015em] text-text-primary">{story.world.title}</h2>
             </div>
             {story.world.paragraphs.map(text => <p key={text.slice(0, 24)} className="text-sm leading-relaxed text-text-secondary">{text}</p>)}
@@ -181,7 +207,7 @@ export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
               </div>
             </div>
           </div>
-          <Footer step={step} left={<Button variant="ghost" onClick={() => setPage('intro')}>Back</Button>}>
+          <Footer step={step} left={<Button variant="ghost" onClick={() => setPage('narrators')}>Back</Button>}>
             <Button onClick={() => setPage('pick')}>Pick a character<ArrowRight className="h-3.5 w-3.5" aria-hidden="true" /></Button>
           </Footer>
         </>
@@ -190,7 +216,7 @@ export default function StoryIntro({ workspaceId, visible, onActiveChange }) {
       {page === 'pick' && (
         <>
           <div className="flex flex-col gap-5 px-8 pb-7 pt-7">
-            <DialogHeading icon={Users} eyebrow={`Your character · 3 of ${PAGES.length}`} title="Who do you want to be?" />
+            <DialogHeading icon={Users} eyebrow={`Your character · ${step + 1} of ${PAGES.length}`} title="Who do you want to be?" />
             <div className="flex items-center gap-2">
               <StepButton label="Previous character" icon={ChevronLeft} onClick={() => setPick((pick - 1 + options.length) % options.length)} />
               <div role="radiogroup" aria-label="Characters" className="flex min-w-0 flex-1 gap-1 rounded-control border border-border-default bg-surface-inset p-1">

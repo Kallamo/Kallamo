@@ -147,7 +147,8 @@ const setup = {
         title: 'AI profiles',
         body: <>
           <P>An AI profile is a voice: a model, a set of rules and a personality. It is what replies to you in a workspace, and one workspace can use several.</P>
-          <P>Profiles marked <b className="font-semibold text-status-setup">Needs a model</b> cannot reply yet. Kallamo comes with a few, including the Evenwell GM, who runs the guided story.</P>
+          <P>Profiles marked <b className="font-semibold text-status-setup">Needs a model</b> cannot reply yet. Kallamo comes with a few, including the Universal GM, who narrates the guided story and any world you build.</P>
+          <P>Running a model on your own computer? Use <B>Universal GM Lite</B> instead: its shorter rules are easier for smaller models to follow.</P>
           <P>Select a profile, then press <B>Set up</B>.</P>
         </>,
         missing: 'Open the Library from the launch screen.',

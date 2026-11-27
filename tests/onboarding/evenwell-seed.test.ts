@@ -123,8 +123,9 @@ describe('the Evenwell onboarding', () => {
     expect(onboarding.seedOnce()).toBeNull();
     const chat = harness.db.prepare('SELECT title, activeProfiles FROM chats WHERE id = ?').get(workspaceId) as any;
     expect(chat.title).toBe('Evenwell');
-    const profile = harness.db.prepare('SELECT name FROM writing_profiles WHERE id = ?').get(JSON.parse(chat.activeProfiles)[0]) as any;
-    expect(profile.name).toBe(story.GM_PROFILE.name);
+    const active = JSON.parse(chat.activeProfiles).map((id: string) => (harness.db.prepare('SELECT name, agenticPrompt FROM writing_profiles WHERE id = ?').get(id) as any));
+    expect(active.map((profile: any) => profile.name)).toEqual(['Narrator · Universal GM', 'Narrator · Universal GM Lite']);
+    expect(active.every((profile: any) => profile.agenticPrompt.length > 0)).toBe(true);
     expect(scenes[0].locationId).toBeTruthy();
     const authored = harness.db.prepare(`
       SELECT provenance_interpreter_id AS by, COUNT(*) AS count FROM narrative_events

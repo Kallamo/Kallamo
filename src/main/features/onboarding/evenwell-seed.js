@@ -1,6 +1,7 @@
 const path = require('path');
 const crypto = require('crypto');
 const story = require('./evenwell-story');
+const { NARRATOR_PROFILES } = require('./narrator-profiles');
 const { TEXTS_FOLDER } = require('../worldbuild/in-world-texts');
 const SEEDED_BY = require('../../../shared/seed-provenance.json');
 
@@ -36,8 +37,8 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
   ).all(workspaceId, type).map(row => [row.canonicalName, row.id]));
 
   // A profile still in the Library under the same name is reused as it is, model and all.
-  function ensureProfile(now) {
-    const existing = db.prepare('SELECT id FROM writing_profiles WHERE name = ? ORDER BY last_modified DESC LIMIT 1').get(story.GM_PROFILE.name);
+  function ensureProfile(profile, now) {
+    const existing = db.prepare('SELECT id FROM writing_profiles WHERE name = ? ORDER BY last_modified DESC LIMIT 1').get(profile.name);
     if (existing) return existing.id;
     const id = newId('wp');
     db.prepare(`
@@ -45,8 +46,9 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
         id, name, description, color, apiProfileId, model, temperature, maxTokens,
         systemPrompt, knowledgeFiles, manualMode, manualJson, isAgentic, agenticPrompt, agenticMaxTurns,
         resultChannel, contextWindow, last_modified, syncToCloud
-      ) VALUES (?, ?, ?, ?, NULL, NULL, 0.8, 6000, ?, '[]', 0, '', 1, '', 3, 'replacement', 8192, ?, 0)
-    `).run(id, story.GM_PROFILE.name, story.GM_PROFILE.description, story.GM_PROFILE.color, story.GM_PROFILE.systemPrompt, now);
+      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, '[]', 0, '', 1, ?, ?, 'replacement', 8192, ?, 0)
+    `).run(id, profile.name, profile.description, profile.color, profile.temperature, profile.maxTokens,
+      profile.systemPrompt, profile.agenticPrompt, profile.agenticMaxTurns, now);
     return id;
   }
 
@@ -55,7 +57,8 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     const now = Date.now();
     const workspaceId = newId('chat');
     try {
-      const profileId = ensureProfile(now);
+      const profileIds = NARRATOR_PROFILES.map(profile => ensureProfile(profile, now));
+      const profileId = profileIds[0];
       const title = nextStoryTitle(story.WORKSPACE.title, db.prepare('SELECT title FROM chats').all().map(row => row.title));
       db.transaction(() => {
         db.prepare(`
@@ -63,7 +66,7 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
             id, title, description, updatedAt, isPinned, maxContext, archiveThreshold, summarizedIndex,
             activeProfiles, activeWorkflows, backgroundImage, backdropOpacity, userBubbleOpacity, aiBubbleOpacity, memoryBlocks, knowledgeFiles, autoSummarize, syncToCloud
           ) VALUES (?, ?, ?, ?, 0, 128000, 60000, 0, ?, '[]', '', 25, 75, 75, '[]', '[]', 0, 0)
-        `).run(workspaceId, title, story.WORKSPACE.description, recent ? now : 0, JSON.stringify([profileId]));
+        `).run(workspaceId, title, story.WORKSPACE.description, recent ? now : 0, JSON.stringify(profileIds));
         markPending(db, workspaceId);
       })();
       setExperienceMode(workspaceId, 'roleplay');
@@ -177,6 +180,7 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
       profileId: state.profileId || null,
       playerId: settings.playerEntityId,
       intro: story.INTRO,
+      narrators: story.NARRATORS,
       world: story.WORLD,
       newcomer: story.NEWCOMER,
       cast: [
@@ -212,7 +216,7 @@ function createEvenwellOnboarding({ db, readPackage, importPayload, roleplay, ca
     system.saveScene(workspaceId, { participantIds, nearbyIds });
 
     const profile = db.prepare('SELECT name, color FROM writing_profiles WHERE id = ?').get(state.profileId || '')
-      || { name: story.GM_PROFILE.name, color: story.GM_PROFILE.color };
+      || { name: NARRATOR_PROFILES[0].name, color: NARRATOR_PROFILES[0].color };
     const now = Date.now();
     const message = {
       id: newId('msg'),
