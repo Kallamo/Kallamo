@@ -928,8 +928,12 @@ function groupRecentTurns(configuration) {
       record
     });
   });
-  frames.forEach(frame => {
-    if (frame.advance) add(frame.originId, { id: `${frame.originId}:time`, kind: 'time', status: 'applied', createdAt: frame.createdAt, frame, resourceChanges: timeResourceChanges.get(frame.originId) || [] });
+  // A turn's end that the next turn, or the clock now, does not start from was set by hand.
+  const ordered = [...frames].sort((left, right) => left.createdAt - right.createdAt);
+  ordered.forEach((frame, index) => {
+    const next = ordered[index + 1]?.start || clockPoint(configuration.clock);
+    const adjustedTo = next?.position && frame.end?.position && !samePosition(next.position, frame.end.position) ? next : null;
+    if (frame.advance || adjustedTo) add(frame.originId, { id: `${frame.originId}:time`, kind: 'time', status: 'applied', createdAt: frame.createdAt, frame, adjustedTo, resourceChanges: timeResourceChanges.get(frame.originId) || [] });
   });
   return [...turns.values()]
     .filter(turn => (turn.frame || turn.manual) && turn.changes.length)
@@ -942,6 +946,19 @@ function groupRecentTurns(configuration) {
     .sort((left, right) => (right.manual ? right.createdAt : right.frame?.createdAt || right.createdAt || 0) - (left.manual ? left.createdAt : left.frame?.createdAt || left.createdAt || 0))
     .slice(0, 12);
 }
+
+const POSITION_KEYS = ['eraId', 'year', 'month', 'day', 'hour', 'minute'];
+const samePosition = (left, right) => POSITION_KEYS.every(key => (left[key] ?? null) === (right[key] ?? null));
+
+function clockPoint(clock) {
+  if (!clock) return null;
+  return {
+    position: Object.fromEntries(POSITION_KEYS.map(key => [key, clock[key]])),
+    display: { monthName: clock.monthName, eraShortName: clock.eraShortName }
+  };
+}
+
+const clockTime = position => `${String(position.hour ?? 0).padStart(2, '0')}:${String(position.minute ?? 0).padStart(2, '0')}`;
 
 function isPendingChange(change) {
   return change.status === 'pending' || change.status === 'proposed' || change.status === 'conflicting';
@@ -1002,7 +1019,8 @@ function describeRecentChange(change, names, definitions) {
   if (change.kind === 'time') {
     const end = change.frame.end;
     const advance = change.frame.advance;
-    const details = [`Time advanced to ${formatTurnDate(end)} at ${String(end.position.hour).padStart(2, '0')}:${String(end.position.minute).padStart(2, '0')}.`];
+    const details = [advance ? `Time advanced to ${formatTurnDate(end)} at ${clockTime(end.position)}.` : `Time stayed at ${formatTurnDate(end)} at ${clockTime(end.position)}.`];
+    if (change.adjustedTo) details.push(`Adjusted by you to ${formatTurnDate(change.adjustedTo)} at ${clockTime(change.adjustedTo.position)}.`);
     // A jump of days or more is the one time change worth reading twice, and a bound that
     // fired is the only sign the campaign clock did not do what the turn asked for.
     const skipped = describeElapsed(advance?.duration);
