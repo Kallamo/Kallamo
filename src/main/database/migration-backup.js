@@ -137,7 +137,7 @@ const removeCopy = (file) => {
 };
 
 // Once every WAL frame is backfilled, the main file alone is the whole database, and no other
-// connection can write to it while this module loads. A byte copy then beats VACUUM INTO, which
+// connection can write to it before database.js opens it. A byte copy then beats VACUUM INTO, which
 // rebuilds every index. PASSIVE never waits: a stricter mode would sit out the busy timeout.
 function copyDatabaseFile(db, target) {
   const [checkpoint] = db.pragma('wal_checkpoint(PASSIVE)');
@@ -161,7 +161,7 @@ function sealCopy(file) {
   }
 }
 
-// Synchronous on purpose: it runs while database.js loads, before anything else may touch the file.
+// Synchronous: it runs in the launch worker, or while database.js loads when that worker could not.
 // Only a verified, flushed copy is renamed to its final name, so a .db here is always whole.
 function createPreMigrationBackup(db, { backupDir, fromVersion, toVersion, now = Date.now(), statfs = fs.statfsSync }) {
   const startedAt = Date.now();

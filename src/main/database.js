@@ -20,12 +20,14 @@ const {
   bootFailureMessage,
   UNKNOWN_VERSION
 } = require('./database/migration-backup');
+const dataDirectories = require('./database/data-dir');
+const { takePreparedBackup } = require('./database/pre-update-backup');
 
-const appDataPath = process.env.APPDATA || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.local', 'share'));
+const appDataPath = dataDirectories.appDataPath();
 
 const oldDataDir1 = path.join(appDataPath, 'AI Writer Companion');
 const oldDataDir2 = path.join(appDataPath, 'Kalamo');
-const dataDir = path.join(appDataPath, 'Kallamo');
+const dataDir = dataDirectories.dataDirectory();
 
 if (fs.existsSync(oldDataDir2) && !fs.existsSync(dataDir)) {
   try {
@@ -216,7 +218,9 @@ if (backupNeeded) {
     ? Number(process.env.KALLAMO_SIMULATE_FREE_BYTES)
     : NaN;
   try {
-    preMigrationBackup = createPreMigrationBackup(db, {
+    const prepared = takePreparedBackup(dbPath);
+    if (prepared && prepared.error) throw prepared.error;
+    preMigrationBackup = (prepared && prepared.backup) || createPreMigrationBackup(db, {
       backupDir: migrationBackupDir,
       fromVersion: readSchemaAppVersion(db) || UNKNOWN_VERSION,
       toVersion: appVersion,

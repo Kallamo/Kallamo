@@ -227,7 +227,21 @@ app.whenReady().then(async () => {
   await splash.open();
   if (await updater.runAtLaunch(splash) === 'install') return;
 
-  splash.setStatus({ stage: openedByNewVersion() ? 'migrating' : 'opening' });
+  const migratingStage = openedByNewVersion() ? 'migrating' : 'opening';
+  splash.setStatus({ stage: migratingStage });
+  // The rehearsal env var fakes free space only on the copy database.js makes itself.
+  if (app.isPackaged || !process.env.KALLAMO_SIMULATE_FREE_BYTES) {
+    try {
+      await require('./main/database/pre-update-backup').backupBeforeUpdate({
+        appVersion: app.getVersion(),
+        migrationIds: require('./main/database/migrations').MIGRATIONS.map(migration => migration.id),
+        onCopying: () => splash.setStatus({ stage: 'backup' })
+      });
+    } catch (error) {
+      log.warn('[Database] The pre-update copy could not run in the background; it runs at load instead:', error);
+    }
+    splash.setStatus({ stage: migratingStage });
+  }
   // One beat so the status paints before the database work, which holds this thread.
   await new Promise(resolve => setTimeout(resolve, 60));
   require('./main/database');
