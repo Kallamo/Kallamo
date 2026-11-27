@@ -231,9 +231,10 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
         </>
       )}
 
-      <div className="mb-3 mt-7 flex flex-wrap items-center gap-3">
-        <h3 className="flex-1 text-[0.8125rem] font-semibold text-text-muted">Archive</h3>
-        {roleplayEnabled && (
+      <h3 className={`mt-7 text-[0.8125rem] font-semibold text-text-muted ${roleplayEnabled ? 'mb-1' : 'mb-3'}`}>Archive</h3>
+      {roleplayEnabled && (
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <p className="flex-1 text-xs text-text-subtle">Chat and Roleplay each keep their own threshold, archive and summaries. Showing:</p>
           <SegmentedControl
             label="Conversation"
             value={thread}
@@ -243,8 +244,8 @@ export default function ContextMemorySection({ sectionRef, activeChat, handleSav
               { value: 'roleplay', label: 'Roleplay', icon: Drama }
             ]}
           />
-        )}
-      </div>
+        </div>
+      )}
       <div className="grid gap-6 md:grid-cols-2">
         <UnitNumberField
           label="Archive threshold"
