@@ -308,13 +308,15 @@ function capDebugText(text, limit = DEBUG_TEXT_LIMIT) {
 // other panels; a long roleplay context alone runs past 100,000 characters.
 const REQUEST_TEXT_LIMIT = 600000;
 
-function recordGenerationRequest(request, { step, profileName, response, elapsedMs, outputTokens }) {
+function recordGenerationRequest(request, { step, profileName, response, elapsedMs, outputTokens, providerUsage = null }) {
     return {
         step,
         profileName,
         elapsedMs,
         inputTokens: request.inputTokens,
         outputTokens,
+        // The usage block exactly as the provider sent it, so cache fields under unknown names still show.
+        ...(providerUsage ? { providerUsage } : {}),
         ...(request.attachedImageCount ? { attachedImages: request.attachedImageCount } : {}),
         systemPrompt: capDebugText(request.systemPrompt, REQUEST_TEXT_LIMIT),
         history: (request.chatHistory || []).map(message => ({
@@ -1267,6 +1269,7 @@ async function runWorkflow({ chatId, thread: requestedThread, messageContent, ta
             let stepFinishReason = null;
             let stepLearnedRatio = null;
             let stepRequest = null;
+            let stepUsage = null;
 
             while (!success) {
                 if (currentRun.isCancelled) {
@@ -1309,7 +1312,10 @@ async function runWorkflow({ chatId, thread: requestedThread, messageContent, ta
                             volatile: volatileSystemSegment,
                             ttl: cacheTtl
                         } : null,
-                        onUsage: (metadata) => addCacheUsage(measuredCache, metadata),
+                        onUsage: (metadata) => {
+                            stepUsage = metadata?.usage ?? null;
+                            addCacheUsage(measuredCache, metadata);
+                        },
                         onRequest: debugSettings.ragDebug ? (request) => { stepRequest = request; } : null
                     };
 
@@ -1354,7 +1360,7 @@ async function runWorkflow({ chatId, thread: requestedThread, messageContent, ta
                     stepFinishReason = result?.finishReason ?? null;
                     stepLearnedRatio = result?.learnedTokenRatio ?? null;
                     success = true;
-                    if (stepRequest) generationRequests.push(recordGenerationRequest(stepRequest, { step: i + 1, profileName: profile.name, response: rawStepOutput, elapsedMs: Date.now() - attemptStartedAt, outputTokens: stepRawOutputTokens }));
+                    if (stepRequest) generationRequests.push(recordGenerationRequest(stepRequest, { step: i + 1, profileName: profile.name, response: rawStepOutput, elapsedMs: Date.now() - attemptStartedAt, outputTokens: stepRawOutputTokens, providerUsage: stepUsage }));
                 } catch (apiError) {
                     if (apiError.name === 'AbortError' || currentRun.isCancelled) {
                         return { success: false, cancelled: true };
