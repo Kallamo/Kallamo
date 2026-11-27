@@ -1,3 +1,5 @@
+const { parseExtraHeaders } = require('./connection-options');
+
 const LIST_TIMEOUT_MS = 15000;
 const MAX_PAGES = 10;
 
@@ -65,10 +67,11 @@ async function fetchPage(url, headers, fetchImpl) {
     return response.json().catch(() => null);
 }
 
-async function listProviderModels({ provider, baseUrl, apiKey }, fetchImpl = fetch) {
+async function listProviderModels({ provider, baseUrl, apiKey, extraHeaders = '' }, fetchImpl = fetch) {
     const key = String(provider || '').toLowerCase();
     if (!LISTING_PROVIDERS.includes(key)) throw new Error('This provider does not list its models here.');
-    const { headers, query } = requestFor(key, apiKey);
+    const { headers: base, query } = requestFor(key, apiKey);
+    const headers = ['openai', 'openrouter', 'local'].includes(key) ? { ...parseExtraHeaders(extraHeaders), ...base } : base;
     const root = modelsUrl(key, baseUrl);
     const ids = [];
     let page = {};

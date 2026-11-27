@@ -27,6 +27,7 @@ const BLANK_CONNECTION = {
   name: '', provider: 'OpenRouter', baseUrl: '', apiKey: '',
   gcpProjectId: '', gcpRegion: 'us-central1', gcpServiceAccount: '',
   awsAccessKeyId: '', awsSecretAccessKey: '', awsRegion: 'us-east-1',
+  extraHeaders: '', reasoning: 'auto',
   models: [],
 };
 
@@ -97,6 +98,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
   const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [extraHeaders, setExtraHeaders] = useState('');
+  const [reasoningMode, setReasoningMode] = useState('auto');
   const [showApiKey, setShowApiKey] = useState(false);
 
   const [gcpProjectId, setGcpProjectId] = useState('');
@@ -461,6 +464,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
   const connectionForm = () => ({
     name: apiName, provider: apiProvider, baseUrl: apiBaseUrl, apiKey,
     gcpProjectId, gcpRegion, gcpServiceAccount, awsAccessKeyId, awsSecretAccessKey, awsRegion,
+    extraHeaders, reasoning: reasoningMode,
     models: modelsList,
   });
 
@@ -476,6 +480,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
     setAwsAccessKeyId(form.awsAccessKeyId);
     setAwsSecretAccessKey(form.awsSecretAccessKey);
     setAwsRegion(form.awsRegion);
+    setExtraHeaders(form.extraHeaders);
+    setReasoningMode(form.reasoning);
     setModelsList(form.models);
     setNewModelName('');
     setProviderModels(null);
@@ -512,6 +518,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
       awsAccessKeyId: cfg.awsAccessKeyId || '',
       awsSecretAccessKey: cfg.awsSecretAccessKey || '',
       awsRegion: cfg.awsRegion || 'us-east-1',
+      extraHeaders: cfg.extraHeaders || '',
+      reasoning: cfg.reasoning || 'auto',
       models: parseModels(apiProf),
     });
     setFocusModelInput(false);
@@ -532,6 +540,8 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
     setAwsAccessKeyId('');
     setAwsSecretAccessKey('');
     setAwsRegion('us-east-1');
+    setExtraHeaders('');
+    setReasoningMode('auto');
     setModelsList([]);
     setNewModelName('');
     setProviderModels(null);
@@ -540,7 +550,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
   const fetchProviderModels = async () => {
     setFetchingModels(true);
     try {
-      const result = await electronAPI.listProviderModels({ provider: apiProvider, baseUrl: apiBaseUrl, apiKey });
+      const result = await electronAPI.listProviderModels({ provider: apiProvider, baseUrl: apiBaseUrl, apiKey, extraHeaders });
       if (!result?.success) return showToast(result?.error || 'Could not list models.', 'error');
       if (!result.models.length) return showToast('The server lists no models.', 'info');
       setProviderModels(result.models);
@@ -602,7 +612,10 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
       ? { gcpProjectId: gcpProjectId.trim(), gcpRegion: gcpRegion.trim(), gcpServiceAccount: gcpServiceAccount.trim() }
       : isBedrock
         ? { awsAccessKeyId: awsAccessKeyId.trim(), awsSecretAccessKey: awsSecretAccessKey.trim(), awsRegion: awsRegion.trim() }
-        : {};
+        : {
+          ...(TAKES_EXTRA_HEADERS.includes(apiProvider) && extraHeaders.trim() ? { extraHeaders: extraHeaders.trim() } : {}),
+          ...(SETS_REASONING.includes(apiProvider) && reasoningMode !== 'auto' ? { reasoning: reasoningMode } : {}),
+        };
 
     const apiObject = {
       id: targetId,
@@ -905,6 +918,16 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
             <SettingsRow data-tour="api-key" label="API key" description={apiProvider === 'Local' ? 'Optional. Most local servers do not need one.' : 'Stored on this computer only.'}>
               <SecretInput value={apiKey} onChange={setApiKey} placeholder={provider.keyPlaceholder} shown={showApiKey} onToggle={() => setShowApiKey(!showApiKey)} />
             </SettingsRow>
+            {SETS_REASONING.includes(apiProvider) && (
+              <SettingsRow label="Thinking models" description="Thinking models get extra room to reason before they answer. Auto goes by the model name and learns from replies that run out of room.">
+                <SegmentedControl label="Thinking models" value={reasoningMode} onChange={setReasoningMode} options={[{ value: 'auto', label: 'Auto' }, { value: 'always', label: 'Always' }, { value: 'never', label: 'Never' }]} />
+              </SettingsRow>
+            )}
+            {TAKES_EXTRA_HEADERS.includes(apiProvider) && (
+              <SettingsRow label="Extra headers" description="Optional. One Name: value per line, sent with every request. {session} becomes an id for the conversation. Stored like the API key.">
+                <textarea value={extraHeaders} onChange={e => setExtraHeaders(e.target.value)} rows={3} spellCheck={false} placeholder="X-Example-Header: value" className={`${fieldClass} w-80 resize-y font-mono text-[0.8125rem]`} />
+              </SettingsRow>
+            )}
           </>
         )}
       </SettingsGroup>
@@ -1751,6 +1774,8 @@ const PROVIDERS = [
 ];
 
 const LISTS_MODELS = ['OpenRouter', 'Anthropic', 'OpenAI', 'Google AI', 'Local'];
+const TAKES_EXTRA_HEADERS = ['OpenRouter', 'OpenAI', 'Local'];
+const SETS_REASONING = ['OpenRouter', 'Local'];
 const PROVIDER_MODELS_SHOWN = 100;
 
 const MODE_LABELS = { 'inherit-system': 'System AI', dedicated: 'Own model', disabled: 'Off', profile: 'Profile', off: 'Hybrid RAG' };

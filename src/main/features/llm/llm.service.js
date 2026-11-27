@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { undiciFetch, generationDispatcher } = require('./http-client');
 const { getResponseMetadata } = require('./response-metadata');
+const { LOCAL_STOP_SEQUENCES, cutAtTurnMarker, isLearnedReasoningModel, learnReasoningModel, parseExtraHeaders, spentOnReasoning } = require('./connection-options');
+const { version: APP_VERSION } = require('../../../../package.json');
 const { openAiResponseFormat, applyBedrockStructuredOutput, claudeCompatibleSchema, geminiResponseSchema } = require('./structured-output');
 const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload, safetyMarginFor } = require('./payload-budget');
 const { tokenRatio, recordTokenCount, correctedLimit, useTokenCalibrationStore } = require('./token-calibration');
@@ -76,11 +78,14 @@ function isOpenReasoningModel(model) {
         || /(?:^|[-_:.])(?:r1-distill|reasoning|thinking)(?:$|[-_:.])/.test(m);
 }
 
-function providerOutputLimit(provider, model, maxTokens) {
+// `reasoning` is the connection's setting: 'auto' trusts the name or what a reply showed, 'always'
+// and 'never' are for names that say nothing.
+function providerOutputLimit(provider, model, maxTokens, { reasoning = 'auto', learned = false } = {}) {
     const requested = requestedOutputTokens(maxTokens);
     const normalizedProvider = String(provider || '').toLowerCase();
+    const openReasoning = reasoning === 'always' || (reasoning !== 'never' && (learned || isOpenReasoningModel(model)));
     if (['openai', 'openrouter', 'local'].includes(normalizedProvider)
-        && (needsMaxCompletionTokens(model) || (normalizedProvider !== 'openai' && isOpenReasoningModel(model)))) {
+        && (needsMaxCompletionTokens(model) || (normalizedProvider !== 'openai' && openReasoning))) {
         return requested + REASONING_OUTPUT_HEADROOM;
     }
     if (['google ai', 'vertex ai'].includes(normalizedProvider) && isGeminiThinkingModel(model)) {
@@ -193,11 +198,28 @@ function resolveOpenAiCompatibleEndpoint(baseUrl, provider, kind) {
     return `https://api.openai.com/v1/${kind === 'embeddings' ? 'embeddings' : 'chat/completions'}`;
 }
 
-function buildOpenAiCompatibleHeaders(apiKey) {
-    const headers = { "Content-Type": "application/json" };
+// Reasoning is left whole; only the reply after it is cut.
+function cutReplyAtTurnMarker(text) {
+    const close = text.search(/<\/think>/i);
+    if (close === -1) return cutAtTurnMarker(text);
+    const end = close + '</think>'.length;
+    return text.slice(0, end) + cutAtTurnMarker(text.slice(end));
+}
+
+function readCustomConfig(apiProfile) {
+    if (!apiProfile?.customConfig) return {};
+    try {
+        return JSON.parse(getDatabase().decryptApiKey(apiProfile.customConfig)) || {};
+    } catch {
+        return {};
+    }
+}
+
+function buildOpenAiCompatibleHeaders(apiKey, extraHeaders = null, sessionKey = null) {
+    const headers = { "Content-Type": "application/json", "User-Agent": `Kallamo/${APP_VERSION}` };
     const normalizedKey = String(apiKey || '').trim();
     if (normalizedKey) headers.Authorization = `Bearer ${normalizedKey}`;
-    return headers;
+    return { ...headers, ...parseExtraHeaders(extraHeaders, { sessionKey }) };
 }
 
 async function readHttpErrorMessage(response) {
@@ -564,7 +586,10 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         role: msg.role === 'ai' ? 'assistant' : msg.role,
         content: msg.content
     }));
-    const outputTokens = providerOutputLimit(provider, model, maxTokens);
+    const outputTokens = providerOutputLimit(provider, model, maxTokens, {
+        reasoning: customConfig.reasoning,
+        learned: isLearnedReasoningModel(apiProfileId, model)
+    });
     const protocol = Array.isArray(conversation) ? 'native' : 'text';
     // A caller that sized the request on a resolved limit passes it, so a ratio learned
     // meanwhile cannot make this check disagree with that sizing.
@@ -626,7 +651,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         case 'openrouter':
         case 'local': {
             endpoint = resolveOpenAiCompatibleEndpoint(baseUrl, provider, 'chat');
-            requestHeaders = buildOpenAiCompatibleHeaders(apiKey);
+            requestHeaders = buildOpenAiCompatibleHeaders(apiKey, customConfig.extraHeaders, promptCache?.scopeId);
             if (provider === 'openrouter') {
                 requestHeaders["HTTP-Referer"] = "https://github.com/Kallamo/Kallamo";
                 requestHeaders["X-Title"] = "Kallamo";
@@ -686,6 +711,7 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
             } else {
                 requestBody.max_tokens = outputTokens;
             }
+            if (provider === 'local' && !jsonMode) requestBody.stop = LOCAL_STOP_SEQUENCES;
             break;
         }
 
@@ -1003,7 +1029,10 @@ async function buildRequest({ apiProfileId, model, systemPrompt = '', chatHistor
         });
     }
 
-    return { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, payloadLimit: limit, cachePlan };
+    // Whether a reply spent on reasoning may be retried with the headroom it did not get.
+    const reasoningRetry = ['openrouter', 'local'].includes(provider) && (customConfig.reasoning || 'auto') === 'auto'
+        && outputTokens === requestedOutputTokens(maxTokens);
+    return { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, payloadLimit: limit, cachePlan, reasoningRetry };
 }
 
 function geminiJsonConfig(jsonSchema) {
@@ -1041,7 +1070,7 @@ async function sendApiRequest(params, dependencies = {}) {
         params.onStructuredFallback?.({ remembered: true });
         params = { ...params, jsonSchema: null };
     }
-    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan } = await buildRequest(params, dependencies);
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan, reasoningRetry } = await buildRequest(params, dependencies);
     const { abortSignal } = params;
 
     try {
@@ -1060,8 +1089,17 @@ async function sendApiRequest(params, dependencies = {}) {
         }
 
         const data = await response.json();
-        const content = parseResponse(data, provider, Boolean(params.jsonMode));
         const metadata = getResponseMetadata(data, provider);
+        // A model unknown by name that ran out of room while still reasoning is retried once with the
+        // headroom, which it keeps for the rest of the session.
+        if (reasoningRetry && metadata.truncated && spentOnReasoning(data)) {
+            console.warn(`[LLM] ${params.model} spent its whole reply on reasoning; retrying with reasoning headroom.`);
+            learnReasoningModel(params.apiProfileId, params.model);
+            params.onReasoningRetry?.({ model: params.model });
+            return sendApiRequest(params, dependencies);
+        }
+        let content = parseResponse(data, provider, Boolean(params.jsonMode));
+        if (provider === 'local' && !params.jsonMode) content = cutReplyAtTurnMarker(content);
         const learnedTokenRatio = learnFromReportedTokens(tokenSample, readUsage(provider, data).totalInputTokens);
         // A scope that keeps paying the write surcharge without reading it back is put on cooldown.
         if (params.promptCache?.scopeId) {
@@ -1178,7 +1216,7 @@ async function getEmbeddings(text, apiProfileId, modelName) {
         case 'openrouter':
         case 'local':
             endpoint = resolveOpenAiCompatibleEndpoint(baseUrl, provider, 'embeddings');
-            requestHeaders = buildOpenAiCompatibleHeaders(apiKey);
+            requestHeaders = buildOpenAiCompatibleHeaders(apiKey, readCustomConfig(apiProfile).extraHeaders);
             requestBody = {
                 input: text,
                 model: modelName || "text-embedding-3-small"

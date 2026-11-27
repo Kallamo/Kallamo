@@ -1,5 +1,6 @@
 const { undiciFetch, generationDispatcher } = require('./http-client');
 const { buildRequest, parseStreamChunk, sendApiRequest, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
+const { cutAtTurnMarker, learnReasoningModel } = require('./connection-options');
 const { getResponseMetadata } = require('./response-metadata');
 const { recordCacheOutcome, markLongTtlRefused, cacheModeFor } = require('./prompt-cache');
 
@@ -23,7 +24,7 @@ function streamError(message, code) {
 // Returns the same shape as sendApiRequest, so the saved reply is identical with or without streaming.
 // A provider error event fails the stream instead of saving partial text; an abort returns what arrived.
 async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies = {}) {
-    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan } = await buildRequest({ ...params, stream: true }, dependencies);
+    const { endpoint, requestHeaders, requestBodyPayload, provider, tokenSample, cachePlan, reasoningRetry } = await buildRequest({ ...params, stream: true }, dependencies);
 
     if (STREAM_UNSUPPORTED.has(provider)) {
         return sendApiRequest(params, dependencies);
@@ -56,6 +57,7 @@ async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies
     // Parity with parseResponse: a jsonMode caller parses the reply as an object,
     // so reasoning is dropped instead of being prepended.
     const finalize = () => {
+        if (provider === 'local' && !params.jsonMode) content = cutAtTurnMarker(content);
         const text = reasoning && !params.jsonMode ? `<think>${reasoning}</think>${content}` : content;
         if (!params.includeResponseMetadata) return text;
         return {
@@ -127,6 +129,10 @@ async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies
             throw streamError(`The provider stopped this reply (${finishReason}).`, 'PROVIDER_BLOCKED');
         }
         learnedTokenRatio = learnFromReportedTokens(tokenSample, reportedInputTokens);
+        // The streamed reasoning is already on screen, so the next request gets the headroom instead of a retry.
+        if (reasoningRetry && reasoning && !content.trim() && TRUNCATION_REASONS.has(String(finishReason || '').toLowerCase())) {
+            learnReasoningModel(params.apiProfileId, params.model);
+        }
         return finalize();
 
     } catch (error) {
