@@ -86,7 +86,7 @@ describe('character scene memory', () => {
   test('a replaced or deleted reply drops out of memory and presence', () => {
     turn('reply-1', 10, ['player', 'guard'], [update('guard', { perceived: ['the gate was shut'] })]);
     turn('reply-2', 20, ['player', 'guard'], [update('guard', { perceived: ['a fire broke out'] })]);
-    db.prepare("INSERT INTO narrative_origin_lifecycle VALUES (?, 'reply-2', 'superseded', NULL, 30)").run(WS);
+    db.prepare("INSERT INTO narrative_origin_lifecycle (workspace_id, origin_id, status, replacement_origin_id, updated_at) VALUES (?, 'reply-2', 'superseded', NULL, 30)").run(WS);
 
     expect(memory.load(WS, ['guard'])[0].current.lines.map(line => line.text)).toEqual(['the gate was shut']);
     expect(memory.latestStances(WS, ['guard'])).toEqual([]);

@@ -8,7 +8,8 @@ const {
   TURN_OWNED_THROUGH_EVENTS,
   NOT_TURN_TABLES,
   deadOrigins,
-  purgeDeadTurns
+  purgeDeadTurns,
+  PURGE_REOPENING_TABLES
 } = require('../../src/main/features/narrative/turn-ownership.js');
 
 const LOOKS_LIKE_A_TURN_COLUMN = /^(origin_id|provenance_id|source_event_id|event_id|narrative_event_id)$/;
@@ -45,6 +46,12 @@ describe('the registry of turn-owned tables', () => {
     ]);
     const missing = schemaTables().filter(table => !declared.has(table)
       && columnsOf(table).some(column => LOOKS_LIKE_A_TURN_COLUMN.test(column.name)));
+    expect(missing).toEqual([]);
+  });
+
+  test('every table a late analysis writes to puts a purged turn back in line', () => {
+    const triggers = new Set(rows("SELECT name FROM sqlite_master WHERE type = 'trigger'").map(row => row.name));
+    const missing = PURGE_REOPENING_TABLES.filter((entry: any) => !triggers.has(`turn_purge_reopen_${entry.table}`));
     expect(missing).toEqual([]);
   });
 
@@ -133,5 +140,24 @@ describe('purgeDeadTurns', () => {
     expect(deadOrigins(harness.db, 'ws')).toEqual([]);
     harness.db.prepare("DELETE FROM narrative_turn_replacements").run();
     expect(deadOrigins(harness.db, 'ws').map((origin: any) => origin.originId)).toEqual(['replaced']);
+  });
+  test('a purged turn is skipped until something writes for it again', () => {
+    seedTurn('dead', 'deleted');
+    expect(purgeDeadTurns(harness.db).turns).toBe(1);
+    expect(deadOrigins(harness.db)).toEqual([]);
+
+    insert('narrative_state_metrics', { workspace_id: 'ws', origin_id: 'dead' }, 'late');
+    expect(deadOrigins(harness.db).map((origin: any) => origin.originId)).toEqual(['dead']);
+    expect(purgeDeadTurns(harness.db).turns).toBe(1);
+    expect(count("SELECT COUNT(*) AS count FROM narrative_state_metrics WHERE origin_id = 'dead'")).toBe(0);
+    expect(deadOrigins(harness.db)).toEqual([]);
+  });
+
+  test('a purged turn that comes back and dies again is purged again', () => {
+    seedTurn('dead', 'deleted');
+    purgeDeadTurns(harness.db);
+    harness.db.prepare("UPDATE narrative_origin_lifecycle SET status = 'active' WHERE origin_id = 'dead'").run();
+    harness.db.prepare("UPDATE narrative_origin_lifecycle SET status = 'deleted' WHERE origin_id = 'dead'").run();
+    expect(deadOrigins(harness.db).map((origin: any) => origin.originId)).toEqual(['dead']);
   });
 });

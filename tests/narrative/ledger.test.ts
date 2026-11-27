@@ -198,7 +198,8 @@ describe('Narrative Event Ledger SQLite repository', () => {
       { id: 'roleplay_scene_growth_v1' },
       { id: 'roleplay_conditions_v1' },
       { id: 'worldbuild_package_identity_v1' },
-      { id: 'conversation_threads_v1' }
+      { id: 'conversation_threads_v1' },
+      { id: 'narrative_turn_purge_marks_v1' }
     ]);
     expect(db.prepare('PRAGMA table_info(entity_links)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'metadata_json', type: 'TEXT' })

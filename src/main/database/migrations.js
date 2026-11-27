@@ -2,6 +2,7 @@ const { releaseOrphanedEntityReferences } = require('../features/worldbuild/enti
 const { orphanWorkspaceIds, purgeWorkspace } = require('../features/workspace/workspace-ownership');
 const { releaseMissingDocuments } = require('../features/workspace/document-ownership');
 const { splitConversationThreads } = require('./thread-migration');
+const { installPurgeReopeningTriggers } = require('../features/narrative/turn-ownership');
 
 /** Predicates that name a moment the live scene already carries, never durable canon. */
 const SCENE_PREDICATE_LIST = [
@@ -1838,6 +1839,14 @@ const MIGRATIONS = [
     // beta are recognized by the marks their replies left and move to the Roleplay whole.
     id: 'conversation_threads_v1',
     up: (db) => { splitConversationThreads(db); }
+  },
+  {
+    // Dead turns from earlier versions have no mark, so the next launch purges each of them once.
+    id: 'narrative_turn_purge_marks_v1',
+    up: (db) => {
+      db.exec('ALTER TABLE narrative_origin_lifecycle ADD COLUMN purged_at INTEGER');
+      installPurgeReopeningTriggers(db);
+    }
   }
 ];
 

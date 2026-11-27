@@ -51,13 +51,18 @@ const NOT_TURN_TABLES = [
 const hasTable = (db, name) => Boolean(
   db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)
 );
+const hasColumn = (db, table, column) => db.prepare(`PRAGMA table_info("${table}")`).all().some(info => info.name === column);
 
-/** Dead turns of a workspace, or of every workspace. A turn an open replacement can restore is not dead yet. */
+/**
+ * Dead turns of a workspace, or of every workspace, not yet purged since their last write.
+ * A turn an open replacement can restore is not dead yet.
+ */
 function deadOrigins(db, workspaceId = null) {
   if (!hasTable(db, 'narrative_origin_lifecycle')) return [];
+  const pendingOnly = hasColumn(db, 'narrative_origin_lifecycle', 'purged_at');
   const rows = db.prepare(`
     SELECT workspace_id AS workspaceId, origin_id AS originId FROM narrative_origin_lifecycle
-    WHERE status != 'active' ${workspaceId ? 'AND workspace_id = ?' : ''}
+    WHERE status != 'active' ${pendingOnly ? 'AND purged_at IS NULL' : ''} ${workspaceId ? 'AND workspace_id = ?' : ''}
   `).all(...(workspaceId ? [workspaceId] : []));
   if (!rows.length || !hasTable(db, 'narrative_turn_replacements')) return rows;
   const restorable = new Set();
@@ -140,12 +145,44 @@ function purgeTurn(db, workspaceId, originId) {
 function purgeDeadTurns(db, workspaceId = null) {
   let turns = 0;
   let removed = 0;
+  const markPurged = hasColumn(db, 'narrative_origin_lifecycle', 'purged_at')
+    ? db.prepare('UPDATE narrative_origin_lifecycle SET purged_at = ? WHERE workspace_id = ? AND origin_id = ?')
+    : null;
   for (const origin of deadOrigins(db, workspaceId)) {
     const count = purgeTurn(db, origin.workspaceId, origin.originId);
+    if (markPurged) markPurged.run(Date.now(), origin.workspaceId, origin.originId);
     if (count) turns += 1;
     removed += count;
   }
   return { turns, removed };
+}
+
+/** Tables whose new rows put a purged dead turn back in line, since a late analysis writes there. */
+const PURGE_REOPENING_TABLES = [
+  ...TURN_OWNED_COLUMNS.map(({ table, column }) => ({ table, column })),
+  { table: 'narrative_event_evidence', column: 'origin_id' }
+];
+
+/** Idempotent; a migration runs it again whenever a turn-owned table is added. */
+function installPurgeReopeningTriggers(db) {
+  for (const { table, column } of PURGE_REOPENING_TABLES) {
+    if (!hasTable(db, table)) continue;
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS turn_purge_reopen_${table} AFTER INSERT ON ${table}
+      BEGIN
+        UPDATE narrative_origin_lifecycle SET purged_at = NULL
+        WHERE workspace_id = NEW.workspace_id AND origin_id = NEW.${column} AND purged_at IS NOT NULL;
+      END;
+    `);
+  }
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS turn_purge_reopen_on_status AFTER UPDATE OF status ON narrative_origin_lifecycle
+    WHEN NEW.status != OLD.status
+    BEGIN
+      UPDATE narrative_origin_lifecycle SET purged_at = NULL
+      WHERE workspace_id = NEW.workspace_id AND origin_id = NEW.origin_id;
+    END;
+  `);
 }
 
 module.exports = {
@@ -153,6 +190,8 @@ module.exports = {
   TURN_OWNED_THROUGH_EVENTS,
   NOT_TURN_TABLES,
   deadOrigins,
+  PURGE_REOPENING_TABLES,
   purgeTurn,
-  purgeDeadTurns
+  purgeDeadTurns,
+  installPurgeReopeningTriggers
 };
