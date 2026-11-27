@@ -913,13 +913,13 @@ export class RoleplaySystem {
 
   proposeSceneChange(input: {
     id: string; workspaceId: string; patch: RoleplayScenePatch;
-    source: 'manual' | 'ai'; provenanceId?: string;
+    source: 'manual' | 'ai'; provenanceId?: string; onDropped?: (ids: string[]) => void;
   }): RoleplaySceneChange {
     const existing = this.getSceneChange(input.workspaceId, input.id);
     if (existing) return existing;
     const policy = this.getSettings(input.workspaceId).defaultUpdatePolicy;
     if (input.source === 'ai' && policy === 'manual') throw new Error('Scene updates are manual-only.');
-    if (input.source === 'ai') input = { ...input, patch: this.dropUnresolvedSceneIds(input.workspaceId, input.patch) };
+    if (input.source === 'ai') input = { ...input, patch: this.dropUnresolvedSceneIds(input.workspaceId, input.patch, input.onDropped) };
     const status = input.source === 'manual' || policy === 'automatic' ? 'applied' : 'pending';
     this.db.transaction(() => {
       this.db.prepare(`
@@ -1278,7 +1278,7 @@ export class RoleplaySystem {
   }
 
   // A list that loses every id is left out, not emptied: an empty list clears that part of the scene.
-  private dropUnresolvedSceneIds(workspaceId: string, patch: RoleplayScenePatch): RoleplayScenePatch {
+  private dropUnresolvedSceneIds(workspaceId: string, patch: RoleplayScenePatch, onDropped?: (ids: string[]) => void): RoleplayScenePatch {
     const next: RoleplayScenePatch = {};
     const dropped: string[] = [];
     if (patch.locationId !== undefined) {
@@ -1298,7 +1298,7 @@ export class RoleplaySystem {
       dropped.push(...ids.filter(id => !kept.includes(id)));
       if (kept.length || !ids.length) (next as Record<string, unknown>)[key] = kept;
     }
-    if (dropped.length) console.warn('[Roleplay State] Dropped scene ids that name no entity:', dropped.join(', '));
+    if (dropped.length) (onDropped ?? (ids => console.warn('[Roleplay State] Dropped scene ids that name no entity:', ids.join(', '))))(dropped);
     if (!Object.keys(next).length) throw new Error('Scene change named no entity that exists.');
     return next;
   }

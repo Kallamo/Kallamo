@@ -3390,6 +3390,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
     const identityContactCandidates = [];
     const invalidInventoryChanges = [];
     let rejectedSceneChange = null;
+    const droppedSceneIds = [];
     db.transaction(() => {
     for (const identityUpdate of routedResult.identityUpdates) {
         if (!shouldProcessNarrativeIdentityUpdate(identityUpdate, roleplaySettings.defaultUpdatePolicy)) continue;
@@ -3528,7 +3529,8 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 workspaceId,
                 patch: scenePatch,
                 source: 'ai',
-                provenanceId
+                provenanceId,
+                onDropped: ids => droppedSceneIds.push(...ids)
             });
             changes.push({ kind: 'scene', changeId: change.id, ...change });
         } catch (error) {
@@ -3688,6 +3690,7 @@ async function updateRoleplayStateWithSystemAi({ workspaceId, provenanceId, user
                 invalidInventoryChanges: invalidInventoryChanges.length,
                 scenePatch: Boolean(routedResult.scenePatch && Object.keys(routedResult.scenePatch).length),
                 rejectedScenePatch: rejectedSceneChange?.reason ?? null,
+                ...(droppedSceneIds.length ? { droppedSceneIds } : {}),
                 sceneLocation: {
                     ...summarizeSceneLocation({
                         analyzed: shouldAnalyzeScene,
@@ -5404,12 +5407,16 @@ function buildStoryRecordSystemPrompt(languageInstruction = '') {
 async function sendNarrativeJson(requestParams, schema, label, telemetry) {
     const legend = telemetry?.calls ? telemetry.labels?.legendFor(requestParams.newPrompt) : null;
     const startedAt = Date.now();
-    if (telemetry) telemetry.fallbackReason = null;
+    if (telemetry) {
+        telemetry.fallbackReason = null;
+        telemetry.reasoningRetried = false;
+    }
     const record = outcome => telemetry?.calls?.push({
         stage: label,
         mode: telemetry.structuredOutputMode,
         elapsedMs: Date.now() - startedAt,
         ...(telemetry.fallbackReason ? { fallbackReason: telemetry.fallbackReason } : {}),
+        ...(telemetry.reasoningRetried ? { reasoningRetried: true } : {}),
         systemPrompt: capDebugText(requestParams.systemPrompt, REQUEST_TEXT_LIMIT),
         input: capDebugText(requestParams.newPrompt, REQUEST_TEXT_LIMIT),
         ...(legend?.length ? { legend } : {}),
@@ -5451,7 +5458,8 @@ async function requestNarrativeJson(requestParams, schema, label, telemetry) {
             volatile: '',
             ttl: cacheTtlForPace(recentTurnGaps(workspaceId))
         } : null,
-        onUsage: metadata => { if (telemetry) addCacheUsage(telemetry.cache, metadata); }
+        onUsage: metadata => { if (telemetry) addCacheUsage(telemetry.cache, metadata); },
+        onReasoningRetry: () => { if (telemetry) telemetry.reasoningRetried = true; }
     };
     const capabilityBase = `${params.apiProfileId || 'profile'}\u0000${params.model || 'model'}`;
     const schemaKind = schema === NARRATIVE_TRIAGE_SCHEMA ? 'triage' : schema === NARRATIVE_MECHANICS_SCHEMA ? 'state' : schema === NARRATIVE_STORY_SCHEMA ? 'story' : 'other';

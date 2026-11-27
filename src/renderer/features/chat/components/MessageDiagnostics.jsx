@@ -14,6 +14,7 @@ import {
   formatPlannerDecisions,
   formatRetrievalDiagnostics,
   prettyJsonText,
+  REASONING_RETRY_NOTE,
   safeParseDebugNotice
 } from '../diagnostic-format';
 
@@ -690,6 +691,7 @@ function NarrativeView({ debug, names, copy }) {
     ...(analysis?.skippedEventReasons || []).map(reason => `Event skipped: ${humanize(reason)}`),
     ...(analysis?.filteredOperationReasons || []).map(item => `${humanize(item.key.replace(':', ' · '))}${item.count > 1 ? ` ×${item.count}` : ''}`),
     !analysis?.sceneLocation && analysis?.rejectedScenePatch && `Scene change rejected: ${humanize(analysis.rejectedScenePatch)}`,
+    analysis?.droppedSceneIds?.length > 0 && `Scene change named ${analysis.droppedSceneIds.length === 1 ? 'an id' : `${analysis.droppedSceneIds.length} ids`} with no entity, left out: ${analysis.droppedSceneIds.join(', ')}`,
     spanNote?.warning && spanNote.text,
     analysis?.invalidInventoryChanges > 0 && `${analysis.invalidInventoryChanges} inventory ${analysis.invalidInventoryChanges === 1 ? 'change' : 'changes'} could not apply`
   ].filter(Boolean);
@@ -929,6 +931,7 @@ function ModelCallsView({ calls }) {
               {call.error && <Chip tone="bg-status-danger/12 text-status-danger">Failed</Chip>}
             </div>
             {call.fallbackReason && <p className="text-xs text-status-warning select-text">Schema not used: {call.fallbackReason}</p>}
+            {call.reasoningRetried && <p className="text-xs text-status-warning select-text">{REASONING_RETRY_NOTE}</p>}
             <Disclosure title="System prompt">{call.systemPrompt}</Disclosure>
             {call.legend?.length > 0 && <Disclosure title={`Labels · ${call.legend.length}`}>{formatLabelLegend(call.legend)}</Disclosure>}
             <Disclosure title="Input">{prettyJsonText(call.input)}</Disclosure>

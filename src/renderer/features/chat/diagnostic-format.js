@@ -44,6 +44,8 @@ export const prettyJsonText = text => {
   }
 };
 
+export const REASONING_RETRY_NOTE = 'Ran out of room while reasoning; asked again with room to think.';
+
 const ROLE_NAMES = { user: 'User', assistant: 'Assistant', system: 'System' };
 export const historyRoleName = role => ROLE_NAMES[role] || role;
 
@@ -107,6 +109,7 @@ export const formatNarrativeCalls = calls => (calls || []).map((call, index) => 
   `=== ${index + 1}. ${call.stage}${call.mode ? ` (${call.mode})` : ''} ===`,
   callStats(call),
   ...(call.fallbackReason ? [`Schema not used: ${call.fallbackReason}`] : []),
+  ...(call.reasoningRetried ? [REASONING_RETRY_NOTE] : []),
   '--- System prompt ---',
   call.systemPrompt || '',
   ...(call.legend?.length ? ['--- Labels ---', formatLabelLegend(call.legend)] : []),
