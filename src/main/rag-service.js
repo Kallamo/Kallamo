@@ -1,9 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const mammoth = require('mammoth');
+// mammoth takes almost half a second to load, and only .docx files need it.
+const mammoth = () => require('mammoth');
 const os = require('os');
 const db = require('./database');
-const { encode } = require('gpt-tokenizer/encoding/o200k_base');
+const { encode } = require('./features/llm/token-count');
 const { chunkText, meaningfulContentLength, MIN_MEANINGFUL_CHARS } = require('./features/knowledge/chunk-text');
 const { buildFtsMatchQuery } = require('./features/knowledge/fts-query');
 const { applyNameTags } = require('./features/world-index/name-tags');
@@ -121,7 +122,7 @@ async function extractTextFromFile(filePath) {
 
     if (ext === '.docx') {
         const dataBuffer = fs.readFileSync(filePath);
-        const result = await mammoth.extractRawText({ buffer: dataBuffer });
+        const result = await mammoth().extractRawText({ buffer: dataBuffer });
         return result.value;
     }
 
@@ -131,7 +132,7 @@ async function extractTextFromFile(filePath) {
 // HTML keeps formatting for Writing Desk import; RAG still uses plain text.
 async function extractDocxHtml(filePath) {
     const dataBuffer = fs.readFileSync(filePath);
-    const result = await mammoth.convertToHtml({ buffer: dataBuffer });
+    const result = await mammoth().convertToHtml({ buffer: dataBuffer });
     return result.value;
 }
 

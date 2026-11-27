@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { fetch: undiciFetch, Agent } = require('undici');
+const { undiciFetch, generationDispatcher } = require('./http-client');
 const { getResponseMetadata } = require('./response-metadata');
 const { openAiResponseFormat, applyBedrockStructuredOutput, claudeCompatibleSchema, geminiResponseSchema } = require('./structured-output');
 const { assertPayloadWithinLimit, estimatePayloadTokens, normalizeMaxApiPayload, safetyMarginFor } = require('./payload-budget');
@@ -14,13 +14,6 @@ const { stripSpoilerMarkers } = require('../../../../dist-main/shared/spoilers')
 function getDatabase() {
     return require('../../database');
 }
-
-// undici's default 300s headersTimeout aborts slow local generations
-// (stream:false sends headers only when generation finishes). 30 min ceiling.
-const generationDispatcher = new Agent({
-    headersTimeout: 1_800_000,
-    bodyTimeout: 1_800_000
-});
 
 function getMimeType(filePath) {
     const ext = path.extname(filePath).toLowerCase();
@@ -1057,7 +1050,7 @@ async function sendApiRequest(params, dependencies = {}) {
             headers: requestHeaders,
             body: requestBodyPayload,
             signal: abortSignal,
-            dispatcher: generationDispatcher
+            dispatcher: generationDispatcher()
         });
 
         if (!response.ok) {
@@ -1132,7 +1125,7 @@ async function sendAgentRequest(params, dependencies = {}) {
             headers: requestHeaders,
             body: requestBodyPayload,
             signal: params.abortSignal,
-            dispatcher: generationDispatcher
+            dispatcher: generationDispatcher()
         });
         if (!response.ok) {
             const error = new Error(await readHttpErrorMessage(response));

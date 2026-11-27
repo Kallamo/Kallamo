@@ -126,6 +126,8 @@ function rememberVersion() {
 // Built hidden and shown once its data is on screen, so it appears ready, in one go.
 const REVEAL_FALLBACK_MS = 20000;
 
+const TOKENIZER_PRELOAD_MS = 3000;
+
 function createWindow () {
   const savedState = readWindowState();
   const mainWindow = new BrowserWindow({
@@ -159,6 +161,8 @@ function createWindow () {
     if (!savedState || savedState.isMaximized) mainWindow.maximize();
     else mainWindow.show();
     mainWindow.focus();
+    // Late enough that the renderer's first requests are answered before the table blocks the thread.
+    setTimeout(() => require('./main/features/llm/token-count').preloadTokenizer(), TOKENIZER_PRELOAD_MS);
   };
   const onAppReady = (event) => { if (event.sender === mainWindow.webContents) reveal(); };
   ipcMain.on('app-ready', onAppReady);

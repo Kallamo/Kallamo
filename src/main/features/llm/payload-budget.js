@@ -1,4 +1,4 @@
-const { encode } = require('gpt-tokenizer/encoding/o200k_base');
+const { encode } = require('./token-count');
 const contract = require('../../../shared/payload-budget.json');
 
 function estimateTokens(value) {

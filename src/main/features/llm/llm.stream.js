@@ -1,5 +1,5 @@
-const { fetch: undiciFetch } = require('undici');
-const { buildRequest, parseStreamChunk, sendApiRequest, generationDispatcher, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
+const { undiciFetch, generationDispatcher } = require('./http-client');
+const { buildRequest, parseStreamChunk, sendApiRequest, readHttpErrorMessage, learnFromReportedTokens } = require('./llm.service');
 const { getResponseMetadata } = require('./response-metadata');
 const { recordCacheOutcome, markLongTtlRefused, cacheModeFor } = require('./prompt-cache');
 
@@ -72,7 +72,7 @@ async function sendApiRequestStream(params, onDelta, onStreamStart, dependencies
             headers: requestHeaders,
             body: requestBodyPayload,
             signal: params.abortSignal,
-            dispatcher: generationDispatcher
+            dispatcher: generationDispatcher()
         });
 
         if (!response.ok) {
