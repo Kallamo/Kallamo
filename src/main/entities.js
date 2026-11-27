@@ -116,14 +116,20 @@ function updateEntity(id, fields = {}) {
   return getEntity(id);
 }
 
-// Owner becomes an inventory entry and place becomes where found; availability has no unique match.
+// Owner becomes an inventory entry and place becomes where found. A unique item has no availability
+// list and one holder, so the first inventory entry becomes its owner and the rest are removed.
 function reshapeItemLinks(itemId, nature) {
   if (nature === 'type') {
     db.prepare("UPDATE entity_links SET relType = 'carried_by' WHERE fromId = ? AND relType = 'owned_by'").run(itemId);
     db.prepare("UPDATE entity_links SET relType = 'found_in' WHERE fromId = ? AND relType = 'located_in'").run(itemId);
-  } else {
-    db.prepare("DELETE FROM entity_links WHERE fromId = ? AND relType IN ('found_in', 'sold_in')").run(itemId);
+    return;
   }
+  db.prepare("DELETE FROM entity_links WHERE fromId = ? AND relType IN ('found_in', 'sold_in')").run(itemId);
+  const holders = db.prepare("SELECT id FROM entity_links WHERE fromId = ? AND relType = 'carried_by' ORDER BY createdAt, id").all(itemId);
+  if (!holders.length) return;
+  db.prepare("DELETE FROM entity_links WHERE fromId = ? AND relType IN ('owned_by', 'located_in')").run(itemId);
+  db.prepare("UPDATE entity_links SET relType = 'owned_by' WHERE id = ?").run(holders[0].id);
+  db.prepare("DELETE FROM entity_links WHERE fromId = ? AND relType = 'carried_by'").run(itemId);
 }
 
 // Written only by the main process: staged reviews, provenance and enrichment bookkeeping.

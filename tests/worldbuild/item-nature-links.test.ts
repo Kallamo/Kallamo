@@ -28,6 +28,18 @@ describe('item links follow the nature on the sheet', () => {
 
     harness.store.setLink({ workspaceId: 'ws', fromId: 'dish', relType: 'sold_in', toId: 'tavern' });
     harness.store.updateEntity('dish', { data: { itemNature: 'unique' } });
-    expect(relTypes()).not.toContain('sold_in');
+    expect(relTypes()).toEqual(['owned_by']);
+  });
+
+  test('a type held in several inventories keeps only its first holder as a unique item', () => {
+    harness.store.updateEntity('dish', { data: { itemNature: 'type' } });
+    insertEntity(harness.db, 'baker', { type: 'Characters' });
+    const insert = harness.db.prepare("INSERT INTO entity_links (id, workspaceId, fromId, relType, toId, metadata_json, createdAt) VALUES (?, 'ws', 'dish', 'carried_by', ?, '{\"quantity\":3}', ?)");
+    insert.run('first', 'cook', 1);
+    insert.run('second', 'baker', 2);
+    harness.store.updateEntity('dish', { data: { itemNature: 'unique' } });
+    const rows = harness.db.prepare("SELECT relType, toId, metadata_json FROM entity_links WHERE fromId = 'dish'").all() as any[];
+    expect(rows.map(row => [row.relType, row.toId])).toEqual([['owned_by', 'cook']]);
+    expect(JSON.parse(rows[0].metadata_json).quantity).toBe(1);
   });
 });

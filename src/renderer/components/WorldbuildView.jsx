@@ -741,6 +741,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const [mergePrompt, setMergePrompt] = useState(null); // { id, name } while choosing merge priority
   const [mergeDialog, setMergeDialog] = useState(null); // { suggestedId } while the merge dialog is open
   const [showExportModal, setShowExportModal] = useState(false);
+  const [natureConfirm, setNatureConfirm] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteImpact, setDeleteImpact] = useState(null);
   const [templates, setTemplates] = useState([]);
@@ -1136,7 +1137,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
       Locations: { inside: ['from', 'inside'], leader: ['from', 'led_by'] },
       Items: {
         createdBy: ['from', 'created_by'], ownedBy: ['from', 'owned_by'], locatedIn: ['from', 'located_in'],
-        foundIn: ['from', 'found_in'], soldIn: ['from', 'sold_in'],
+        foundIn: ['from', 'found_in'], soldIn: ['from', 'sold_in'], carriedBy: ['from', 'carried_by'],
       },
       Races: { members: ['to', 'is_race'] },
       // A specific being's species is the same link as a character's race.
@@ -1257,9 +1258,25 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const removeLoreDoc = (id) => patchData({ loreDocumentIds: loreDocIds().filter(x => x !== id) });
   const aliasesArr = (raw) => raw.split(',').map(s => s.trim()).filter(Boolean);
 
-  const persist = async ({ accept = false } = {}) => {
+  // What saving a new item nature would remove, in words; null when nothing is lost.
+  const natureChangeLoss = () => {
+    if (selected?.type !== 'Items' || !selected.id) return null;
+    const saved = entities.find(entity => entity.id === selected.id)?.data?.itemNature === 'unique' ? 'unique' : 'type';
+    const next = selected.data?.itemNature === 'unique' ? 'unique' : 'type';
+    if (saved !== 'type' || next !== 'unique') return null;
+    const places = (rel.foundIn || []).length + (rel.soldIn || []).length;
+    const extraHolders = Math.max(0, (rel.carriedBy || []).length - 1);
+    const parts = [];
+    if (places) parts.push(`its ${places === 1 ? 'place' : `${places} places`} in Where found and Where sold`);
+    if (extraHolders) parts.push(`${extraHolders === 1 ? 'one inventory' : `${extraHolders} inventories`} holding it, since only the first holder keeps a unique item`);
+    return parts.length ? parts.join(' and ') : null;
+  };
+
+  const persist = async ({ accept = false, confirmed = false, after = null } = {}) => {
     if (!selected) return null;
     if (!selected.canonicalName.trim()) { showToast('A name is required.', 'error'); return null; }
+    const loss = confirmed ? null : natureChangeLoss();
+    if (loss) { setNatureConfirm({ loss, accept, after }); return null; }
     setSaving(true);
     try {
       const ids = loreDocIds();
@@ -1300,7 +1317,7 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
     const fresh = await electronAPI.getEntity(selected.id);
     if (fresh?.entity) await openEntity(fresh.entity, { preserveTab: true });
   };
-  const saveSection = async () => { const id = await persist(); if (id) setEditingSection(null); };
+  const saveSection = async () => { const id = await persist({ after: () => setEditingSection(null) }); if (id) setEditingSection(null); };
   const cancelSection = async () => { const cur = entities.find(e => e.id === selected.id); if (cur) await openEntity(cur); setEditingSection(null); };
   useEffect(() => {
     setDeleteImpact(null);
@@ -2645,6 +2662,18 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
           api={electronAPI}
           onClose={() => setMergeDialog(null)}
           onMerge={async (targetId, prefer) => { await mergeInto(targetId, prefer); setMergeDialog(null); }}
+        />
+      )}
+      {natureConfirm && selected && (
+        <ConfirmDialog
+          tone="warning"
+          title="Save as a unique item?"
+          message={<>A unique item exists only once, so saving <strong className="text-text-secondary">“{selected.canonicalName}”</strong> this way removes {natureConfirm.loss}.</>}
+          actions={[
+            { label: 'Cancel', variant: 'ghost', onClick: () => setNatureConfirm(null) },
+            { label: 'Save', variant: 'primary', autoFocus: true, loading: saving, onClick: async () => { const id = await persist({ accept: natureConfirm.accept, confirmed: true }); if (id) natureConfirm.after?.(); setNatureConfirm(null); } },
+          ]}
+          onClose={() => setNatureConfirm(null)}
         />
       )}
       {confirmDelete && selected && (
