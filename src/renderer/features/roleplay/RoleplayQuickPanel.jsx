@@ -63,6 +63,7 @@ function RoleplayQuickPanel({
   const [clockDraft, setClockDraft] = useState(null);
   const [editingClock, setEditingClock] = useState(false);
   const [entities, setEntities] = useState([]);
+  const [proposedEntities, setProposedEntities] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [definitions, setDefinitions] = useState([]);
   const [inventory, setInventory] = useState([]);
@@ -128,13 +129,15 @@ function RoleplayQuickPanel({
     if (!configuration?.success) throw new Error(configuration?.error || 'Could not load Roleplay state.');
     const nextSettings = configuration.settings || {};
     const nextScene = configuration.scene || EMPTY_SCENE;
-    const nextEntities = (worldbuild?.entities || worldbuild || []).filter(entity => entity.status !== 'proposed');
+    const allEntities = worldbuild?.entities || worldbuild || [];
+    const nextEntities = allEntities.filter(entity => entity.status !== 'proposed');
     setSettings(nextSettings);
     setScene({ ...EMPTY_SCENE, ...nextScene });
     setCalendar(configuration.calendar || null);
     setClock(configuration.clock || null);
     setClockDraft(configuration.clock || null);
     setEntities(nextEntities);
+    setProposedEntities(allEntities.filter(entity => entity.status === 'proposed'));
     setTemplates(templateResult?.templates || []);
     setDefinitions(configuration.definitions || []);
     setRecentTurns(groupRecentTurns(configuration));
@@ -234,6 +237,8 @@ function RoleplayQuickPanel({
       const presenceOrder = Number(!scene.participantIds?.includes(left.id)) - Number(!scene.participantIds?.includes(right.id));
       return presenceOrder || left.canonicalName.localeCompare(right.canonicalName);
     });
+  // A character the story brought in stays out of the cast until it is approved, but is named here.
+  const awaitingReview = proposedEntities.filter(entity => presentIds.has(entity.id) && entity.id !== settings.playerEntityId);
   const processing = narrativeStateProcessing || readingTurn;
   const stale = Boolean(pendingTurn) && !processing;
   // Same action as Update now in Configuration: read the kept reply without waiting for the next turn.
@@ -678,7 +683,8 @@ function RoleplayQuickPanel({
                     : <p className="rounded-card border border-dashed border-border-subtle px-3 py-5 text-center text-xs text-text-disabled">Choose who you play in Roleplay settings.</p>}
                   {participants.length > 0 && <CastGroup presence="participating" count={participants.length}>{participants.map(castRow)}</CastGroup>}
                   {nearby.length > 0 && <CastGroup presence="nearby" count={nearby.length}>{nearby.map(castRow)}</CastGroup>}
-                  {!otherCharacters.length && player && <p className="px-2 pt-3 text-center text-xs text-text-disabled">No one else is here.</p>}
+                  {awaitingReview.length > 0 && <p className="px-2 pt-2 text-xs text-text-subtle">Awaiting review in Recent changes: {awaitingReview.map(entity => entity.canonicalName).join(', ')}</p>}
+                  {!otherCharacters.length && !awaitingReview.length && player && <p className="px-2 pt-3 text-center text-xs text-text-disabled">No one else is here.</p>}
                 </section>
               ),
               'recent-changes': (recentTurns.length > 0 || editingLayout) && (

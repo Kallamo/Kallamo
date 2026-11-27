@@ -4584,7 +4584,13 @@ ipcMain.handle('resolve-roleplay-inventory-change', async (event, { workspaceId,
 });
 
 ipcMain.handle('resolve-roleplay-entity-change', async (event, { workspaceId, changeId, decision, classification } = {}) => {
-  try { return { success: true, change: getNarrativeEntitySystem().resolveChange(workspaceId, changeId, decision, classification) }; }
+  try {
+    const change = getNarrativeEntitySystem().resolveChange(workspaceId, changeId, decision, classification);
+    if (decision === 'approved' && change.status === 'applied' && change.createdEntity) {
+      getRoleplaySystem().placeApprovedEntity(workspaceId, { entityId: change.entityId, presence: change.proposal?.scenePresence, provenanceId: change.provenanceId });
+    }
+    return { success: true, change };
+  }
   catch (error) { return { success: false, error: error.message }; }
 });
 

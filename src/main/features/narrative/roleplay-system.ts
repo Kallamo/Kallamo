@@ -933,6 +933,27 @@ export class RoleplaySystem {
     return this.getSceneChange(input.workspaceId, input.id)!;
   }
 
+  /**
+   * A character the turn introduced without a name has no entity until approval, so its scene place
+   * was never written. It is placed now, unless a later turn has moved the story on.
+   */
+  placeApprovedEntity(workspaceId: string, input: { entityId: string | null; presence?: string; provenanceId: string }): boolean {
+    const field = ({ participant: 'participantIds', observer: 'possibleObserverIds', nearby: 'nearbyIds' } as const)[input.presence as 'participant' | 'observer' | 'nearby'];
+    if (!field || !input.entityId || !this.referenceResolves(workspaceId, input.entityId, ['Characters', 'Creatures'])) return false;
+    const entity = this.db.prepare('SELECT data FROM entities WHERE workspaceId = ? AND id = ?').get(workspaceId, input.entityId) as { data: string } | undefined;
+    if (parseObject(entity?.data).scope === 'group') return false;
+    const latest = this.db.prepare(`
+      SELECT origin_id FROM roleplay_message_frames WHERE workspace_id = ? ORDER BY created_at DESC, origin_id DESC LIMIT 1
+    `).get(workspaceId) as { origin_id: string } | undefined;
+    if (latest && latest.origin_id !== input.provenanceId) return false;
+    const scene = this.getScene(workspaceId);
+    if (!scene) return false;
+    const lists = ['participantIds', 'possibleObserverIds', 'nearbyIds'] as const;
+    if (lists.some(key => (scene[key] ?? []).includes(input.entityId!))) return false;
+    this.saveScene(workspaceId, { [field]: [...(scene[field] ?? []), input.entityId] }, { keepCast: true });
+    return true;
+  }
+
   resolveSceneChange(workspaceId: string, changeId: string, decision: 'approved' | 'rejected'): RoleplaySceneChange {
     const change = this.getSceneChange(workspaceId, changeId);
     if (!change) throw new Error('Roleplay scene change was not found.');

@@ -358,6 +358,23 @@ describe('Kallamo roleplay system', () => {
     expect(roleplay.getScene('workspace-one')).toMatchObject({ participantIds: ['elias'], objectIds: ['sword'] });
   });
 
+  test('places a character approved after its turn where the turn saw it, until a later turn', () => {
+    roleplay.saveSettings('workspace-one', { playerEntityId: 'elias' });
+    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['elias'] });
+    db.prepare("INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES ('stranger', 'workspace-one', 'Characters', 'Stranger', '{}', 'confirmed')").run();
+    const frame = db.prepare("INSERT INTO roleplay_message_frames (workspace_id, origin_id, start_json, end_json, advance_json, created_at, updated_at) VALUES ('workspace-one', ?, '{}', '{}', NULL, ?, ?)");
+    frame.run('turn-one', 1, 1);
+
+    expect(roleplay.placeApprovedEntity('workspace-one', { entityId: 'stranger', presence: 'nearby', provenanceId: 'turn-one' })).toBe(true);
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ participantIds: ['elias'], nearbyIds: ['stranger'] });
+    expect(roleplay.placeApprovedEntity('workspace-one', { entityId: 'stranger', presence: 'participant', provenanceId: 'turn-one' })).toBe(false);
+
+    db.prepare("INSERT INTO entities (id, workspaceId, type, canonicalName, data, status) VALUES ('late', 'workspace-one', 'Characters', 'Late', '{}', 'confirmed')").run();
+    frame.run('turn-two', 2, 2);
+    expect(roleplay.placeApprovedEntity('workspace-one', { entityId: 'late', presence: 'participant', provenanceId: 'turn-one' })).toBe(false);
+    expect(roleplay.placeApprovedEntity('workspace-one', { entityId: 'late', presence: 'absent', provenanceId: 'turn-two' })).toBe(false);
+  });
+
   test('deletes a resource together with its value history', () => {
     const health = createHealth('automatic');
     roleplay.proposeChange({
