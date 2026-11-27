@@ -573,8 +573,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
   // A model ID typed but not added yet counts as part of the form, so Save keeps it.
   const pendingModel = newModelName.trim();
   const modelsToSave = pendingModel && !modelsList.includes(pendingModel) ? [...modelsList, pendingModel] : modelsList;
+  // On a new connection, picking a provider is not an edit: switching clears every field, so only
+  // what is typed counts. On a saved one, switching discards its settings, so the provider counts too.
+  const comparedForm = form => (editingApiId ? form : { ...form, provider: null });
   const connectionDirty = showAddApiForm && connectionBaseline !== null
-    && (JSON.stringify(connectionForm()) !== JSON.stringify(connectionBaseline) || Boolean(pendingModel));
+    && (JSON.stringify(comparedForm(connectionForm())) !== JSON.stringify(comparedForm(connectionBaseline)) || Boolean(pendingModel));
   const { guard, flashKey, dirtyRef } = useLeaveGuard(connectionDirty);
 
   useEffect(() => {
