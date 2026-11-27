@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeftRight, Backpack, Check, ChevronRight, Clock3, Eye, EyeOff, Flag, Move, PanelLeftClose, PanelRightClose,
+  ArrowLeftRight, Backpack, Check, ChevronRight, Clock3, Eye, EyeOff, Flag, MapPin, Move, PanelLeftClose, PanelRightClose,
   PanelsLeftBottom, PanelsRightBottom, Plus, RefreshCw, RotateCcw, Settings2, X
 } from 'lucide-react';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import Modal from '../../components/ui/Modal';
+import Checkbox from '../../components/ui/Checkbox';
 import Button from '../../components/ui/Button';
 import IconButton from '../../components/ui/IconButton';
 import PanelResizeHandle from '../../components/ui/PanelResizeHandle';
@@ -64,6 +65,7 @@ function RoleplayQuickPanel({
   const [editingClock, setEditingClock] = useState(false);
   const [entities, setEntities] = useState([]);
   const [proposedEntities, setProposedEntities] = useState([]);
+  const [moveDraft, setMoveDraft] = useState(null);
   const [templates, setTemplates] = useState([]);
   const [definitions, setDefinitions] = useState([]);
   const [inventory, setInventory] = useState([]);
@@ -286,6 +288,24 @@ function RoleplayQuickPanel({
     if (Object.hasOwn(patch, 'locationId')) await resolveBackground(nextScene.locationId);
     window.dispatchEvent(new CustomEvent('roleplay-state-change', { detail: { workspaceId } }));
     return nextScene;
+  };
+
+  // A hand-picked place keeps the cast by default, so who stayed behind is unticked here instead.
+  const changeLocation = locationId => {
+    if (!locationId || locationId === scene.locationId || !otherCharacters.length) return saveScene({ locationId: locationId || null });
+    setMoveDraft({ locationId, staying: new Set() });
+  };
+
+  const applyMove = async () => {
+    const { locationId, staying } = moveDraft;
+    const along = ids => (ids || []).filter(id => !staying.has(id));
+    setMoveDraft(null);
+    await saveScene({
+      locationId,
+      participantIds: along(scene.participantIds),
+      possibleObserverIds: along(scene.possibleObserverIds),
+      nearbyIds: along(scene.nearbyIds)
+    });
   };
 
   const setPlayer = async entityId => {
@@ -639,7 +659,7 @@ function RoleplayQuickPanel({
                     locationId={scene.locationId}
                     locationName={names.get(scene.locationId)}
                     locationOptions={locationOptions}
-                    onChangeLocation={locationId => saveScene({ locationId: locationId || null })}
+                    onChangeLocation={changeLocation}
                     background={background}
                     inheritedFrom={background?.inherited ? (names.get(background.sourceLocationId) || 'a parent location') : null}
                     onChooseBackground={() => backgroundInputRef.current?.click()}
@@ -740,6 +760,29 @@ function RoleplayQuickPanel({
         )}
       </div>
 
+      {moveDraft && (
+        <Modal title="Who comes along?" icon={MapPin} onClose={() => setMoveDraft(null)} size="sm">
+          <section className="space-y-3 p-5">
+            <p className="text-sm text-text-muted">Moving to {names.get(moveDraft.locationId) || 'the new place'}. Untick anyone who stays where they are.</p>
+            <div className="space-y-2">
+              {otherCharacters.map(entity => (
+                <Checkbox
+                  key={entity.id}
+                  label={entity.canonicalName}
+                  checked={!moveDraft.staying.has(entity.id)}
+                  onChange={checked => setMoveDraft(draft => {
+                    const staying = new Set(draft.staying);
+                    if (checked) staying.delete(entity.id);
+                    else staying.add(entity.id);
+                    return { ...draft, staying };
+                  })}
+                />
+              ))}
+            </div>
+            <Button variant="primary" fullWidth onClick={applyMove}>Move</Button>
+          </section>
+        </Modal>
+      )}
       {transfer && (
         <Modal
           title={`Move ${inventory.find(item => item.itemId === transfer.itemId)?.name || 'item'}`}
