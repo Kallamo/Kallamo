@@ -41,6 +41,7 @@ const packageIdentity = require('./features/worldbuild/package-identity');
 const { chunkText, extractTextFromFile, extractDocxHtml, vectorizeChunks, insertChunksToDb, deleteChunksFromDb, searchKnowledgeBase, searchChatKnowledgeBase, searchChatMemories, RAG_MODEL_ID, RAG_MODEL_DIM, generateEmbeddingVector, countTokens } = require('./rag-service');
 const { normalizeMaxApiPayload } = require('./features/llm/payload-budget');
 const { detectedContextWindows, refreshContextWindow, refreshLocalContextWindows } = require('./features/llm/local-context-window');
+const { listProviderModels } = require('./features/llm/provider-models');
 
 registerWorkspaceStateIpc(ipcMain);
 const worldbuildData = createWorldbuildDataService(db);
@@ -428,6 +429,14 @@ function apiProfileHasCredentials(row) {
       return !!db.decryptApiKey(row.apiKey);
   }
 }
+
+ipcMain.handle('list-provider-models', async (event, payload) => {
+  try {
+    return { success: true, models: await listProviderModels(payload || {}) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle('get-api-profiles', async () => {
   try {

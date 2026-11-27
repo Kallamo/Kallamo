@@ -110,6 +110,9 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
 
   const [modelsList, setModelsList] = useState([]);
   const [newModelName, setNewModelName] = useState('');
+  // The provider's own list, once fetched for the open form; null until then.
+  const [providerModels, setProviderModels] = useState(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
   // What the open connection form started from; null while no form is open.
   const [connectionBaseline, setConnectionBaseline] = useState(null);
   const [connectionError, setConnectionError] = useState('');
@@ -475,6 +478,7 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
     setAwsRegion(form.awsRegion);
     setModelsList(form.models);
     setNewModelName('');
+    setProviderModels(null);
     setConnectionBaseline(form);
     setConnectionError('');
   };
@@ -530,6 +534,19 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
     setAwsRegion('us-east-1');
     setModelsList([]);
     setNewModelName('');
+    setProviderModels(null);
+  };
+
+  const fetchProviderModels = async () => {
+    setFetchingModels(true);
+    try {
+      const result = await electronAPI.listProviderModels({ provider: apiProvider, baseUrl: apiBaseUrl, apiKey });
+      if (!result?.success) return showToast(result?.error || 'Could not list models.', 'error');
+      if (!result.models.length) return showToast('The server lists no models.', 'info');
+      setProviderModels(result.models);
+    } finally {
+      setFetchingModels(false);
+    }
   };
 
   const handleAddModel = () => {
@@ -802,11 +819,11 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
           ))}
         </SettingsGroup>
       )}
-      <SettingsGroup title="Adding a local server?">
+      <SettingsGroup title="Adding a local server or another API?">
         <div className="flex items-start gap-3 px-[1.125rem] py-3.5">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
           <p className="text-[0.8125rem] leading-relaxed text-text-muted">
-            Choose <b className="font-semibold text-text-secondary">Local or compatible</b> with a base URL ending in <code className="font-mono text-text-secondary">/v1</code>, like <code className="font-mono text-text-secondary">http://127.0.0.1:1234/v1</code> for LM Studio. Then list the models the server has loaded.
+            Choose <b className="font-semibold text-text-secondary">OpenAI-compatible</b> with a base URL ending in <code className="font-mono text-text-secondary">/v1</code>, like <code className="font-mono text-text-secondary">http://127.0.0.1:1234/v1</code> for LM Studio. Any service with an OpenAI-style API works the same way.
           </p>
         </div>
       </SettingsGroup>
@@ -832,12 +849,12 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
                 role="radio"
                 aria-checked={selected}
                 onClick={() => selectProvider(p.value)}
-                className={`flex min-w-0 items-center gap-2.5 rounded-[0.625rem] border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${selected ? 'border-accent/55 bg-accent/[0.05]' : 'border-tint/[0.08] hover:border-tint/[0.16]'}`}
+                className={`${p.fitTitle ? 'w-max min-w-full ' : ''}flex min-w-0 items-center gap-2.5 rounded-[0.625rem] border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${selected ? 'border-accent/55 bg-accent/[0.05]' : 'border-tint/[0.08] hover:border-tint/[0.16]'}`}
               >
                 <ProviderMark provider={p.value} size="sm" />
                 <span className="min-w-0">
-                  <span className={`block truncate text-[0.8125rem] font-semibold ${selected ? 'text-text-primary' : 'text-text-secondary'}`}>{p.label}</span>
-                  <span className="caption block truncate">{p.sub}</span>
+                  <span className={`block ${p.fitTitle ? 'whitespace-nowrap' : 'truncate'} text-[0.8125rem] font-semibold ${selected ? 'text-text-primary' : 'text-text-secondary'}`}>{p.label}</span>
+                  <span className={`caption block truncate ${p.fitTitle ? 'w-0 min-w-full' : ''}`}>{p.sub}</span>
                 </span>
               </button>
             );
@@ -905,7 +922,37 @@ export default function SettingsModal({ onClose, initialTab, initialSection, clo
             className={`${fieldClass} flex-1 font-mono text-[0.8125rem]`}
           />
           <Button type="submit" variant="ghost" size="sm" icon={Plus} disabled={!newModelName.trim()}>Add</Button>
+          {LISTS_MODELS.includes(apiProvider) && (
+            <Button type="button" variant="subtle" size="sm" icon={RefreshCw} onClick={fetchProviderModels} disabled={fetchingModels}>{fetchingModels ? 'Fetching…' : 'Fetch models'}</Button>
+          )}
         </form>
+        {providerModels && (() => {
+          // The model field doubles as the search, so typing narrows the list and Add still takes a free ID.
+          const query = newModelName.trim().toLowerCase();
+          const matches = providerModels.filter(id => !modelsList.includes(id) && (!query || id.toLowerCase().includes(query)));
+          return (
+            <div className="border-t border-tint/[0.055] px-[1.125rem] py-2.5">
+              <div className="mb-1.5 flex items-center gap-2 text-xs text-text-subtle">
+                <span className="flex-1">{matches.length} of {providerModels.length} from the provider{query ? ` matching “${newModelName.trim()}”` : ''}. Type above to search.</span>
+                <IconButton icon={X} label="Close the provider list" size="sm" onClick={() => setProviderModels(null)} />
+              </div>
+              <div className="max-h-56 overflow-y-auto">
+                {matches.slice(0, PROVIDER_MODELS_SHOWN).map(id => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setModelsList(prev => (prev.includes(id) ? prev : [...prev, id]))}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-[0.8125rem] text-text-secondary transition-colors hover:bg-tint/[0.05]"
+                  >
+                    <Plus className="h-3.5 w-3.5 shrink-0 text-text-subtle" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{id}</span>
+                  </button>
+                ))}
+              </div>
+              {matches.length > PROVIDER_MODELS_SHOWN && <p className="mt-1.5 text-xs text-text-subtle">Showing the first {PROVIDER_MODELS_SHOWN}. Type to narrow the list.</p>}
+            </div>
+          );
+        })()}
         {modelsList.length === 0 ? (
           <p className="border-t border-tint/[0.055] px-[1.125rem] py-3 text-[0.8125rem] text-text-muted">No models yet. Add at least one.</p>
         ) : modelsList.map(m => (
@@ -1694,14 +1741,17 @@ const SEARCH_INDEX = [
 
 // Example values written for each provider, so every empty field shows what belongs in it.
 const PROVIDERS = [
-  { value: 'OpenRouter', label: 'OpenRouter', sub: 'Many models, one key', mark: 'OR', namePlaceholder: 'OpenRouter', keyPlaceholder: 'sk-or-v1-…', urlPlaceholder: 'https://openrouter.ai/api/v1', modelPlaceholder: 'anthropic/claude-sonnet-4.5' },
+  { value: 'OpenRouter', label: 'OpenRouter', sub: 'Many models', mark: 'OR', namePlaceholder: 'OpenRouter', keyPlaceholder: 'sk-or-v1-…', urlPlaceholder: 'https://openrouter.ai/api/v1', modelPlaceholder: 'anthropic/claude-sonnet-4.5' },
   { value: 'Anthropic', label: 'Anthropic', sub: 'Claude', mark: 'A', namePlaceholder: 'Anthropic', keyPlaceholder: 'sk-ant-…', urlPlaceholder: 'https://api.anthropic.com/v1/messages', modelPlaceholder: 'claude-sonnet-4-5' },
   { value: 'OpenAI', label: 'OpenAI', sub: 'GPT', mark: 'AI', namePlaceholder: 'OpenAI', keyPlaceholder: 'sk-…', urlPlaceholder: 'https://api.openai.com/v1', modelPlaceholder: 'gpt-5' },
   { value: 'Google AI', label: 'Google AI', sub: 'Gemini', mark: 'G', namePlaceholder: 'Google', keyPlaceholder: 'AIza…', urlPlaceholder: 'Leave empty for Google’s own endpoint', modelPlaceholder: 'gemini-2.5-flash' },
-  { value: 'Vertex AI', label: 'Vertex AI', sub: 'Google Cloud project', mark: 'V', namePlaceholder: 'Vertex', keyPlaceholder: '', urlPlaceholder: '', modelPlaceholder: 'gemini-2.5-pro' },
+  { value: 'Vertex AI', label: 'Vertex AI', sub: 'Google Cloud', mark: 'V', namePlaceholder: 'Vertex', keyPlaceholder: '', urlPlaceholder: '', modelPlaceholder: 'gemini-2.5-pro' },
   { value: 'AWS Bedrock', label: 'AWS Bedrock', sub: 'Your AWS account', mark: 'AWS', namePlaceholder: 'Bedrock', keyPlaceholder: '', urlPlaceholder: '', modelPlaceholder: 'anthropic.claude-sonnet-4-5-20250929-v1:0' },
-  { value: 'Local', label: 'Local or compatible', sub: 'LM Studio, Ollama', mark: null, namePlaceholder: 'LM Studio', keyPlaceholder: 'Not needed for most local servers', urlPlaceholder: 'http://127.0.0.1:1234/v1', modelPlaceholder: 'qwen3-30b-a3b' },
+  { value: 'Local', label: 'OpenAI-compatible', sub: 'Local or /v1 API', mark: null, fitTitle: true, namePlaceholder: 'LM Studio', keyPlaceholder: 'Not needed for most local servers', urlPlaceholder: 'http://127.0.0.1:1234/v1', modelPlaceholder: 'qwen3-30b-a3b' },
 ];
+
+const LISTS_MODELS = ['OpenRouter', 'Anthropic', 'OpenAI', 'Google AI', 'Local'];
+const PROVIDER_MODELS_SHOWN = 100;
 
 const MODE_LABELS = { 'inherit-system': 'System AI', dedicated: 'Own model', disabled: 'Off', profile: 'Profile', off: 'Hybrid RAG' };
 

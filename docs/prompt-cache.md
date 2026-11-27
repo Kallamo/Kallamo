@@ -26,7 +26,7 @@ need them. A route that caches on its own still pays nothing for a prefix that m
 | OpenRouter, other models | Automatic (OpenAI, DeepSeek, Grok, Moonshot, Groq's Kimi) | Stable layout, plus the routing key |
 | OpenAI | Automatic from 1,024 tokens; `prompt_cache_key` routes repeated prefixes together | Stable layout, plus a hashed key per conversation and role on the official endpoint |
 | Google AI, Vertex AI | Automatic (implicit) on Gemini 2.5 and later | Stable layout only |
-| Local or compatible | The server's own prefix reuse (llama.cpp, LM Studio) | Stable layout only; no extra fields, since a strict server may reject them |
+| OpenAI-compatible | The server's own prefix reuse (llama.cpp, LM Studio) | Stable layout only; no extra fields, since a strict server may reject them |
 
 `cacheModeFor` names each route `explicit` (Kallamo marks) or `automatic` (the provider decides).
 Either way the response reports what was read, and that report is what the app shows.

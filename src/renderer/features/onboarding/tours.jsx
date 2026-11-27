@@ -60,7 +60,7 @@ const setup = {
           <li><B>OpenRouter</B>: one key gives you models from many companies. The easiest place to start.</li>
           <li><B>Anthropic, OpenAI, Google AI</B>: each company's own service, with a key from its website.</li>
           <li><B>Vertex AI, AWS Bedrock</B>: for a Google Cloud or AWS account you already use.</li>
-          <li><B>Local or compatible</B>: a model on this computer through LM Studio or Ollama. Private and free to run, but it needs a capable machine.</li>
+          <li><B>OpenAI-compatible</B>: a model on this computer through LM Studio or Ollama, private and free to run on a capable machine, or any other service with an OpenAI-style API.</li>
         </List>,
         missing: 'Press Add connection on the Connections page to open the form.',
       },
