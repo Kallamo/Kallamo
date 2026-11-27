@@ -851,3 +851,10 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .dialogue-guillemets .dialogue[data-mark="guillemets"] {
   color: var(--dialogue-color);
 }
+
+/* Emphasis inside a line of dialogue keeps the dialogue color instead of its own. */
+.dialogue-quotes .dialogue[data-mark="quotes"] :is(em, strong),
+.dialogue-dash .dialogue[data-mark="dash"] :is(em, strong),
+.dialogue-guillemets .dialogue[data-mark="guillemets"] :is(em, strong) {
+  color: inherit;
+}

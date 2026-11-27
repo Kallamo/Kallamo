@@ -47,3 +47,24 @@ describe('colored dialogue markup', () => {
     expect(parseMarkdownCached('“Cached.”', { dialogue: true })).toContain('dialogue');
   });
 });
+
+describe('emphasis around dialogue', () => {
+  const em = (html: string) => `<em class="italic text-gray-300">${html}</em>`;
+  const parse = (text: string) => parseMarkdown(text, false, { dialogue: true });
+
+  test('nested italics stay inside the dialogue span', () => {
+    expect(parse('*"It’s *following*..."*'))
+      .toContain(em(span('quotes', `&quot;It’s ${em('following')}...&quot;`)));
+  });
+
+  test('plain emphasis and bold still render', () => {
+    expect(parse('She *really* meant it.')).toContain(`She ${em('really')} meant it.`);
+    expect(parse('A **bold** word.')).toContain('<strong class="text-accent font-bold">bold</strong>');
+    expect(parse('*"Run."*')).toContain(em(span('quotes', '&quot;Run.&quot;')));
+  });
+
+  test('stray or spaced asterisks stay literal', () => {
+    expect(parse('5 * 3 * 2')).toContain('5 * 3 * 2');
+    expect(parse('a lone *star')).toContain('a lone *star');
+  });
+});

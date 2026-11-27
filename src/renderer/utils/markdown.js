@@ -55,11 +55,66 @@ export function markDialogue(text, atLineStart = true) {
     }).join('');
 }
 
+// A marker opens before text and closes after it, pairing only inside the same element,
+// so emphasis never crosses a dialogue span. Unpaired markers stay as written.
+function pairEmphasis(html, marker, openTag, closeTag) {
+    const out = [];
+    const scopes = [0];
+    let nextScope = 1;
+    const openers = [];
+    let i = 0;
+    while (i < html.length) {
+        if (html[i] === '<') {
+            const end = html.indexOf('>', i);
+            if (end === -1) { out.push(html.slice(i)); break; }
+            const tag = html.slice(i, end + 1);
+            if (tag.startsWith('</')) { if (scopes.length > 1) scopes.pop(); }
+            else if (!tag.endsWith('/>')) scopes.push(nextScope++);
+            out.push(tag);
+            i = end + 1;
+            continue;
+        }
+        if (marker === '*' && html.startsWith('**', i)) {
+            // A run left over from the strong pass stays literal.
+            const run = html.slice(i).match(/^\*+/)[0];
+            out.push(run);
+            i += run.length;
+            continue;
+        }
+        if (html.startsWith(marker, i)) {
+            const before = html[i - 1];
+            const after = html[i + marker.length];
+            const canOpen = after !== undefined && !/\s/.test(after);
+            const canClose = before !== undefined && !/\s/.test(before);
+            const scope = scopes[scopes.length - 1];
+            const index = out.length;
+            out.push(marker);
+            let closed = false;
+            if (canClose) {
+                for (let k = openers.length - 1; k >= 0; k--) {
+                    if (openers[k].scope !== scope) continue;
+                    out[openers[k].index] = openTag;
+                    out[index] = closeTag;
+                    openers.splice(k);
+                    closed = true;
+                    break;
+                }
+            }
+            if (!closed && canOpen) openers.push({ index, scope });
+            i += marker.length;
+            continue;
+        }
+        out.push(html[i]);
+        i++;
+    }
+    return out.join('');
+}
+
 export function parseInlineMarkdown(text, { dialogue = false } = {}) {
     let safeText = escapeHTML(text);
     if (dialogue) safeText = safeText.split(/(`[^`]*`)/).map((part, i) => (i % 2 ? part : markDialogue(part, i === 0))).join('');
-    safeText = safeText.replace(/\*\*(.*?)\*\*/g, '<strong class="text-accent font-bold">$1</strong>');
-    safeText = safeText.replace(/\*(.*?)\*/g, '<em class="italic text-gray-300">$1</em>');
+    safeText = pairEmphasis(safeText, '**', '<strong class="text-accent font-bold">', '</strong>');
+    safeText = pairEmphasis(safeText, '*', '<em class="italic text-gray-300">', '</em>');
     safeText = safeText.replace(/`(.*?)`/g, '<code class="bg-surface-hover text-accent px-1.5 py-0.5 rounded text-xs font-mono border border-gray-700/60" style="display: inline !important; width: auto !important; white-space: normal !important; vertical-align: baseline;">$1</code>');
 
     return safeText;
