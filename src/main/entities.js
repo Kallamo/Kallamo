@@ -105,12 +105,25 @@ function updateEntity(id, fields = {}) {
     WHERE id = ?
   `).run(next.type, next.canonicalName, next.aliases, next.lore, next.loreDocumentId, next.data, next.status, Date.now(), id);
   if (next.canonicalName !== cur.canonicalName && cur.workspaceId) renameCopies(cur.workspaceId, id, next.canonicalName);
+  const previousNature = parseJsonObject(cur.data).itemNature === 'unique' ? 'unique' : 'type';
+  const nextNature = nextData.itemNature === 'unique' ? 'unique' : 'type';
+  if (next.type === 'Items' && cur.type === 'Items' && previousNature !== nextNature) reshapeItemLinks(id, nextNature);
   if (next.type === 'Items' && nextData.itemNature === 'unique') {
     const ownedLinks = db.prepare("SELECT id, metadata_json FROM entity_links WHERE fromId = ? AND relType = 'owned_by'").all(id);
     const updateMetadata = db.prepare('UPDATE entity_links SET metadata_json = ? WHERE id = ?');
     for (const link of ownedLinks) updateMetadata.run(JSON.stringify({ ...parseJsonObject(link.metadata_json), quantity: 1 }), link.id);
   }
   return getEntity(id);
+}
+
+// Owner becomes an inventory entry and place becomes where found; availability has no unique match.
+function reshapeItemLinks(itemId, nature) {
+  if (nature === 'type') {
+    db.prepare("UPDATE entity_links SET relType = 'carried_by' WHERE fromId = ? AND relType = 'owned_by'").run(itemId);
+    db.prepare("UPDATE entity_links SET relType = 'found_in' WHERE fromId = ? AND relType = 'located_in'").run(itemId);
+  } else {
+    db.prepare("DELETE FROM entity_links WHERE fromId = ? AND relType IN ('found_in', 'sold_in')").run(itemId);
+  }
 }
 
 // Written only by the main process: staged reviews, provenance and enrichment bookkeeping.
@@ -508,10 +521,10 @@ function getLink(linkId) {
 }
 
 // `single` clears existing (fromId, relType) edges first; a null toId only clears.
-function setLink({ workspaceId, fromId, relType, toId, single = false, label = null, metadata = {} }) {
+function setLink({ workspaceId, fromId, relType, toId, single = false, label = null, metadata = {}, itemNature }) {
   if (!fromId || !relType) throw new Error('fromId and relType are required');
   if (relType === 'carried_by') throw new Error('Item type inventory entries must be managed from an inventory.');
-  validateItemLink(workspaceId, fromId, relType, toId);
+  validateItemLink(workspaceId, fromId, relType, toId, itemNature);
   if (relType === 'owned_by' || relType === 'located_in') {
     single = true;
     if (toId) {
@@ -571,11 +584,13 @@ function setInventoryLink({ workspaceId, itemId, holderId, metadata = {} }) {
   })();
 }
 
-function validateItemLink(workspaceId, fromId, relType, toId) {
+// `itemNature` is the one on the open sheet, which may not be saved yet; without it the stored one counts.
+function validateItemLink(workspaceId, fromId, relType, toId, itemNature) {
   if (!['owned_by', 'located_in', 'found_in', 'sold_in'].includes(relType)) return;
   const item = getEntity(fromId);
   if (!item || item.workspaceId !== workspaceId || item.type !== 'Items') return;
-  const isUnique = item.data?.itemNature === 'unique';
+  const nature = itemNature === 'unique' || itemNature === 'type' ? itemNature : item.data?.itemNature;
+  const isUnique = nature === 'unique';
   if (relType === 'owned_by' && !isUnique) throw new Error('Item types do not have a fixed owner. Add them from a character inventory.');
   if (relType === 'located_in' && !isUnique) throw new Error('Only unique items have one current world location.');
   if ((relType === 'found_in' || relType === 'sold_in') && isUnique) throw new Error('Unique items use one current location instead of availability lists.');

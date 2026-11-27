@@ -1619,8 +1619,10 @@ export default function WorldbuildView({ chat, electronAPI, focusEntityId, onFoc
   const multiProps = (relType, links) => unsaved
     ? { links: draftLinksOf(relType), onAdd: (id) => setDraftTargets(relType, [...draftTargets(relType), id]), onRemove: (linkId) => setDraftTargets(relType, draftTargets(relType).filter(id => `draft:${relType}:${id}` !== linkId)) }
     : { links, onAdd: (id) => addMulti(relType, id), onRemove: removeLink };
-  const setSingle = async (relType, toId) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType, toId, single: true })); };
-  const addMulti = async (relType, toId, fromSelected = true) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: fromSelected ? selected.id : toId, relType, toId: fromSelected ? toId : selected.id, single: false })); };
+  // An item's links are checked against the nature on screen, which may not be saved yet.
+  const screenItemNature = () => (selected?.type === 'Items' ? (selected.data?.itemNature || 'type') : undefined);
+  const setSingle = async (relType, toId) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: selected.id, relType, toId, single: true, itemNature: screenItemNature() })); };
+  const addMulti = async (relType, toId, fromSelected = true) => { if (!selected?.id) return; await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: fromSelected ? selected.id : toId, relType, toId: fromSelected ? toId : selected.id, single: false, itemNature: fromSelected ? screenItemNature() : undefined })); };
   // Nesting is stored on the child, so adding a place here writes the child's own link.
   const putPlaceInside = async (childId) => { if (!selected?.id) return; if (await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: childId, relType: 'inside', toId: selected.id, single: true }))) await load(); };
   const addInventory = async (itemId) => { await linkOp(() => electronAPI.setEntityLink({ workspaceId, fromId: itemId, relType: 'owned_by', toId: selected.id, single: true })); };
