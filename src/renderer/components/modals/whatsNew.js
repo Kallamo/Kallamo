@@ -92,6 +92,36 @@ export const GLOBAL_WHATS_NEW = {
 
 // Notes for each later 2.x update, keyed by version, shown once after updating to it.
 export const PATCH_WHATS_NEW = {
+  '2.0.0-beta.4': {
+    title: 'Connect any service and keep your roleplay steady',
+    intro: 'Thanks for every report on Beta 3. This update fixes what you found, adds extra headers so services like OpenCode Go can connect, and opens faster.',
+    highlights: [],
+    sections: {
+      Added: [
+        'Connections can send extra headers, so services such as OpenCode Go can be used.',
+        "Fetch models lists a provider's models, and typing searches them.",
+        'A Thinking models setting gives models that reason room to answer, whatever their name.',
+        'Moving the scene by hand asks who comes along.',
+        'Universal GM narrates any world from its lore, and Universal GM Lite does it with simpler rules for local models. New Evenwell stories start with both.',
+      ],
+      Changed: [
+        'Local or compatible is now OpenAI-compatible, for local servers and any other /v1 API.',
+        'Kallamo opens faster, and the update copy no longer freezes the splash.',
+        'Recent changes shows a clock you corrected by hand.',
+        'Archive settings say that Chat and Roleplay keep their own.',
+        'Saving an item type as unique asks first when something would be lost.',
+      ],
+      Fixed: [
+        'Chat and Roleplay keep their own draft and summary numbers.',
+        'Italics inside dialogue keep the dialogue color.',
+        'Scene changes no longer reach review with Unknown entity.',
+        'An item can switch between unique and item type without saving first.',
+        'Local models stop when they start writing your turn.',
+        'A new character you approve shows up in the scene.',
+        'The token panel says Savings unknown instead of Saved ≈ 0.',
+      ],
+    },
+  },
   '2.0.0-beta.3': {
     title: 'Your story moves into Umwelt',
     intro: 'Thanks for playing the second beta. The Narrative State now runs on Umwelt, our epistemic state engine: it tracks what happened and who knows it, on the story\'s own timeline. Your stories from earlier betas move into it on their own the first time you open this version.',

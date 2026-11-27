@@ -2,6 +2,37 @@
 
 All notable changes to Kallamo are documented in this file. Version numbers reflect the change for the people using Kallamo. From 2.0.0, a major release brings a feature that changes what Kallamo is, a minor release adds features on top of it, and a patch release only fixes. Before 2.0.0, minor releases were named milestones and patch releases also refined.
 
+## [2.0.0-beta.4] - 2026-11-27
+
+Fixes from the Beta 3 reports, extra headers on connections, and a faster start.
+
+### Added
+- **Extra headers** on OpenAI, OpenRouter and OpenAI-compatible connections, one `Name: value` per line and stored like the API key, so services such as OpenCode Go can be used. `{session}` becomes an id for the conversation, and requests identify themselves as `Kallamo/<version>`.
+- **Fetch models** lists the models of OpenRouter, Anthropic, OpenAI, Google AI and OpenAI-compatible connections. Typing in the model field searches the list.
+- **Thinking models** on OpenRouter and OpenAI-compatible connections: Auto, Always or Never. Always gives any model room to reason, whatever its name, and Auto asks again once when a reply runs out while still reasoning, then keeps the room for that model.
+- Moving the scene to another place by hand asks who comes along.
+- **Universal GM** and **Universal GM Lite** come with Kallamo: narrators for any world, genre or setting, driven by its lore. Lite has a shorter ruleset for local and smaller models. New Evenwell stories start with both, Universal GM first, in place of the Evenwell GM.
+- Diagnostics show each provider's own usage report for every model call, scene ids left out for naming nothing, and calls asked again for room to reason.
+
+### Changed
+- **Local or compatible** is now **OpenAI-compatible**, for local servers and any other `/v1` API, and provider cards show their full name and description.
+- Opening is faster: the copy saved before an update runs in the background while the splash says so, and libraries for documents, token counting and connections load when first used. Deleted turns are cleaned once instead of at every start.
+- Recent changes shows a clock you corrected by hand as Adjusted by you.
+- The Archive settings say that Chat and Roleplay keep their own threshold, archive and summaries.
+- Saving an item type as unique asks first when it would lose places or inventories. Its first holder keeps it.
+- Picking a provider for a new connection no longer counts as an unsaved change.
+- The Narrative State no longer reads someone named only in an order, a plan, a report or another character's line as present.
+
+### Fixed
+- Chat and Roleplay keep their own draft and attachments, and summaries are numbered per conversation as Chat · Summary N and Roleplay · Summary N.
+- Going back to the Chat no longer opens an empty archive notice, and a slow load, send or failed edit stays in the conversation it started in.
+- The token panel shows Savings unknown instead of Saved ≈ 0 when an automatic cache reports no savings.
+- Italics nested inside dialogue no longer cut the dialogue color short, and italic and bold text inside dialogue keep its color.
+- A scene change that names an entity that does not exist no longer reaches review as Unknown entity, and an entity removed after joining the scene no longer makes approving a later change fail.
+- Switching an item between unique and item type no longer has to be saved before adding its owner, location, or where it is found and sold, and saving the switch carries its links over.
+- Local servers stop when a model starts writing the user's turn.
+- A new character approved after its turn joins the scene where the turn placed it, and the Roleplay panel names characters still awaiting review.
+
 ## [2.0.0-beta.3] - 2026-11-24
 
 The Narrative State now runs on Umwelt, the epistemic state engine by Kallamo. The reply reads what each turn needs, memories fade and return, and characters keep conditions, sleep and grow at the end of a scene.
