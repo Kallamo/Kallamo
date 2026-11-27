@@ -329,6 +329,35 @@ describe('Kallamo roleplay system', () => {
     expect(roleplay.listAssignments('workspace-one')).toHaveLength(2);
   });
 
+  test('drops AI scene ids that name no entity before review', () => {
+    roleplay.saveSettings('workspace-one', { playerEntityId: 'elias', defaultUpdatePolicy: 'review' });
+    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['elias'] });
+    const change = roleplay.proposeSceneChange({
+      id: 'invented-ids', workspaceId: 'workspace-one', source: 'ai', provenanceId: 'message-invented',
+      patch: { participantIds: ['tess', 'ghost-one'], nearbyIds: ['ghost-two'] }
+    });
+    expect(change.patch).toEqual({ participantIds: ['tess'] });
+    roleplay.resolveSceneChange('workspace-one', change.id, 'approved');
+    expect(roleplay.getScene('workspace-one')?.participantIds).toEqual(['elias', 'tess']);
+
+    expect(() => roleplay.proposeSceneChange({
+      id: 'only-invented', workspaceId: 'workspace-one', source: 'ai', provenanceId: 'message-only',
+      patch: { nearbyIds: ['ghost-three'] }
+    })).toThrow();
+  });
+
+  test('a removed entity carried in the scene does not block a later change', () => {
+    roleplay.saveSettings('workspace-one', { playerEntityId: 'elias', defaultUpdatePolicy: 'review' });
+    roleplay.saveScene('workspace-one', { locationId: 'gate', participantIds: ['tess'] });
+    db.prepare("DELETE FROM entities WHERE id = 'tess'").run();
+    const change = roleplay.proposeSceneChange({
+      id: 'after-removal', workspaceId: 'workspace-one', source: 'ai', provenanceId: 'message-removal',
+      patch: { objectIds: ['sword'] }
+    });
+    roleplay.resolveSceneChange('workspace-one', change.id, 'approved');
+    expect(roleplay.getScene('workspace-one')).toMatchObject({ participantIds: ['elias'], objectIds: ['sword'] });
+  });
+
   test('deletes a resource together with its value history', () => {
     const health = createHealth('automatic');
     roleplay.proposeChange({

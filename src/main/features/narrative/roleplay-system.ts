@@ -294,15 +294,20 @@ export class RoleplaySystem {
     const locationId = patch.locationId === undefined ? current?.locationId ?? settings.locationEntityId : patch.locationId;
     const locationChanged = patch.locationId !== undefined && patch.locationId !== current?.locationId;
     const castReset = locationChanged && !options.keepCast;
+    // Ids carried over from the current scene may name an entity removed since (a provisional
+    // one rejected in review); they are dropped so they never block an unrelated change.
+    const carried = (ids: string[] | undefined, types: string[]) =>
+      (ids ?? []).filter(id => this.referenceResolves(workspaceId, id, types));
+    const people = ['Characters', 'Creatures'];
     const participantIds = unique([
       ...compact([settings.playerEntityId]),
-      ...(patch.participantIds ?? (castReset ? [] : current?.participantIds ?? []))
+      ...(patch.participantIds ?? (castReset ? [] : carried(current?.participantIds, people)))
     ]);
-    const possibleObserverIds = unique(patch.possibleObserverIds ?? (castReset ? [] : current?.possibleObserverIds ?? []))
+    const possibleObserverIds = unique(patch.possibleObserverIds ?? (castReset ? [] : carried(current?.possibleObserverIds, people)))
       .filter(id => id !== settings.playerEntityId && !participantIds.includes(id));
-    const nearbyIds = unique(patch.nearbyIds ?? (castReset ? [] : current?.nearbyIds ?? []))
+    const nearbyIds = unique(patch.nearbyIds ?? (castReset ? [] : carried(current?.nearbyIds, people)))
       .filter(id => id !== settings.playerEntityId && !participantIds.includes(id) && !possibleObserverIds.includes(id));
-    const objectIds = unique(patch.objectIds ?? (locationChanged ? [] : current?.objectIds ?? []));
+    const objectIds = unique(patch.objectIds ?? (locationChanged ? [] : carried(current?.objectIds, ['Items'])));
     this.validateReference(workspaceId, locationId, ['Locations']);
     participantIds.forEach(id => this.validateReference(workspaceId, id, ['Characters', 'Creatures']));
     possibleObserverIds.forEach(id => this.validateReference(workspaceId, id, ['Characters', 'Creatures']));
@@ -914,6 +919,7 @@ export class RoleplaySystem {
     if (existing) return existing;
     const policy = this.getSettings(input.workspaceId).defaultUpdatePolicy;
     if (input.source === 'ai' && policy === 'manual') throw new Error('Scene updates are manual-only.');
+    if (input.source === 'ai') input = { ...input, patch: this.dropUnresolvedSceneIds(input.workspaceId, input.patch) };
     const status = input.source === 'manual' || policy === 'automatic' ? 'applied' : 'pending';
     this.db.transaction(() => {
       this.db.prepare(`
@@ -1260,6 +1266,41 @@ export class RoleplaySystem {
   private validateTarget(workspaceId: string, targetType: RoleplayTargetType, targetId: string): void {
     const types = targetType === 'race' ? ['Races'] : targetType === 'species' ? ['Creatures'] : undefined;
     this.validateReference(workspaceId, targetId, types);
+  }
+
+  private referenceResolves(workspaceId: string, id: string | null, types?: string[]): boolean {
+    try {
+      this.validateReference(workspaceId, id, types);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // A list that loses every id is left out, not emptied: an empty list clears that part of the scene.
+  private dropUnresolvedSceneIds(workspaceId: string, patch: RoleplayScenePatch): RoleplayScenePatch {
+    const next: RoleplayScenePatch = {};
+    const dropped: string[] = [];
+    if (patch.locationId !== undefined) {
+      if (this.referenceResolves(workspaceId, patch.locationId, ['Locations'])) next.locationId = patch.locationId;
+      else dropped.push(String(patch.locationId));
+    }
+    const lists: Array<[keyof RoleplayScenePatch, string[]]> = [
+      ['participantIds', ['Characters', 'Creatures']],
+      ['possibleObserverIds', ['Characters', 'Creatures']],
+      ['nearbyIds', ['Characters', 'Creatures']],
+      ['objectIds', ['Items']]
+    ];
+    for (const [key, types] of lists) {
+      const ids = patch[key] as string[] | undefined;
+      if (ids === undefined) continue;
+      const kept = ids.filter(id => this.referenceResolves(workspaceId, id, types));
+      dropped.push(...ids.filter(id => !kept.includes(id)));
+      if (kept.length || !ids.length) (next as Record<string, unknown>)[key] = kept;
+    }
+    if (dropped.length) console.warn('[Roleplay State] Dropped scene ids that name no entity:', dropped.join(', '));
+    if (!Object.keys(next).length) throw new Error('Scene change named no entity that exists.');
+    return next;
   }
 
   private validateReference(workspaceId: string, id: string | null, types?: string[]): void {
